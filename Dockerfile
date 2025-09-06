@@ -10,18 +10,20 @@ RUN microdnf update -y && \
         openssl-devel && \
     microdnf clean all
 
-# Install Rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-
 # Create app directory
 WORKDIR /app
 
 # Copy project files
 COPY . .
 
-# Build the application
-RUN cargo build --release
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+    . $HOME/.cargo/env
+
+# Build the application with target directory cache
+RUN --mount=type=cache,target=/app/target,id=target-cache \
+    . $HOME/.cargo/env && \
+    cargo build --release
 
 # Create a non-root user
 RUN useradd -m -u 1000 appuser && \
