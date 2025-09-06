@@ -20,6 +20,7 @@ pub struct App {
     show_help: bool,
     pub current_diff_height: usize,
     side_by_side_diff: bool,
+    file_change_timestamps: Vec<std::time::Instant>,
 }
 
 impl App {
@@ -35,11 +36,55 @@ impl App {
             show_help: false,
             current_diff_height: 20,
             side_by_side_diff: false,
+            file_change_timestamps: Vec::new(),
         }
     }
 
     pub fn update_files(&mut self, files: Vec<FileDiff>) {
+        let old_files = std::mem::take(&mut self.files);
         self.files = files;
+
+        // Create a mapping of old file paths to their timestamps
+        let old_timestamps: std::collections::HashMap<std::path::PathBuf, std::time::Instant> =
+            old_files
+                .iter()
+                .enumerate()
+                .filter_map(|(i, old_file)| {
+                    self.file_change_timestamps
+                        .get(i)
+                        .map(|&ts| (old_file.path.clone(), ts))
+                })
+                .collect();
+
+        // Build new timestamps, preserving old ones when possible
+        let mut new_timestamps = Vec::new();
+
+        for new_file in &self.files {
+            if let Some(old_timestamp) = old_timestamps.get(&new_file.path) {
+                // File existed before, check if it changed
+                if let Some(old_file) = old_files
+                    .iter()
+                    .find(|old_file| old_file.path == new_file.path)
+                {
+                    if old_file.line_strings == new_file.line_strings {
+                        // File hasn't changed, preserve old timestamp
+                        new_timestamps.push(*old_timestamp);
+                    } else {
+                        // File content changed, update timestamp
+                        new_timestamps.push(std::time::Instant::now());
+                    }
+                } else {
+                    // Shouldn't happen, but be safe
+                    new_timestamps.push(std::time::Instant::now());
+                }
+            } else {
+                // New file, give it fresh timestamp
+                new_timestamps.push(std::time::Instant::now());
+            }
+        }
+
+        self.file_change_timestamps = new_timestamps;
+
         if self.current_file_index >= self.files.len() {
             self.current_file_index = 0;
             self.scroll_offset = 0;
@@ -189,6 +234,14 @@ impl App {
         self.side_by_side_diff
     }
 
+    pub fn is_file_recently_changed(&self, file_index: usize) -> bool {
+        if let Some(timestamp) = self.file_change_timestamps.get(file_index) {
+            timestamp.elapsed().as_secs() < 3
+        } else {
+            false
+        }
+    }
+
     pub fn next_file(&mut self) {
         if !self.files.is_empty() {
             // Find the next file in the tree that has a valid file index
@@ -297,6 +350,18 @@ fn render_file_tree(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 let mut spans = Vec::new();
 
+                // Add arrow for current file selection
+                if index == app.current_tree_index {
+                    spans.push(Span::styled(
+                        "-> ",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                } else {
+                    spans.push(Span::raw("   "));
+                }
+
                 let status_char = if let Some(ref diff) = node.file_diff {
                     if diff.status.is_wt_new() {
                         "📄 "
@@ -334,22 +399,33 @@ fn render_file_tree(f: &mut Frame, app: &App, area: Rect) {
                 spans
             };
 
-            let line = if index == app.current_tree_index {
-                Line::from(name_spans).style(
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .bg(Color::DarkGray)
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else if let Some(ref _diff) = node.file_diff {
-                Line::from(name_spans).style(Style::default().fg(Color::White))
+            let line_style = if let Some(ref diff) = node.file_diff {
+                // Check if this file is recently changed by finding its index
+                if let Some(file_idx) = app.files.iter().position(|f| f.path == diff.path) {
+                    if file_idx < app.file_change_timestamps.len()
+                        && app.is_file_recently_changed(file_idx)
+                    {
+                        // Recently changed - blue highlight
+                        Style::default()
+                            .fg(Color::White)
+                            .bg(Color::Blue)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        // Not recently changed - normal
+                        Style::default().fg(Color::White)
+                    }
+                } else {
+                    // File not found in files list - normal
+                    Style::default().fg(Color::White)
+                }
             } else {
-                Line::from(name_spans).style(
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )
+                // Directory - cyan bold
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             };
+
+            let line = Line::from(name_spans).style(line_style);
 
             ListItem::new(line)
         })
@@ -365,7 +441,6 @@ fn render_file_tree(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(
             Style::default()
                 .fg(Color::Yellow)
-                .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         );
 
