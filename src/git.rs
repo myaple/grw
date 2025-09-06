@@ -7,6 +7,7 @@ pub struct FileDiff {
     pub path: PathBuf,
     pub status: Status,
     pub line_strings: Vec<String>,
+    #[allow(dead_code)]
     pub hunks: Vec<String>,
     pub additions: usize,
     pub deletions: usize,
@@ -82,7 +83,7 @@ impl GitRepo {
         if status.is_wt_new() {
             if let Ok(content) = std::fs::read_to_string(path) {
                 for line in content.lines() {
-                    line_strings.push(format!("+ {}", line));
+                    line_strings.push(format!("+ {line}"));
                     additions += 1;
                 }
             }
@@ -126,6 +127,7 @@ impl GitRepo {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_changed_files(&self) -> &Vec<FileDiff> {
         &self.changed_files
     }
@@ -235,12 +237,14 @@ impl GitRepo {
         }
     }
 
+    #[allow(dead_code)]
     pub fn flatten_tree(&self, tree: &TreeNode) -> Vec<(TreeNode, usize)> {
         let mut result = Vec::new();
         self.flatten_tree_recursive(tree, 0, &mut result);
         result
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn flatten_tree_recursive(
         &self,
         node: &TreeNode,
@@ -256,10 +260,12 @@ impl GitRepo {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_file_count(&self) -> usize {
         self.changed_files.len()
     }
 
+    #[allow(dead_code)]
     pub fn has_changes(&self) -> bool {
         !self.changed_files.is_empty()
     }

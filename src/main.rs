@@ -75,13 +75,10 @@ async fn main() -> Result<()> {
         })?;
 
         if crossterm::event::poll(Duration::from_millis(10))? {
-            match crossterm::event::read()? {
-                Event::Key(key) => {
-                    if handle_key_event(key, &mut app) {
-                        break;
-                    }
+            if let Event::Key(key) = crossterm::event::read()? {
+                if handle_key_event(key, &mut app) {
+                    break;
                 }
-                _ => {}
             }
         }
     }

@@ -238,11 +238,13 @@ impl App {
         self.files.get(self.current_file_index)
     }
 
+    #[allow(dead_code)]
     pub fn get_file_count(&self) -> usize {
         self.files.len()
     }
 }
 
+#[allow(clippy::extra_unused_type_parameters)]
 pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
     let size = f.area();
 
@@ -259,12 +261,12 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
     // Calculate available height for diff content
     let diff_height = bottom_chunks[1].height.saturating_sub(2) as usize;
 
-    render_status_bar::<B>(f, git_repo, chunks[0]);
-    render_file_tree::<B>(f, app, bottom_chunks[0]);
-    render_diff_view::<B>(f, app, bottom_chunks[1], diff_height);
+    render_status_bar(f, git_repo, chunks[0]);
+    render_file_tree(f, app, bottom_chunks[0]);
+    render_diff_view(f, app, bottom_chunks[1], diff_height);
 }
 
-fn render_file_tree<B: Backend>(f: &mut Frame, app: &App, area: Rect) {
+fn render_file_tree(f: &mut Frame, app: &App, area: Rect) {
     let tree_items: Vec<ListItem> = app
         .tree_nodes
         .iter()
@@ -290,7 +292,7 @@ fn render_file_tree<B: Backend>(f: &mut Frame, app: &App, area: Rect) {
                     "❓ "
                 };
 
-                spans.push(Span::raw(format!("{}{}", indent, status_char)));
+                spans.push(Span::raw(format!("{indent}{status_char}")));
                 spans.push(Span::raw(node.name.clone()));
 
                 if let Some(ref diff) = node.file_diff {
@@ -351,18 +353,15 @@ fn render_file_tree<B: Backend>(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(file_list, area);
 }
 
-fn render_status_bar<B: Backend>(f: &mut Frame, git_repo: &GitRepo, area: Rect) {
+fn render_status_bar(f: &mut Frame, git_repo: &GitRepo, area: Rect) {
     let repo_name = git_repo.get_repo_name();
     let branch = git_repo.get_current_branch();
     let (commit_sha, commit_summary) = git_repo.get_last_commit_info();
     let (total_files, total_additions, total_deletions) = git_repo.get_total_stats();
 
     // Calculate available space for commit message
-    let left_part = format!("📁 {} | 🌿 {} | 🎯 {} | ", repo_name, branch, commit_sha);
-    let right_part = format!(
-        " | 📊 {} files (+{}/-{})",
-        total_files, total_additions, total_deletions
-    );
+    let left_part = format!("📁 {repo_name} | 🌿 {branch} | 🎯 {commit_sha} > ");
+    let right_part = format!(" | 📊 {total_files} files (+{total_additions}/-{total_deletions})");
 
     let available_space = area.width as usize;
     let left_len = left_part.len();
@@ -378,7 +377,7 @@ fn render_status_bar<B: Backend>(f: &mut Frame, git_repo: &GitRepo, area: Rect) 
         commit_summary
     };
 
-    let status_text = format!("{}{}{}", left_part, truncated_summary, right_part);
+    let status_text = format!("{left_part}{truncated_summary}{right_part}");
 
     let paragraph = Paragraph::new(status_text)
         .style(Style::default().add_modifier(Modifier::REVERSED))
@@ -388,12 +387,12 @@ fn render_status_bar<B: Backend>(f: &mut Frame, git_repo: &GitRepo, area: Rect) 
     f.render_widget(paragraph, area);
 }
 
-fn render_diff_view<B: Backend>(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
+fn render_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
     if app.is_showing_help() {
-        render_help_view::<B>(f, area);
+        render_help_view(f, area);
     } else if let Some(file) = app.get_current_file() {
         let file_path = file.path.to_string_lossy();
-        let title = format!("Diff: {}", file_path);
+        let title = format!("Diff: {file_path}");
 
         let mut lines = Vec::new();
 
@@ -433,7 +432,7 @@ fn render_diff_view<B: Backend>(f: &mut Frame, app: &App, area: Rect, max_lines:
     }
 }
 
-fn render_help_view<B: Backend>(f: &mut Frame, area: Rect) {
+fn render_help_view(f: &mut Frame, area: Rect) {
     let help_text = vec![
         Line::from(Span::styled(
             "Git Repository Watcher - Help",
