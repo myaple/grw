@@ -19,6 +19,7 @@ pub struct App {
     pub last_g_press: Option<std::time::Instant>,
     show_help: bool,
     pub current_diff_height: usize,
+    side_by_side_diff: bool,
 }
 
 impl App {
@@ -33,6 +34,7 @@ impl App {
             last_g_press: None,
             show_help: false,
             current_diff_height: 20,
+            side_by_side_diff: false,
         }
     }
 
@@ -168,6 +170,23 @@ impl App {
 
     pub fn is_showing_help(&self) -> bool {
         self.show_help
+    }
+
+    #[allow(dead_code)]
+    pub fn toggle_side_by_side_diff(&mut self) {
+        self.side_by_side_diff = !self.side_by_side_diff;
+    }
+
+    pub fn set_single_pane_diff(&mut self) {
+        self.side_by_side_diff = false;
+    }
+
+    pub fn set_side_by_side_diff(&mut self) {
+        self.side_by_side_diff = true;
+    }
+
+    pub fn is_side_by_side_diff(&self) -> bool {
+        self.side_by_side_diff
     }
 
     pub fn next_file(&mut self) {
@@ -387,9 +406,94 @@ fn render_status_bar(f: &mut Frame, git_repo: &GitRepo, area: Rect) {
     f.render_widget(paragraph, area);
 }
 
+fn render_side_by_side_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
+    if let Some(file) = app.get_current_file() {
+        let file_path = file.path.to_string_lossy();
+        let _title = format!("Side-by-side Diff: {file_path}");
+
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+
+        let mut left_lines = Vec::new();
+        let mut right_lines = Vec::new();
+
+        let mut line_count = 0;
+        for (i, line) in file.line_strings.iter().enumerate() {
+            if i < app.scroll_offset {
+                continue;
+            }
+
+            if line_count >= max_lines {
+                break;
+            }
+
+            let (left_content, right_content) = if let Some(stripped) = line.strip_prefix('+') {
+                // Addition: empty on left, content on right
+                ("".to_string(), stripped.to_string())
+            } else if let Some(stripped) = line.strip_prefix('-') {
+                // Deletion: content on left, empty on right
+                (stripped.to_string(), "".to_string())
+            } else if let Some(stripped) = line.strip_prefix(' ') {
+                // Unchanged: same content on both sides
+                let content = stripped.to_string();
+                (content.clone(), content)
+            } else {
+                // Header/context line: same content on both sides
+                (line.to_string(), line.to_string())
+            };
+
+            let left_style = if line.starts_with('-') {
+                Style::default().fg(Color::Red)
+            } else if line.starts_with(' ') || line.starts_with('+') {
+                Style::default().fg(Color::Gray)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let right_style = if line.starts_with('+') {
+                Style::default().fg(Color::Green)
+            } else if line.starts_with(' ') || line.starts_with('-') {
+                Style::default().fg(Color::Gray)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            left_lines.push(Line::from(Span::styled(left_content, left_style)));
+            right_lines.push(Line::from(Span::styled(right_content, right_style)));
+
+            line_count += 1;
+        }
+
+        let left_text = Text::from(left_lines);
+        let right_text = Text::from(right_lines);
+
+        let left_paragraph = Paragraph::new(left_text)
+            .block(Block::default().title("Original").borders(Borders::ALL))
+            .wrap(Wrap { trim: false });
+
+        let right_paragraph = Paragraph::new(right_text)
+            .block(Block::default().title("Modified").borders(Borders::ALL))
+            .wrap(Wrap { trim: false });
+
+        f.render_widget(left_paragraph, chunks[0]);
+        f.render_widget(right_paragraph, chunks[1]);
+    } else {
+        let paragraph = Paragraph::new("No changes detected").block(
+            Block::default()
+                .title("Side-by-side Diff")
+                .borders(Borders::ALL),
+        );
+        f.render_widget(paragraph, area);
+    }
+}
+
 fn render_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
     if app.is_showing_help() {
         render_help_view(f, area);
+    } else if app.is_side_by_side_diff() {
+        render_side_by_side_diff_view(f, app, area, max_lines);
     } else if let Some(file) = app.get_current_file() {
         let file_path = file.path.to_string_lossy();
         let title = format!("Diff: {file_path}");
@@ -475,6 +579,8 @@ fn render_help_view(f: &mut Frame, area: Rect) {
         )),
         Line::from("  ?             - Show/hide this help page"),
         Line::from("  Esc           - Exit help page"),
+        Line::from("  Ctrl+S        - Switch to side-by-side diff view"),
+        Line::from("  Ctrl+D        - Switch to single-pane diff view"),
         Line::from("  q / Ctrl+C    - Quit application"),
         Line::from(""),
         Line::from("Press ? or Esc to return to diff view"),

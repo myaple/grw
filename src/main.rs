@@ -192,6 +192,14 @@ fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
             }
             false
         }
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.set_side_by_side_diff();
+            false
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.set_single_pane_diff();
+            false
+        }
         _ => false,
     }
 }
