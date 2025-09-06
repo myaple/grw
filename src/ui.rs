@@ -20,11 +20,17 @@ pub struct App {
     show_help: bool,
     pub current_diff_height: usize,
     side_by_side_diff: bool,
+    show_diff_panel: bool,
     file_change_timestamps: Vec<std::time::Instant>,
 }
 
 impl App {
+    #[allow(dead_code)]
     pub fn new() -> Self {
+        Self::new_with_config(false)
+    }
+
+    pub fn new_with_config(show_diff_panel: bool) -> Self {
         Self {
             files: Vec::new(),
             current_file_index: 0,
@@ -36,6 +42,7 @@ impl App {
             show_help: false,
             current_diff_height: 20,
             side_by_side_diff: false,
+            show_diff_panel,
             file_change_timestamps: Vec::new(),
         }
     }
@@ -234,6 +241,14 @@ impl App {
         self.side_by_side_diff
     }
 
+    pub fn toggle_diff_panel(&mut self) {
+        self.show_diff_panel = !self.show_diff_panel;
+    }
+
+    pub fn is_showing_diff_panel(&self) -> bool {
+        self.show_diff_panel
+    }
+
     pub fn is_file_recently_changed(&self, file_index: usize) -> bool {
         if let Some(timestamp) = self.file_change_timestamps.get(file_index) {
             timestamp.elapsed().as_secs() < 3
@@ -250,13 +265,13 @@ impl App {
 
             // Look for the next tree node that represents a file
             while next_tree_index != start_tree_index {
-                if let Some(&file_idx) = self.file_indices_in_tree.get(next_tree_index) {
-                    if file_idx != usize::MAX {
-                        self.current_file_index = file_idx;
-                        self.current_tree_index = next_tree_index;
-                        self.scroll_offset = 0;
-                        return;
-                    }
+                if let Some(&file_idx) = self.file_indices_in_tree.get(next_tree_index)
+                    && file_idx != usize::MAX
+                {
+                    self.current_file_index = file_idx;
+                    self.current_tree_index = next_tree_index;
+                    self.scroll_offset = 0;
+                    return;
                 }
                 next_tree_index = (next_tree_index + 1) % self.tree_nodes.len();
             }
@@ -280,13 +295,13 @@ impl App {
 
             // Look for the previous tree node that represents a file
             while prev_tree_index != start_tree_index {
-                if let Some(&file_idx) = self.file_indices_in_tree.get(prev_tree_index) {
-                    if file_idx != usize::MAX {
-                        self.current_file_index = file_idx;
-                        self.current_tree_index = prev_tree_index;
-                        self.scroll_offset = 0;
-                        return;
-                    }
+                if let Some(&file_idx) = self.file_indices_in_tree.get(prev_tree_index)
+                    && file_idx != usize::MAX
+                {
+                    self.current_file_index = file_idx;
+                    self.current_tree_index = prev_tree_index;
+                    self.scroll_offset = 0;
+                    return;
                 }
                 prev_tree_index = if prev_tree_index == 0 {
                     self.tree_nodes.len() - 1
@@ -320,22 +335,55 @@ impl App {
 pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
     let size = f.area();
 
+    // Allow header to wrap to multiple lines (up to 3 lines)
+    let header_constraints = if size.width > 120 {
+        // Wide screens: try to fit on one line
+        [Constraint::Length(1), Constraint::Min(0)]
+    } else {
+        // Narrow screens: allow up to 3 lines for header
+        [Constraint::Max(3), Constraint::Min(0)]
+    };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints(header_constraints)
         .split(size);
 
-    let bottom_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(chunks[1]);
-
-    // Calculate available height for diff content
-    let diff_height = bottom_chunks[1].height.saturating_sub(2) as usize;
-
     render_status_bar(f, git_repo, chunks[0]);
-    render_file_tree(f, app, bottom_chunks[0]);
-    render_diff_view(f, app, bottom_chunks[1], diff_height);
+
+    if app.is_showing_help() {
+        // Help takes over the main content area (either full width or diff panel area)
+        if app.is_showing_diff_panel() {
+            let bottom_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+                .split(chunks[1]);
+
+            // Show file tree in left panel, help in right panel
+            render_file_tree(f, app, bottom_chunks[0]);
+            render_help_view(f, bottom_chunks[1]);
+        } else {
+            // When diff panel is hidden, help takes over the full content area
+            render_help_view(f, chunks[1]);
+        }
+    } else {
+        // Normal mode (not showing help)
+        if app.is_showing_diff_panel() {
+            let bottom_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+                .split(chunks[1]);
+
+            // Calculate available height for diff content
+            let diff_height = bottom_chunks[1].height.saturating_sub(2) as usize;
+
+            render_file_tree(f, app, bottom_chunks[0]);
+            render_diff_view(f, app, bottom_chunks[1], diff_height);
+        } else {
+            // When diff panel is hidden, file tree takes full width
+            render_file_tree(f, app, chunks[1]);
+        }
+    }
 }
 
 fn render_file_tree(f: &mut Frame, app: &App, area: Rect) {
@@ -453,25 +501,10 @@ fn render_status_bar(f: &mut Frame, git_repo: &GitRepo, area: Rect) {
     let (commit_sha, commit_summary) = git_repo.get_last_commit_info();
     let (total_files, total_additions, total_deletions) = git_repo.get_total_stats();
 
-    // Calculate available space for commit message
-    let left_part = format!("📁 {repo_name} | 🌿 {branch} | 🎯 {commit_sha} > ");
-    let right_part = format!(" | 📊 {total_files} files (+{total_additions}/-{total_deletions})");
-
-    let available_space = area.width as usize;
-    let left_len = left_part.len();
-    let right_len = right_part.len();
-
-    let commit_message_space = available_space.saturating_sub(left_len + right_len);
-    let truncated_summary = if commit_summary.len() > commit_message_space {
-        format!(
-            "{}...",
-            &commit_summary[..commit_message_space.saturating_sub(3)]
-        )
-    } else {
-        commit_summary
-    };
-
-    let status_text = format!("{left_part}{truncated_summary}{right_part}");
+    // Build the complete status text
+    let status_text = format!(
+        "📁 {repo_name} | 🌿 {branch} | 🎯 {commit_sha} > {commit_summary} | 📊 {total_files} files (+{total_additions}/-{total_deletions})"
+    );
 
     let paragraph = Paragraph::new(status_text)
         .style(Style::default().add_modifier(Modifier::REVERSED))
@@ -565,9 +598,7 @@ fn render_side_by_side_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines
 }
 
 fn render_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
-    if app.is_showing_help() {
-        render_help_view(f, area);
-    } else if app.is_side_by_side_diff() {
+    if app.is_side_by_side_diff() {
         render_side_by_side_diff_view(f, app, area, max_lines);
     } else if let Some(file) = app.get_current_file() {
         let file_path = file.path.to_string_lossy();
@@ -656,6 +687,7 @@ fn render_help_view(f: &mut Frame, area: Rect) {
         Line::from("  Esc           - Exit help page"),
         Line::from("  Ctrl+S        - Switch to side-by-side diff view"),
         Line::from("  Ctrl+D        - Switch to single-pane diff view"),
+        Line::from("  Ctrl+H        - Toggle diff panel visibility"),
         Line::from("  q / Ctrl+C    - Quit application"),
         Line::from(""),
         Line::from("Press ? or Esc to return to diff view"),
@@ -675,17 +707,24 @@ mod tests {
 
     #[test]
     fn test_app_creation() {
-        let app = App::new();
+        let app = App::new_with_config(true);
         assert_eq!(app.files.len(), 0);
         assert_eq!(app.current_file_index, 0);
         assert_eq!(app.scroll_offset, 0);
         assert_eq!(app.current_diff_height, 20);
         assert!(!app.show_help);
+        assert!(app.show_diff_panel);
+    }
+
+    #[test]
+    fn test_app_creation_no_diff() {
+        let app = App::new_with_config(false);
+        assert!(!app.show_diff_panel);
     }
 
     #[test]
     fn test_scroll_up() {
-        let mut app = App::new();
+        let mut app = App::new_with_config(true);
         app.scroll_offset = 5;
         app.scroll_up();
         assert_eq!(app.scroll_offset, 4);
@@ -693,7 +732,7 @@ mod tests {
 
     #[test]
     fn test_scroll_up_at_zero() {
-        let mut app = App::new();
+        let mut app = App::new_with_config(true);
         app.scroll_offset = 0;
         app.scroll_up();
         assert_eq!(app.scroll_offset, 0);
@@ -701,7 +740,7 @@ mod tests {
 
     #[test]
     fn test_page_up() {
-        let mut app = App::new();
+        let mut app = App::new_with_config(true);
         app.scroll_offset = 25;
         app.page_up(10);
         assert_eq!(app.scroll_offset, 15);
@@ -709,7 +748,7 @@ mod tests {
 
     #[test]
     fn test_page_up_underflow() {
-        let mut app = App::new();
+        let mut app = App::new_with_config(true);
         app.scroll_offset = 5;
         app.page_up(10);
         assert_eq!(app.scroll_offset, 0);
@@ -717,7 +756,7 @@ mod tests {
 
     #[test]
     fn test_scroll_to_top() {
-        let mut app = App::new();
+        let mut app = App::new_with_config(true);
         app.scroll_offset = 100;
         app.scroll_to_top();
         assert_eq!(app.scroll_offset, 0);
@@ -725,11 +764,21 @@ mod tests {
 
     #[test]
     fn test_toggle_help() {
-        let mut app = App::new();
+        let mut app = App::new_with_config(true);
         assert!(!app.show_help);
         app.toggle_help();
         assert!(app.show_help);
         app.toggle_help();
         assert!(!app.show_help);
+    }
+
+    #[test]
+    fn test_toggle_diff_panel() {
+        let mut app = App::new_with_config(true);
+        assert!(app.show_diff_panel);
+        app.toggle_diff_panel();
+        assert!(!app.show_diff_panel);
+        app.toggle_diff_panel();
+        assert!(app.show_diff_panel);
     }
 }

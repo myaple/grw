@@ -34,6 +34,9 @@ struct Args {
 
     #[arg(short, long, help = "Enable debug logging")]
     debug: bool,
+
+    #[arg(long, help = "Hide diff panel, show only file tree")]
+    no_diff: bool,
 }
 
 #[tokio::main]
@@ -53,7 +56,7 @@ async fn main() -> Result<()> {
     log::debug!("Debug mode enabled");
     let mut git_repo = GitRepo::new(repo_path)?;
 
-    let mut app = App::new();
+    let mut app = App::new_with_config(!args.no_diff);
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -86,27 +89,30 @@ async fn main() -> Result<()> {
         terminal.draw(|f| {
             let size = f.area();
 
-            // Calculate layout to get diff panel height
-            let chunks = ratatui::layout::Layout::default()
-                .direction(ratatui::layout::Direction::Vertical)
-                .constraints([
-                    ratatui::layout::Constraint::Length(1),
-                    ratatui::layout::Constraint::Min(0),
-                ])
-                .split(size);
+            // Calculate diff height only if diff panel is visible
+            if app.is_showing_diff_panel() {
+                let chunks = ratatui::layout::Layout::default()
+                    .direction(ratatui::layout::Direction::Vertical)
+                    .constraints([
+                        ratatui::layout::Constraint::Length(1),
+                        ratatui::layout::Constraint::Min(0),
+                    ])
+                    .split(size);
 
-            let bottom_chunks = ratatui::layout::Layout::default()
-                .direction(ratatui::layout::Direction::Horizontal)
-                .constraints([
-                    ratatui::layout::Constraint::Percentage(30),
-                    ratatui::layout::Constraint::Percentage(70),
-                ])
-                .split(chunks[1]);
+                let bottom_chunks = ratatui::layout::Layout::default()
+                    .direction(ratatui::layout::Direction::Horizontal)
+                    .constraints([
+                        ratatui::layout::Constraint::Percentage(30),
+                        ratatui::layout::Constraint::Percentage(70),
+                    ])
+                    .split(chunks[1]);
 
-            let diff_height = bottom_chunks[1].height.saturating_sub(2) as usize;
-
-            // Store the current diff height in the app for scrolling methods
-            app.current_diff_height = diff_height;
+                let diff_height = bottom_chunks[1].height.saturating_sub(2) as usize;
+                app.current_diff_height = diff_height;
+            } else {
+                // When diff panel is hidden, set a reasonable default height
+                app.current_diff_height = 20;
+            }
 
             ui::render::<CrosstermBackend<std::io::Stdout>>(f, &app, &git_repo);
         })?;
@@ -116,12 +122,11 @@ async fn main() -> Result<()> {
             log::debug!("Slow render detected: {:?}", render_duration);
         }
 
-        if crossterm::event::poll(Duration::from_millis(10))? {
-            if let Event::Key(key) = crossterm::event::read()? {
-                if handle_key_event(key, &mut app) {
-                    break;
-                }
-            }
+        if crossterm::event::poll(Duration::from_millis(10))?
+            && let Event::Key(key) = crossterm::event::read()?
+            && handle_key_event(key, &mut app)
+        {
+            break;
         }
     }
 
@@ -172,29 +177,27 @@ fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
         }
         KeyCode::Char('t') => {
             // Check if g was pressed recently
-            if let Some(last_time) = app.last_g_press {
-                if std::time::Instant::now()
+            if let Some(last_time) = app.last_g_press
+                && std::time::Instant::now()
                     .duration_since(last_time)
                     .as_millis()
                     < 500
-                {
-                    debug!("User triggered 'gt' key combination - next file");
-                    app.next_file();
-                }
+            {
+                debug!("User triggered 'gt' key combination - next file");
+                app.next_file();
             }
             false
         }
         KeyCode::Char('T') => {
             // Check if g was pressed recently
-            if let Some(last_time) = app.last_g_press {
-                if std::time::Instant::now()
+            if let Some(last_time) = app.last_g_press
+                && std::time::Instant::now()
                     .duration_since(last_time)
                     .as_millis()
                     < 500
-                {
-                    debug!("User triggered 'gT' key combination - previous file");
-                    app.prev_file();
-                }
+            {
+                debug!("User triggered 'gT' key combination - previous file");
+                app.prev_file();
             }
             false
         }
@@ -232,6 +235,10 @@ fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
         }
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.set_single_pane_diff();
+            false
+        }
+        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.toggle_diff_panel();
             false
         }
         _ => false,

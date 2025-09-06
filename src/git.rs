@@ -121,20 +121,19 @@ impl GitRepo {
                 }
                 debug!("Modified file: +{} -{}", additions, deletions);
             }
-        } else if status.is_wt_deleted() {
-            if let Ok(output) = std::process::Command::new("git")
+        } else if status.is_wt_deleted()
+            && let Ok(output) = std::process::Command::new("git")
                 .args(["diff", "--no-color", path.to_str().unwrap_or("")])
                 .output()
-            {
-                let diff_text = String::from_utf8_lossy(&output.stdout);
-                for line in diff_text.lines() {
-                    if line.starts_with('-') && !line.starts_with("--") {
-                        deletions += 1;
-                    }
-                    line_strings.push(line.to_string());
+        {
+            let diff_text = String::from_utf8_lossy(&output.stdout);
+            for line in diff_text.lines() {
+                if line.starts_with('-') && !line.starts_with("--") {
+                    deletions += 1;
                 }
-                debug!("Deleted file: -{} lines", deletions);
+                line_strings.push(line.to_string());
             }
+            debug!("Deleted file: -{} lines", deletions);
         }
 
         FileDiff {
