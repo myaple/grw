@@ -15,9 +15,11 @@ use std::io;
 use std::time::Duration;
 
 mod git;
+mod logging;
 mod ui;
 
 use git::GitRepo;
+use log::debug;
 use ui::App;
 
 include!(concat!(env!("OUT_DIR"), "/git_sha.rs"));
@@ -29,6 +31,9 @@ include!(concat!(env!("OUT_DIR"), "/git_sha.rs"));
 struct Args {
     #[arg(short, long, help = "Print version information and exit")]
     version: bool,
+
+    #[arg(short, long, help = "Enable debug logging")]
+    debug: bool,
 }
 
 #[tokio::main]
@@ -40,9 +45,12 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    logging::init_logging(args.debug)?;
     color_eyre::install()?;
 
     let repo_path = std::env::current_dir()?;
+    log::info!("Starting grw in directory: {:?}", repo_path);
+    log::debug!("Debug mode enabled");
     let mut git_repo = GitRepo::new(repo_path)?;
 
     let mut app = App::new();
@@ -58,13 +66,23 @@ async fn main() -> Result<()> {
 
     loop {
         if last_update.elapsed() >= update_interval {
+            let update_start = std::time::Instant::now();
             git_repo.update()?;
-            app.update_files(git_repo.get_changed_files_clone());
+            let update_duration = update_start.elapsed();
+
+            let changed_files = git_repo.get_changed_files_clone();
             let tree = git_repo.get_file_tree();
+
+            app.update_files(changed_files.clone());
             app.update_tree(&tree);
+
+            log::debug!("Git repo update took {:?}", update_duration);
+            log::debug!("Found {} changed files", changed_files.len());
+
             last_update = std::time::Instant::now();
         }
 
+        let render_start = std::time::Instant::now();
         terminal.draw(|f| {
             let size = f.area();
 
@@ -92,6 +110,11 @@ async fn main() -> Result<()> {
 
             ui::render::<CrosstermBackend<std::io::Stdout>>(f, &app, &git_repo);
         })?;
+        let render_duration = render_start.elapsed();
+
+        if render_duration.as_millis() > 10 {
+            log::debug!("Slow render detected: {:?}", render_duration);
+        }
 
         if crossterm::event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = crossterm::event::read()? {
@@ -105,13 +128,20 @@ async fn main() -> Result<()> {
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
 
+    log::info!("Application shutdown complete");
     Ok(())
 }
 
 fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
     match key.code {
-        KeyCode::Char('q') => true,
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => true,
+        KeyCode::Char('q') => {
+            log::info!("User requested quit");
+            true
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            log::info!("User requested quit via Ctrl+C");
+            true
+        }
         KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => {
             app.scroll_to_bottom(app.current_diff_height);
             false
@@ -148,6 +178,7 @@ fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
                     .as_millis()
                     < 500
                 {
+                    debug!("User triggered 'gt' key combination - next file");
                     app.next_file();
                 }
             }
@@ -161,6 +192,7 @@ fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
                     .as_millis()
                     < 500
                 {
+                    debug!("User triggered 'gT' key combination - previous file");
                     app.prev_file();
                 }
             }
@@ -175,10 +207,12 @@ fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
             false
         }
         KeyCode::Tab => {
+            debug!("User pressed Tab - next file");
             app.next_file();
             false
         }
         KeyCode::BackTab => {
+            debug!("User pressed Shift+Tab - previous file");
             app.prev_file();
             false
         }

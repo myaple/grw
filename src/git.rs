@@ -1,5 +1,6 @@
 use color_eyre::eyre::Result;
 use git2::{Repository, Status, StatusOptions};
+use log::debug;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -48,6 +49,8 @@ impl GitRepo {
     }
 
     pub fn update(&mut self) -> Result<()> {
+        debug!("Starting git status update for repository: {:?}", self.path);
+
         let statuses = self.repo.statuses(Some(
             StatusOptions::new()
                 .include_ignored(false)
@@ -56,6 +59,8 @@ impl GitRepo {
         ))?;
 
         let mut new_changed_files = Vec::new();
+        let status_count = statuses.len();
+        debug!("Found {} total status entries", status_count);
 
         for status in statuses.iter() {
             let path = status.path().unwrap_or("");
@@ -66,15 +71,26 @@ impl GitRepo {
                 || status.status().is_wt_deleted()
             {
                 let diff = self.get_file_diff(&file_path, status.status());
+                debug!(
+                    "Processing changed file: {} (status: {:?})",
+                    path,
+                    status.status()
+                );
                 new_changed_files.push(diff);
             }
         }
 
+        debug!(
+            "Update complete: {} changed files found",
+            new_changed_files.len()
+        );
         self.changed_files = new_changed_files;
         Ok(())
     }
 
     fn get_file_diff(&self, path: &Path, status: Status) -> FileDiff {
+        debug!("Computing diff for file: {:?} (status: {:?})", path, status);
+
         let mut line_strings = Vec::new();
         let hunks = Vec::new();
         let mut additions = 0;
@@ -82,6 +98,8 @@ impl GitRepo {
 
         if status.is_wt_new() {
             if let Ok(content) = std::fs::read_to_string(path) {
+                let line_count = content.lines().count();
+                debug!("New file has {} lines", line_count);
                 for line in content.lines() {
                     line_strings.push(format!("+ {line}"));
                     additions += 1;
@@ -101,6 +119,7 @@ impl GitRepo {
                     }
                     line_strings.push(line.to_string());
                 }
+                debug!("Modified file: +{} -{}", additions, deletions);
             }
         } else if status.is_wt_deleted() {
             if let Ok(output) = std::process::Command::new("git")
@@ -114,6 +133,7 @@ impl GitRepo {
                     }
                     line_strings.push(line.to_string());
                 }
+                debug!("Deleted file: -{} lines", deletions);
             }
         }
 
