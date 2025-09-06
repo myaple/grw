@@ -1,5 +1,5 @@
 # Build stage
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest as builder
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest AS builder
 
 # Install required dependencies for building
 RUN microdnf update -y && \
@@ -10,19 +10,31 @@ RUN microdnf update -y && \
         openssl-devel && \
     microdnf clean all
 
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 # Create app directory
 WORKDIR /app
 
-# Copy project files
-COPY . .
+# Copy only dependency files first for better layer caching
+COPY Cargo.toml Cargo.lock ./
 
-# Install Rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
-    . $HOME/.cargo/env
+# Create a dummy main.rs to satisfy cargo build for dependencies
+RUN mkdir -p src && echo "fn main() {}" > src/main.rs
 
-# Build the application with target directory cache
-RUN --mount=type=cache,target=/app/target,id=target-cache \
-    . $HOME/.cargo/env && \
+# Build dependencies only - this layer will be cached unless Cargo files change
+RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry \
+    --mount=type=cache,target=/app/target,id=target-cache \
+    cargo build --release && \
+    rm -rf src
+
+# Copy actual source code
+COPY src ./src
+
+# Build final application - only rebuilds when source changes
+RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry \
+    --mount=type=cache,target=/app/target,id=target-cache \
     cargo build --release && \
     cp /app/target/release/grw /grw
 
