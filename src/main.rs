@@ -1,3 +1,4 @@
+use clap::Parser;
 use color_eyre::eyre::Result;
 use ratatui::{
     Terminal,
@@ -19,8 +20,26 @@ mod ui;
 use git::GitRepo;
 use ui::App;
 
+include!(concat!(env!("OUT_DIR"), "/git_sha.rs"));
+
+#[derive(Parser)]
+#[command(name = "grw")]
+#[command(about = "Git Repository Watcher - A TUI for real-time git monitoring")]
+#[command(disable_version_flag = true)]
+struct Args {
+    #[arg(short, long, help = "Print version information and exit")]
+    version: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.version {
+        println!("grw version 0.1.0 (git: {})", GIT_SHA);
+        return Ok(());
+    }
+
     color_eyre::install()?;
 
     let repo_path = std::env::current_dir()?;
