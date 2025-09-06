@@ -1,0 +1,13 @@
+[package]
+name = "grw"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+git2 = { version = "0.19", default-features = false, features = ["https"] }
+color-eyre = "0.6"
+tokio = { version = "1.42", features = ["full"] }
+futures = "0.3"
+ansi-to-tui = "7.0"
