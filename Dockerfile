@@ -1,7 +1,7 @@
-# Use UBI9 minimal image
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+# Build stage
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest as builder
 
-# Install required dependencies
+# Install required dependencies for building
 RUN microdnf update -y && \
     microdnf install -y \
         gcc \
@@ -23,15 +23,32 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
 # Build the application with target directory cache
 RUN --mount=type=cache,target=/app/target,id=target-cache \
     . $HOME/.cargo/env && \
-    cargo build --release
+    cargo build --release && \
+    cp /app/target/release/grw /grw
 
-# Create a non-root user
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app
+# Runtime stage - minimal UBI9 image
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+# Install only runtime dependencies
+RUN microdnf update -y && \
+    microdnf install -y \
+        libgcc \
+        openssl-libs && \
+    microdnf clean all
+
+# Create app directory and user
+WORKDIR /app
+RUN useradd -m -u 1000 appuser
+
+# Copy the binary from the builder stage
+COPY --from=builder /grw /app/grw
+
+# Set permissions
+RUN chown -R appuser:appuser /app
 USER appuser
 
 # Set the entrypoint
-ENTRYPOINT ["/app/target/release/grw"]
+ENTRYPOINT ["/app/grw"]
 
 # Expose port (if needed for future use)
 EXPOSE 8080
