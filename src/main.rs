@@ -14,30 +14,19 @@ use ratatui::{
 use std::io;
 use std::time::Duration;
 
+mod config;
 mod git;
 mod logging;
+mod monitor;
 mod ui;
 
+use config::{Args, Config};
 use git::GitRepo;
 use log::debug;
+use monitor::MonitorCommand;
 use ui::App;
 
 include!(concat!(env!("OUT_DIR"), "/git_sha.rs"));
-
-#[derive(Parser)]
-#[command(name = "grw")]
-#[command(about = "Git Repository Watcher - A TUI for real-time git monitoring")]
-#[command(disable_version_flag = true)]
-struct Args {
-    #[arg(short, long, help = "Print version information and exit")]
-    version: bool,
-
-    #[arg(short, long, help = "Enable debug logging")]
-    debug: bool,
-
-    #[arg(long, help = "Hide diff panel, show only file tree")]
-    no_diff: bool,
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -48,7 +37,10 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    logging::init_logging(args.debug)?;
+    let config = Config::load()?;
+    let final_config = config.merge_with_args(&args);
+
+    logging::init_logging(final_config.debug)?;
     color_eyre::install()?;
 
     let repo_path = std::env::current_dir()?;
@@ -56,7 +48,21 @@ async fn main() -> Result<()> {
     log::debug!("Debug mode enabled");
     let mut git_repo = GitRepo::new(repo_path)?;
 
-    let mut app = App::new_with_config(!args.no_diff);
+    let mut app = App::new_with_config(!final_config.no_diff);
+
+    let mut monitor_command = if let Some(cmd) = &final_config.monitor_command {
+        Some(MonitorCommand::new(
+            cmd.clone(),
+            final_config.monitor_interval.unwrap_or(5),
+        ))
+    } else {
+        None
+    };
+
+    // Enable monitor pane when a command is configured
+    if monitor_command.is_some() {
+        app.toggle_monitor_pane();
+    }
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -64,11 +70,12 @@ async fn main() -> Result<()> {
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
 
-    let mut last_update = std::time::Instant::now();
-    let update_interval = Duration::from_millis(500);
+    let mut last_git_update = std::time::Instant::now();
+    let git_update_interval = Duration::from_millis(500);
 
     loop {
-        if last_update.elapsed() >= update_interval {
+        // Update git repo
+        if last_git_update.elapsed() >= git_update_interval {
             let update_start = std::time::Instant::now();
             git_repo.update()?;
             let update_duration = update_start.elapsed();
@@ -82,7 +89,69 @@ async fn main() -> Result<()> {
             log::debug!("Git repo update took {:?}", update_duration);
             log::debug!("Found {} changed files", changed_files.len());
 
-            last_update = std::time::Instant::now();
+            last_git_update = std::time::Instant::now();
+        }
+
+        // Update monitor command if it exists
+        if let Some(ref mut monitor) = monitor_command
+            && monitor.should_run()
+        {
+            if let Err(e) = monitor.run() {
+                log::error!("Monitor command failed: {:?}", e);
+            }
+            app.update_monitor_output(monitor.get_output().to_string());
+        }
+
+        // Calculate monitor visible height before rendering
+        let terminal_size = terminal.size()?;
+        let terminal_rect =
+            ratatui::layout::Rect::new(0, 0, terminal_size.width, terminal_size.height);
+        if app.is_showing_monitor_pane() {
+            let chunks = if app.is_showing_diff_panel() {
+                // When both diff panel and monitor pane are shown
+                let main_chunks = ratatui::layout::Layout::default()
+                    .direction(ratatui::layout::Direction::Vertical)
+                    .constraints([
+                        ratatui::layout::Constraint::Length(1),
+                        ratatui::layout::Constraint::Min(0),
+                    ])
+                    .split(terminal_rect);
+
+                let bottom_chunks = ratatui::layout::Layout::default()
+                    .direction(ratatui::layout::Direction::Horizontal)
+                    .constraints([
+                        ratatui::layout::Constraint::Percentage(30),
+                        ratatui::layout::Constraint::Percentage(70),
+                    ])
+                    .split(main_chunks[1]);
+
+                ratatui::layout::Layout::default()
+                    .direction(ratatui::layout::Direction::Vertical)
+                    .constraints([
+                        ratatui::layout::Constraint::Percentage(50),
+                        ratatui::layout::Constraint::Percentage(50),
+                    ])
+                    .split(bottom_chunks[0])
+            } else {
+                // When only monitor pane is shown (no diff panel)
+                let main_chunks = ratatui::layout::Layout::default()
+                    .direction(ratatui::layout::Direction::Vertical)
+                    .constraints([
+                        ratatui::layout::Constraint::Length(1),
+                        ratatui::layout::Constraint::Min(0),
+                    ])
+                    .split(terminal_rect);
+
+                ratatui::layout::Layout::default()
+                    .direction(ratatui::layout::Direction::Vertical)
+                    .constraints([
+                        ratatui::layout::Constraint::Percentage(50),
+                        ratatui::layout::Constraint::Percentage(50),
+                    ])
+                    .split(main_chunks[1])
+            };
+
+            app.set_monitor_visible_height(chunks[1].height.saturating_sub(2) as usize);
         }
 
         let render_start = std::time::Instant::now();
@@ -151,11 +220,19 @@ fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
             app.scroll_to_bottom(app.current_diff_height);
             false
         }
-        KeyCode::Char('j') | KeyCode::Down => {
+        KeyCode::Char('j') if key.modifiers.is_empty() => {
             app.scroll_down(app.current_diff_height);
             false
         }
-        KeyCode::Char('k') | KeyCode::Up => {
+        KeyCode::Down => {
+            app.scroll_down(app.current_diff_height);
+            false
+        }
+        KeyCode::Char('k') if key.modifiers.is_empty() => {
+            app.scroll_up();
+            false
+        }
+        KeyCode::Up => {
             app.scroll_up();
             false
         }
@@ -239,6 +316,20 @@ fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
         }
         KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.toggle_diff_panel();
+            false
+        }
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::ALT) => {
+            app.scroll_monitor_down();
+            false
+        }
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::ALT) => {
+            app.scroll_monitor_up();
+            false
+        }
+        KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            debug!("User pressed Ctrl+O - toggling monitor pane");
+            app.toggle_monitor_pane();
+            debug!("Monitor pane is now: {}", app.is_showing_monitor_pane());
             false
         }
         _ => false,

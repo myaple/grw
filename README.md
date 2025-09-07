@@ -35,6 +35,7 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 
 ### Panel Controls
 - `Ctrl+H` - Toggle diff panel visibility
+- `Ctrl+O` - Toggle monitor pane visibility
 
 ### Help and Interface
 - `?` - Show/hide help
@@ -69,10 +70,12 @@ grw
 
 ### Command Line Options
 
-- `--no-diff` - Hide diff panel, show only file tree
-- `-d, --debug` - Enable debug logging
 - `-v, --version` - Print version information and exit
 - `-h, --help` - Print help information
+- `-d, --debug` - Enable debug logging
+- `--no-diff` - Hide diff panel, show only file tree
+- `--monitor-command <COMMAND>` - Command to run in monitor pane
+- `--monitor-interval <SECONDS>` - Interval in seconds for monitor command refresh
 
 ### Examples
 
@@ -88,7 +91,34 @@ grw --debug
 
 # Hide diff panel with debug logging
 grw --no-diff --debug
+
+# Run a monitor command every 5 seconds
+grw --monitor-command "git status --short" --monitor-interval 5
+
+# Run a custom script in monitor pane
+grw --monitor-command "./scripts/check-deps.sh" --monitor-interval 10
 ```
+
+### Configuration File
+
+GRW supports a configuration file at `~/.config/grw/config.json` that can be used to persist settings:
+
+```json
+{
+  "debug": false,
+  "no_diff": false,
+  "monitor_command": "git status --short",
+  "monitor_interval": 5
+}
+```
+
+Configuration options:
+- `debug` (boolean): Enable debug logging (default: false)
+- `no_diff` (boolean): Hide diff panel, show only file tree (default: false)  
+- `monitor_command` (string): Command to run in monitor pane (optional)
+- `monitor_interval` (number): Interval in seconds for monitor command refresh (optional)
+
+Command line arguments override configuration file settings.
 
 ### Interface Layout
 

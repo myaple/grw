@@ -22,6 +22,10 @@ pub struct App {
     side_by_side_diff: bool,
     show_diff_panel: bool,
     file_change_timestamps: Vec<std::time::Instant>,
+    monitor_output: String,
+    monitor_scroll_offset: usize,
+    show_monitor_pane: bool,
+    monitor_visible_height: usize,
 }
 
 impl App {
@@ -44,6 +48,10 @@ impl App {
             side_by_side_diff: false,
             show_diff_panel,
             file_change_timestamps: Vec::new(),
+            monitor_output: String::new(),
+            monitor_scroll_offset: 0,
+            show_monitor_pane: false,
+            monitor_visible_height: 10, // Default value
         }
     }
 
@@ -329,6 +337,40 @@ impl App {
     pub fn get_file_count(&self) -> usize {
         self.files.len()
     }
+
+    pub fn update_monitor_output(&mut self, output: String) {
+        self.monitor_output = output;
+        // Don't reset scroll offset - preserve user's current scroll position
+    }
+
+    pub fn scroll_monitor_down(&mut self) {
+        let lines: Vec<&str> = self.monitor_output.lines().collect();
+        if !lines.is_empty() {
+            // Only scroll if there's more content below the current view
+            let max_scroll = lines.len().saturating_sub(self.monitor_visible_height);
+            if self.monitor_scroll_offset < max_scroll {
+                self.monitor_scroll_offset += 1;
+            }
+        }
+    }
+
+    pub fn scroll_monitor_up(&mut self) {
+        if self.monitor_scroll_offset > 0 {
+            self.monitor_scroll_offset -= 1;
+        }
+    }
+
+    pub fn toggle_monitor_pane(&mut self) {
+        self.show_monitor_pane = !self.show_monitor_pane;
+    }
+
+    pub fn is_showing_monitor_pane(&self) -> bool {
+        self.show_monitor_pane
+    }
+
+    pub fn set_monitor_visible_height(&mut self, height: usize) {
+        self.monitor_visible_height = height;
+    }
 }
 
 #[allow(clippy::extra_unused_type_parameters)]
@@ -387,6 +429,28 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
 }
 
 fn render_file_tree(f: &mut Frame, app: &App, area: Rect) {
+    if app.is_showing_monitor_pane() {
+        // Split the file tree area into tree and monitor sections
+        let tree_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(50), // File tree (top half)
+                Constraint::Percentage(50), // Monitor pane (bottom half)
+            ])
+            .split(area);
+
+        // Render file tree in top half
+        render_file_tree_content(f, app, tree_chunks[0]);
+
+        // Render monitor pane in bottom half
+        render_monitor_pane(f, app, tree_chunks[1]);
+    } else {
+        // Monitor pane is hidden, file tree takes full area
+        render_file_tree_content(f, app, area);
+    }
+}
+
+fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect) {
     let tree_items: Vec<ListItem> = app
         .tree_nodes
         .iter()
@@ -688,6 +752,9 @@ fn render_help_view(f: &mut Frame, area: Rect) {
         Line::from("  Ctrl+S        - Switch to side-by-side diff view"),
         Line::from("  Ctrl+D        - Switch to single-pane diff view"),
         Line::from("  Ctrl+H        - Toggle diff panel visibility"),
+        Line::from("  Ctrl+O        - Toggle monitor pane visibility"),
+        Line::from("  Alt+j         - Scroll monitor pane down"),
+        Line::from("  Alt+k         - Scroll monitor pane up"),
         Line::from("  q / Ctrl+C    - Quit application"),
         Line::from(""),
         Line::from("Press ? or Esc to return to diff view"),
@@ -696,6 +763,35 @@ fn render_help_view(f: &mut Frame, area: Rect) {
     let text = Text::from(help_text);
     let paragraph = Paragraph::new(text)
         .block(Block::default().title("Help").borders(Borders::ALL))
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(paragraph, area);
+}
+
+fn render_monitor_pane(f: &mut Frame, app: &App, area: Rect) {
+    let monitor_lines: Vec<_> = app
+        .monitor_output
+        .lines()
+        .skip(app.monitor_scroll_offset)
+        .collect();
+    let visible_lines = area.height.saturating_sub(2) as usize; // Account for borders
+
+    // Take only the lines that will fit in the visible area
+    let display_lines: Vec<Line> = monitor_lines
+        .iter()
+        .take(visible_lines)
+        .map(|line| Line::from(line.to_string()))
+        .collect();
+
+    let title = if app.monitor_output.is_empty() {
+        "Monitor (no command configured)"
+    } else {
+        "Monitor Output"
+    };
+
+    let text = Text::from(display_lines);
+    let paragraph = Paragraph::new(text)
+        .block(Block::default().title(title).borders(Borders::ALL))
         .wrap(Wrap { trim: false });
 
     f.render_widget(paragraph, area);
@@ -780,5 +876,69 @@ mod tests {
         assert!(!app.show_diff_panel);
         app.toggle_diff_panel();
         assert!(app.show_diff_panel);
+    }
+
+    #[test]
+    fn test_monitor_output_update() {
+        let mut app = App::new_with_config(true);
+        assert_eq!(app.monitor_output, "");
+        assert_eq!(app.monitor_scroll_offset, 0);
+
+        // Set scroll offset to test that it's preserved
+        app.monitor_scroll_offset = 5;
+
+        app.update_monitor_output("test output".to_string());
+        assert_eq!(app.monitor_output, "test output");
+        assert_eq!(app.monitor_scroll_offset, 5); // Should preserve scroll offset
+    }
+
+    #[test]
+    fn test_monitor_scroll() {
+        let mut app = App::new_with_config(true);
+
+        // Set a reasonable visible height for testing
+        app.monitor_visible_height = 3;
+
+        // Create a long output with multiple lines
+        let long_output = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
+        app.update_monitor_output(long_output.to_string());
+
+        // Test scrolling down
+        app.scroll_monitor_down();
+        assert_eq!(app.monitor_scroll_offset, 1);
+
+        app.scroll_monitor_down();
+        assert_eq!(app.monitor_scroll_offset, 2);
+
+        // Try to scroll past content - should stop at max scroll (5 lines - 3 visible = 2 max scroll)
+        app.scroll_monitor_down();
+        assert_eq!(app.monitor_scroll_offset, 2); // Should not increase beyond max
+
+        // Test scrolling up
+        app.scroll_monitor_up();
+        assert_eq!(app.monitor_scroll_offset, 1);
+
+        app.scroll_monitor_up();
+        assert_eq!(app.monitor_scroll_offset, 0);
+
+        // Test scrolling up when already at top
+        app.scroll_monitor_up();
+        assert_eq!(app.monitor_scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_toggle_monitor_pane() {
+        let mut app = App::new_with_config(true);
+
+        // Initially monitor pane should be hidden
+        assert!(!app.is_showing_monitor_pane());
+
+        // Toggle to show monitor pane
+        app.toggle_monitor_pane();
+        assert!(app.is_showing_monitor_pane());
+
+        // Toggle back to hide monitor pane
+        app.toggle_monitor_pane();
+        assert!(!app.is_showing_monitor_pane());
     }
 }
