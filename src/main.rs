@@ -26,7 +26,7 @@ use log::debug;
 use monitor::MonitorCommand;
 use ui::App;
 
-include!(concat!(env!("OUT_DIR"), "/git_sha.rs"));
+pub const GIT_SHA: &str = "unknown";
 
 #[tokio::main]
 async fn main() -> Result<()> {

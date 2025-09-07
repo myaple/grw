@@ -39,12 +39,19 @@ impl MonitorCommand {
 
         self.last_run = Some(Instant::now());
 
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
         if output.status.success() {
-            self.last_output = String::from_utf8_lossy(&output.stdout).to_string();
+            self.last_output = if stderr.is_empty() {
+                format!("$ {}\n{}", self.command, stdout)
+            } else {
+                format!("$ {}\n{}\n{}", self.command, stdout, stderr)
+            };
             debug!("Monitor command completed successfully");
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            self.last_output = format!("Command failed: {}", stderr);
+            self.last_output =
+                format!("$ {}\nCommand failed: {}\n{}", self.command, stderr, stdout);
             debug!("Monitor command failed: {}", stderr);
         }
 
