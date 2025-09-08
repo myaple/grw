@@ -8,6 +8,25 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FileBrowserPane {
+    FileTree,
+    Monitor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InformationPane {
+    Diff,
+    SideBySideDiff,
+    Help,
+    // Add new pane types here in the future
+    // Examples:
+    // Stats,
+    // Blame,
+    // History,
+    // Search,
+}
+
 #[derive(Debug)]
 pub struct App {
     files: Vec<FileDiff>,
@@ -17,7 +36,6 @@ pub struct App {
     current_tree_index: usize,
     file_indices_in_tree: Vec<usize>,
     pub last_g_press: Option<std::time::Instant>,
-    show_help: bool,
     pub current_diff_height: usize,
     side_by_side_diff: bool,
     show_diff_panel: bool,
@@ -26,14 +44,11 @@ pub struct App {
     monitor_scroll_offset: usize,
     show_monitor_pane: bool,
     monitor_visible_height: usize,
+    current_file_browser_pane: FileBrowserPane,
+    current_information_pane: InformationPane,
 }
 
 impl App {
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self::new_with_config(false)
-    }
-
     pub fn new_with_config(show_diff_panel: bool) -> Self {
         Self {
             files: Vec::new(),
@@ -43,7 +58,6 @@ impl App {
             current_tree_index: 0,
             file_indices_in_tree: Vec::new(),
             last_g_press: None,
-            show_help: false,
             current_diff_height: 20,
             side_by_side_diff: false,
             show_diff_panel,
@@ -52,6 +66,8 @@ impl App {
             monitor_scroll_offset: 0,
             show_monitor_pane: false,
             monitor_visible_height: 10, // Default value
+            current_file_browser_pane: FileBrowserPane::FileTree,
+            current_information_pane: InformationPane::Diff,
         }
     }
 
@@ -225,28 +241,40 @@ impl App {
     }
 
     pub fn toggle_help(&mut self) {
-        self.show_help = !self.show_help;
+        if self.current_information_pane == InformationPane::Help {
+            // If currently showing help, return to previous diff mode
+            self.current_information_pane = if self.side_by_side_diff {
+                InformationPane::SideBySideDiff
+            } else {
+                InformationPane::Diff
+            };
+        } else {
+            // Store current mode and switch to help
+            self.current_information_pane = InformationPane::Help;
+        }
     }
 
     pub fn is_showing_help(&self) -> bool {
-        self.show_help
-    }
-
-    #[allow(dead_code)]
-    pub fn toggle_side_by_side_diff(&mut self) {
-        self.side_by_side_diff = !self.side_by_side_diff;
+        self.current_information_pane == InformationPane::Help
     }
 
     pub fn set_single_pane_diff(&mut self) {
         self.side_by_side_diff = false;
+        if !self.is_showing_help() {
+            self.current_information_pane = InformationPane::Diff;
+        }
     }
 
     pub fn set_side_by_side_diff(&mut self) {
         self.side_by_side_diff = true;
+        if !self.is_showing_help() {
+            self.current_information_pane = InformationPane::SideBySideDiff;
+        }
     }
 
+    #[allow(dead_code)]
     pub fn is_side_by_side_diff(&self) -> bool {
-        self.side_by_side_diff
+        self.current_information_pane == InformationPane::SideBySideDiff
     }
 
     pub fn toggle_diff_panel(&mut self) {
@@ -333,11 +361,6 @@ impl App {
         self.files.get(self.current_file_index)
     }
 
-    #[allow(dead_code)]
-    pub fn get_file_count(&self) -> usize {
-        self.files.len()
-    }
-
     pub fn update_monitor_output(&mut self, output: String) {
         self.monitor_output = output;
         // Don't reset scroll offset - preserve user's current scroll position
@@ -362,6 +385,11 @@ impl App {
 
     pub fn toggle_monitor_pane(&mut self) {
         self.show_monitor_pane = !self.show_monitor_pane;
+        if self.show_monitor_pane {
+            self.current_file_browser_pane = FileBrowserPane::Monitor;
+        } else {
+            self.current_file_browser_pane = FileBrowserPane::FileTree;
+        }
     }
 
     pub fn is_showing_monitor_pane(&self) -> bool {
@@ -393,61 +421,99 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
 
     render_status_bar(f, git_repo, chunks[0]);
 
-    if app.is_showing_help() {
-        // Help takes over the main content area (either full width or diff panel area)
-        if app.is_showing_diff_panel() {
-            let bottom_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-                .split(chunks[1]);
+    // Handle the information pane (right side)
+    if app.is_showing_diff_panel() {
+        let bottom_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(chunks[1]);
 
-            // Show file tree in left panel, help in right panel
-            render_file_tree(f, app, bottom_chunks[0]);
-            render_help_view(f, bottom_chunks[1]);
-        } else {
-            // When diff panel is hidden, help takes over the full content area
-            render_help_view(f, chunks[1]);
-        }
+        // Render file browser pane (left side)
+        render_file_browser_pane(f, app, bottom_chunks[0]);
+
+        // Render information pane (right side)
+        let diff_height = bottom_chunks[1].height.saturating_sub(2) as usize;
+        render_information_pane(f, app, bottom_chunks[1], diff_height);
     } else {
-        // Normal mode (not showing help)
-        if app.is_showing_diff_panel() {
-            let bottom_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-                .split(chunks[1]);
-
-            // Calculate available height for diff content
-            let diff_height = bottom_chunks[1].height.saturating_sub(2) as usize;
-
-            render_file_tree(f, app, bottom_chunks[0]);
-            render_diff_view(f, app, bottom_chunks[1], diff_height);
+        // When diff panel is hidden, file browser takes full width
+        // But if help is showing, it takes over the full content area
+        if app.is_showing_help() {
+            render_help_view(f, chunks[1]);
         } else {
-            // When diff panel is hidden, file tree takes full width
-            render_file_tree(f, app, chunks[1]);
+            render_file_browser_pane(f, app, chunks[1]);
         }
     }
 }
 
-fn render_file_tree(f: &mut Frame, app: &App, area: Rect) {
-    if app.is_showing_monitor_pane() {
-        // Split the file tree area into tree and monitor sections
-        let tree_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(50), // File tree (top half)
-                Constraint::Percentage(50), // Monitor pane (bottom half)
-            ])
-            .split(area);
-
-        // Render file tree in top half
-        render_file_tree_content(f, app, tree_chunks[0]);
-
-        // Render monitor pane in bottom half
-        render_monitor_pane(f, app, tree_chunks[1]);
-    } else {
-        // Monitor pane is hidden, file tree takes full area
-        render_file_tree_content(f, app, area);
+fn render_file_browser_pane(f: &mut Frame, app: &App, area: Rect) {
+    // If help is showing and diff panel is hidden, help takes over the full area
+    if app.is_showing_help() && !app.is_showing_diff_panel() {
+        render_help_view(f, area);
+        return;
     }
+
+    match app.current_file_browser_pane {
+        FileBrowserPane::FileTree => {
+            if app.is_showing_monitor_pane() {
+                // Split the file tree area into tree and monitor sections
+                let tree_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Percentage(50), // File tree (top half)
+                        Constraint::Percentage(50), // Monitor pane (bottom half)
+                    ])
+                    .split(area);
+
+                // Render file tree in top half
+                render_file_tree_content(f, app, tree_chunks[0]);
+
+                // Render monitor pane in bottom half
+                render_monitor_pane(f, app, tree_chunks[1]);
+            } else {
+                // Monitor pane is hidden, file tree takes full area
+                render_file_tree_content(f, app, area);
+            }
+        }
+        FileBrowserPane::Monitor => {
+            render_monitor_pane(f, app, area);
+        }
+    }
+}
+
+trait InformationPaneRenderer {
+    fn render(&self, f: &mut Frame, app: &App, area: Rect, max_lines: usize);
+}
+
+struct DiffRenderer;
+struct SideBySideDiffRenderer;
+struct HelpRenderer;
+
+impl InformationPaneRenderer for DiffRenderer {
+    fn render(&self, f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
+        render_diff_view(f, app, area, max_lines);
+    }
+}
+
+impl InformationPaneRenderer for SideBySideDiffRenderer {
+    fn render(&self, f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
+        render_side_by_side_diff_view(f, app, area, max_lines);
+    }
+}
+
+impl InformationPaneRenderer for HelpRenderer {
+    fn render(&self, f: &mut Frame, _app: &App, area: Rect, _max_lines: usize) {
+        render_help_view(f, area);
+    }
+}
+
+fn render_information_pane(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
+    let renderer: Box<dyn InformationPaneRenderer> = match app.current_information_pane {
+        InformationPane::Diff => Box::new(DiffRenderer),
+        InformationPane::SideBySideDiff => Box::new(SideBySideDiffRenderer),
+        InformationPane::Help => Box::new(HelpRenderer),
+    };
+
+    renderer.render(f, app, area, max_lines);
 }
 
 fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect) {
@@ -662,9 +728,7 @@ fn render_side_by_side_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines
 }
 
 fn render_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
-    if app.is_side_by_side_diff() {
-        render_side_by_side_diff_view(f, app, area, max_lines);
-    } else if let Some(file) = app.get_current_file() {
+    if let Some(file) = app.get_current_file() {
         let file_path = file.path.to_string_lossy();
         let title = format!("Diff: {file_path}");
 
@@ -808,8 +872,10 @@ mod tests {
         assert_eq!(app.current_file_index, 0);
         assert_eq!(app.scroll_offset, 0);
         assert_eq!(app.current_diff_height, 20);
-        assert!(!app.show_help);
+        assert!(!app.is_showing_help());
         assert!(app.show_diff_panel);
+        assert_eq!(app.current_file_browser_pane, FileBrowserPane::FileTree);
+        assert_eq!(app.current_information_pane, InformationPane::Diff);
     }
 
     #[test]
@@ -861,11 +927,16 @@ mod tests {
     #[test]
     fn test_toggle_help() {
         let mut app = App::new_with_config(true);
-        assert!(!app.show_help);
+        assert!(!app.is_showing_help());
+        assert_eq!(app.current_information_pane, InformationPane::Diff);
+
         app.toggle_help();
-        assert!(app.show_help);
+        assert!(app.is_showing_help());
+        assert_eq!(app.current_information_pane, InformationPane::Help);
+
         app.toggle_help();
-        assert!(!app.show_help);
+        assert!(!app.is_showing_help());
+        assert_eq!(app.current_information_pane, InformationPane::Diff);
     }
 
     #[test]
@@ -932,13 +1003,84 @@ mod tests {
 
         // Initially monitor pane should be hidden
         assert!(!app.is_showing_monitor_pane());
+        assert_eq!(app.current_file_browser_pane, FileBrowserPane::FileTree);
 
         // Toggle to show monitor pane
         app.toggle_monitor_pane();
         assert!(app.is_showing_monitor_pane());
+        assert_eq!(app.current_file_browser_pane, FileBrowserPane::Monitor);
 
         // Toggle back to hide monitor pane
         app.toggle_monitor_pane();
         assert!(!app.is_showing_monitor_pane());
+        assert_eq!(app.current_file_browser_pane, FileBrowserPane::FileTree);
+    }
+
+    #[test]
+    fn test_diff_mode_switching() {
+        let mut app = App::new_with_config(true);
+
+        // Initially in single-pane diff mode
+        assert_eq!(app.current_information_pane, InformationPane::Diff);
+        assert!(!app.is_side_by_side_diff());
+
+        // Switch to side-by-side mode
+        app.set_side_by_side_diff();
+        assert_eq!(
+            app.current_information_pane,
+            InformationPane::SideBySideDiff
+        );
+        assert!(app.is_side_by_side_diff());
+
+        // Switch back to single-pane mode
+        app.set_single_pane_diff();
+        assert_eq!(app.current_information_pane, InformationPane::Diff);
+        assert!(!app.is_side_by_side_diff());
+    }
+
+    #[test]
+    fn test_help_preserves_diff_mode() {
+        let mut app = App::new_with_config(true);
+
+        // Set to side-by-side mode
+        app.set_side_by_side_diff();
+        assert_eq!(
+            app.current_information_pane,
+            InformationPane::SideBySideDiff
+        );
+
+        // Show help
+        app.toggle_help();
+        assert_eq!(app.current_information_pane, InformationPane::Help);
+
+        // Hide help - should return to side-by-side mode
+        app.toggle_help();
+        assert_eq!(
+            app.current_information_pane,
+            InformationPane::SideBySideDiff
+        );
+    }
+
+    #[test]
+    fn test_help_movement_when_diff_panel_hidden() {
+        let mut app = App::new_with_config(true);
+
+        // Initially showing diff panel
+        assert!(app.is_showing_diff_panel());
+        assert!(!app.is_showing_help());
+
+        // Hide diff panel
+        app.toggle_diff_panel();
+        assert!(!app.is_showing_diff_panel());
+
+        // Show help - should work even when diff panel is hidden
+        app.toggle_help();
+        assert!(app.is_showing_help());
+        assert_eq!(app.current_information_pane, InformationPane::Help);
+
+        // Hide help
+        app.toggle_help();
+        assert!(!app.is_showing_help());
+        assert_eq!(app.current_information_pane, InformationPane::Diff);
     }
 }

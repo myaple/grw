@@ -8,8 +8,6 @@ pub struct FileDiff {
     pub path: PathBuf,
     pub status: Status,
     pub line_strings: Vec<String>,
-    #[allow(dead_code)]
-    pub hunks: Vec<String>,
     pub additions: usize,
     pub deletions: usize,
 }
@@ -92,7 +90,6 @@ impl GitRepo {
         debug!("Computing diff for file: {:?} (status: {:?})", path, status);
 
         let mut line_strings = Vec::new();
-        let hunks = Vec::new();
         let mut additions = 0;
         let mut deletions = 0;
 
@@ -140,15 +137,9 @@ impl GitRepo {
             path: path.to_path_buf(),
             status,
             line_strings,
-            hunks,
             additions,
             deletions,
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn get_changed_files(&self) -> &Vec<FileDiff> {
-        &self.changed_files
     }
 
     pub fn get_changed_files_clone(&self) -> Vec<FileDiff> {
@@ -277,15 +268,5 @@ impl GitRepo {
         for child in &node.children {
             self.flatten_tree_recursive(child, depth + 1, result);
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn get_file_count(&self) -> usize {
-        self.changed_files.len()
-    }
-
-    #[allow(dead_code)]
-    pub fn has_changes(&self) -> bool {
-        !self.changed_files.is_empty()
     }
 }
