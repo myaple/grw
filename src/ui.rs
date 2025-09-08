@@ -1,4 +1,4 @@
-use crate::git::{FileDiff, GitRepo, TreeNode};
+use crate::git::{FileDiff, GitRepo, TreeNode, ViewMode};
 use ratatui::{
     Frame,
     backend::Backend,
@@ -548,10 +548,10 @@ fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect) {
                     } else if diff.status.is_wt_deleted() {
                         "🗑️  "
                     } else {
-                        "❓ "
+                        "📄 "
                     }
                 } else {
-                    "❓ "
+                    "📄 "
                 };
 
                 spans.push(Span::raw(format!("{indent}{status_char}")));
@@ -630,10 +630,19 @@ fn render_status_bar(f: &mut Frame, git_repo: &GitRepo, area: Rect) {
     let branch = git_repo.get_current_branch();
     let (commit_sha, commit_summary) = git_repo.get_last_commit_info();
     let (total_files, total_additions, total_deletions) = git_repo.get_total_stats();
+    let view_mode = git_repo.get_current_view_mode();
+
+    // Get view mode display text
+    let view_mode_text = match view_mode {
+        ViewMode::WorkingTree => "💼 Working Tree",
+        ViewMode::Staged => "📋 Staged Files",
+        ViewMode::DirtyDirectory => "🗂️ Dirty Directory",
+        ViewMode::LastCommit => "📜 Last Commit",
+    };
 
     // Build the complete status text
     let status_text = format!(
-        "📁 {repo_name} | 🌿 {branch} | 🎯 {commit_sha} > {commit_summary} | 📊 {total_files} files (+{total_additions}/-{total_deletions})"
+        "📂 {repo_name} | 🌿 {branch} | {view_mode_text} | 🎯 {commit_sha} > {commit_summary} | 📊 {total_files} files (+{total_additions}/-{total_deletions})"
     );
 
     let paragraph = Paragraph::new(status_text)

@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
             git_repo.update()?;
             let update_duration = update_start.elapsed();
 
-            let changed_files = git_repo.get_changed_files_clone();
+            let changed_files = git_repo.get_display_files();
             let tree = git_repo.get_file_tree();
 
             app.update_files(changed_files.clone());

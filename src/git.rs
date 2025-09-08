@@ -25,7 +25,18 @@ pub struct GitRepo {
     repo: Repository,
     path: PathBuf,
     changed_files: Vec<FileDiff>,
+    staged_files: Vec<FileDiff>,
+    dirty_directory_files: Vec<FileDiff>,
     last_commit_id: Option<String>,
+    current_view_mode: ViewMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ViewMode {
+    WorkingTree,
+    Staged,
+    DirtyDirectory,
+    LastCommit,
 }
 
 impl GitRepo {
@@ -42,13 +53,17 @@ impl GitRepo {
             repo,
             path,
             changed_files: Vec::new(),
+            staged_files: Vec::new(),
+            dirty_directory_files: Vec::new(),
             last_commit_id,
+            current_view_mode: ViewMode::WorkingTree,
         })
     }
 
     pub fn update(&mut self) -> Result<()> {
         debug!("Starting git status update for repository: {:?}", self.path);
 
+        // Get all statuses including staged files
         let statuses = self.repo.statuses(Some(
             StatusOptions::new()
                 .include_ignored(false)
@@ -57,6 +72,8 @@ impl GitRepo {
         ))?;
 
         let mut new_changed_files = Vec::new();
+        let mut new_staged_files = Vec::new();
+        let mut new_dirty_directory_files = Vec::new();
         let status_count = statuses.len();
         debug!("Found {} total status entries", status_count);
 
@@ -64,25 +81,67 @@ impl GitRepo {
             let path = status.path().unwrap_or("");
             let file_path = self.path.join(path);
 
+            // Working tree changes (unstaged)
             if status.status().is_wt_new()
                 || status.status().is_wt_modified()
                 || status.status().is_wt_deleted()
             {
                 let diff = self.get_file_diff(&file_path, status.status());
                 debug!(
-                    "Processing changed file: {} (status: {:?})",
+                    "Processing working tree file: {} (status: {:?})",
                     path,
                     status.status()
                 );
                 new_changed_files.push(diff);
             }
+
+            // Staged files
+            if status.status().is_index_new()
+                || status.status().is_index_modified()
+                || status.status().is_index_deleted()
+                || status.status().is_index_renamed()
+                || status.status().is_index_typechange()
+            {
+                let diff = self.get_staged_file_diff(&file_path, status.status());
+                debug!(
+                    "Processing staged file: {} (status: {:?})",
+                    path,
+                    status.status()
+                );
+                new_staged_files.push(diff);
+            }
+
+            // Dirty directory detection (files that would be shown by git diff --name-only)
+            if self.is_file_in_dirty_directory(&file_path) {
+                let diff = self.get_dirty_directory_diff(&file_path);
+                debug!("Processing dirty directory file: {}", path);
+                new_dirty_directory_files.push(diff);
+            }
         }
 
-        debug!(
-            "Update complete: {} changed files found",
-            new_changed_files.len()
-        );
+        // Determine view mode based on priority
+        if !new_changed_files.is_empty() {
+            self.current_view_mode = ViewMode::WorkingTree;
+        } else if !new_dirty_directory_files.is_empty() {
+            self.current_view_mode = ViewMode::DirtyDirectory;
+        } else if !new_staged_files.is_empty() {
+            self.current_view_mode = ViewMode::Staged;
+        } else {
+            self.current_view_mode = ViewMode::LastCommit;
+        }
+
         self.changed_files = new_changed_files;
+        self.staged_files = new_staged_files;
+        self.dirty_directory_files = new_dirty_directory_files;
+
+        debug!(
+            "Update complete: working_tree={}, staged={}, dirty_directory={}, view_mode={:?}",
+            self.changed_files.len(),
+            self.staged_files.len(),
+            self.dirty_directory_files.len(),
+            self.current_view_mode
+        );
+
         Ok(())
     }
 
@@ -142,8 +201,170 @@ impl GitRepo {
         }
     }
 
-    pub fn get_changed_files_clone(&self) -> Vec<FileDiff> {
-        self.changed_files.clone()
+    fn get_staged_file_diff(&self, path: &Path, status: Status) -> FileDiff {
+        debug!(
+            "Computing staged diff for file: {:?} (status: {:?})",
+            path, status
+        );
+
+        let mut line_strings = Vec::new();
+        let mut additions = 0;
+        let mut deletions = 0;
+
+        // Use git diff --cached to get staged changes
+        if let Ok(output) = std::process::Command::new("git")
+            .args([
+                "diff",
+                "--cached",
+                "--no-color",
+                path.to_str().unwrap_or(""),
+            ])
+            .output()
+        {
+            let diff_text = String::from_utf8_lossy(&output.stdout);
+            for line in diff_text.lines() {
+                if line.starts_with('+') && !line.starts_with("++") {
+                    additions += 1;
+                } else if line.starts_with('-') && !line.starts_with("--") {
+                    deletions += 1;
+                }
+                line_strings.push(line.to_string());
+            }
+            debug!("Staged file: +{} -{}", additions, deletions);
+        }
+
+        FileDiff {
+            path: path.to_path_buf(),
+            status,
+            line_strings,
+            additions,
+            deletions,
+        }
+    }
+
+    fn get_dirty_directory_diff(&self, path: &Path) -> FileDiff {
+        debug!("Computing dirty directory diff for file: {:?}", path);
+
+        let mut line_strings = Vec::new();
+        let mut additions = 0;
+        let mut deletions = 0;
+
+        // Use git diff to show what would be committed
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["diff", "--no-color", path.to_str().unwrap_or("")])
+            .output()
+        {
+            let diff_text = String::from_utf8_lossy(&output.stdout);
+            for line in diff_text.lines() {
+                if line.starts_with('+') && !line.starts_with("++") {
+                    additions += 1;
+                } else if line.starts_with('-') && !line.starts_with("--") {
+                    deletions += 1;
+                }
+                line_strings.push(line.to_string());
+            }
+            debug!("Dirty directory file: +{} -{}", additions, deletions);
+        }
+
+        FileDiff {
+            path: path.to_path_buf(),
+            status: Status::from_bits_truncate(2), // WT_MODIFIED
+            line_strings,
+            additions,
+            deletions,
+        }
+    }
+
+    fn is_file_in_dirty_directory(&self, path: &Path) -> bool {
+        // Check if the file has unstaged changes that would be committed
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["diff", "--name-only", path.to_str().unwrap_or("")])
+            .output()
+        {
+            !output.stdout.is_empty()
+        } else {
+            false
+        }
+    }
+
+    pub fn get_current_view_mode(&self) -> ViewMode {
+        self.current_view_mode
+    }
+
+    pub fn get_display_files(&self) -> Vec<FileDiff> {
+        match self.current_view_mode {
+            ViewMode::WorkingTree => self.changed_files.clone(),
+            ViewMode::Staged => self.staged_files.clone(),
+            ViewMode::DirtyDirectory => self.dirty_directory_files.clone(),
+            ViewMode::LastCommit => self.get_last_commit_files(),
+        }
+    }
+
+    fn get_last_commit_files(&self) -> Vec<FileDiff> {
+        let mut files = Vec::new();
+
+        if let Some(commit_id) = &self.last_commit_id {
+            if let Ok(commit) = self
+                .repo
+                .find_commit(git2::Oid::from_str(commit_id).unwrap_or(git2::Oid::zero()))
+            {
+                if let Ok(tree) = commit.tree() {
+                    if let Ok(parent_tree) = commit.parent(0).and_then(|parent| parent.tree()) {
+                        // Get the diff between the commit and its parent
+                        if let Ok(diff) =
+                            self.repo
+                                .diff_tree_to_tree(Some(&parent_tree), Some(&tree), None)
+                        {
+                            for delta in diff.deltas() {
+                                if let Some(old_file) = delta.old_file().path() {
+                                    if let Some(new_file) = delta.new_file().path() {
+                                        let file_path = self.path.join(new_file);
+                                        let diff_content =
+                                            self.get_commit_diff_content(old_file, new_file);
+
+                                        files.push(FileDiff {
+                                            path: file_path,
+                                            status: Status::from_bits_truncate(4), // INDEX_MODIFIED
+                                            line_strings: diff_content,
+                                            additions: 0, // Would need to parse diff to get accurate counts
+                                            deletions: 0,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        files
+    }
+
+    fn get_commit_diff_content(&self, _old_path: &Path, new_path: &Path) -> Vec<String> {
+        let mut content = Vec::new();
+
+        // Use git show to get the diff content for the commit
+        if let Some(commit_id) = &self.last_commit_id {
+            if let Ok(output) = std::process::Command::new("git")
+                .args([
+                    "show",
+                    "--format=",
+                    "--no-color",
+                    commit_id,
+                    "--",
+                    new_path.to_str().unwrap_or(""),
+                ])
+                .output()
+            {
+                let diff_text = String::from_utf8_lossy(&output.stdout);
+                for line in diff_text.lines() {
+                    content.push(line.to_string());
+                }
+            }
+        }
+
+        content
     }
 
     pub fn get_repo_name(&self) -> String {
@@ -179,9 +400,10 @@ impl GitRepo {
     }
 
     pub fn get_total_stats(&self) -> (usize, usize, usize) {
-        let total_files = self.changed_files.len();
-        let total_additions: usize = self.changed_files.iter().map(|f| f.additions).sum();
-        let total_deletions: usize = self.changed_files.iter().map(|f| f.deletions).sum();
+        let display_files = self.get_display_files();
+        let total_files = display_files.len();
+        let total_additions: usize = display_files.iter().map(|f| f.additions).sum();
+        let total_deletions: usize = display_files.iter().map(|f| f.deletions).sum();
         (total_files, total_additions, total_deletions)
     }
 
@@ -194,7 +416,7 @@ impl GitRepo {
             file_diff: None,
         };
 
-        for file_diff in &self.changed_files {
+        for file_diff in &self.get_display_files() {
             self.add_file_to_tree(&mut root, file_diff);
         }
 
