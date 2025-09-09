@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.6
+
 # Build stage
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest AS builder
 
@@ -7,7 +9,8 @@ RUN microdnf update -y && \
         gcc \
         git \
         pkg-config \
-        openssl-devel && \
+        openssl-devel \
+        curl && \
     microdnf clean all
 
 # Install Rust
@@ -17,12 +20,25 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Create app directory
 WORKDIR /app
 
-# Copy dependency files and source code
+# 1) Pre-cache dependencies using an empty main so Docker layer cache can be reused
 COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src \
+ && echo 'fn main() { println!("placeholder build to cache dependencies"); }' > src/main.rs
+
+# Use BuildKit cache mounts for registry, git, and target to persist between CI runs
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release
+
+# 2) Now copy the real source and do the actual build; this should reuse cached deps
+RUN rm -rf src
 COPY src ./src
 
-# Build the application
-RUN cargo build --release && \
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release && \
     cp /app/target/release/grw /grw
 
 # Runtime stage - minimal UBI9 image

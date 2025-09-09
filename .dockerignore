@@ -1,33 +1,16 @@
-# Rust
-target/
+# Ignore build artifacts and VCS
+/target
+/.git
+/.github
 **/*.rs.bk
-*.pdb
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+# Node/yarn if present
+node_modules
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Git
-.git/
-.gitignore
-
-# GitHub
-.github/
-
-# Docker
+# Docker ignores
 Dockerfile
 .dockerignore
+.gitignore
 
-# Documentation
-*.md
-README*
-
-# Logs
-*.log
+# OS junk
+.DS_Store
