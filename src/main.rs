@@ -23,7 +23,7 @@ mod ui;
 use config::{Args, Config};
 use git::GitRepo;
 use log::debug;
-use monitor::MonitorCommand;
+use monitor::AsyncMonitorCommand;
 use ui::App;
 
 pub const GIT_SHA: &str = "unknown";
@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
     let mut app = App::new_with_config(!final_config.no_diff);
 
     let mut monitor_command = if let Some(cmd) = &final_config.monitor_command {
-        Some(MonitorCommand::new(
+        Some(AsyncMonitorCommand::new(
             cmd.clone(),
             final_config.monitor_interval.unwrap_or(5),
         ))
@@ -62,6 +62,7 @@ async fn main() -> Result<()> {
     // Enable monitor pane when a command is configured
     if monitor_command.is_some() {
         app.toggle_monitor_pane();
+        app.set_monitor_command_configured(true);
     }
 
     let backend = CrosstermBackend::new(io::stdout());
@@ -93,13 +94,23 @@ async fn main() -> Result<()> {
         }
 
         // Update monitor command if it exists
-        if let Some(ref mut monitor) = monitor_command
-            && monitor.should_run()
-        {
-            if let Err(e) = monitor.run() {
-                log::error!("Monitor command failed: {:?}", e);
+        if let Some(ref mut monitor) = monitor_command {
+            if let Some(result) = monitor.try_get_result() {
+                match result {
+                    monitor::MonitorResult::Success(output) => {
+                        app.update_monitor_output(output);
+                    }
+                    monitor::MonitorResult::Error(output) => {
+                        log::error!("Monitor command failed");
+                        app.update_monitor_output(output);
+                    }
+                }
             }
-            app.update_monitor_output(monitor.get_output().to_string());
+
+            // Update timing information
+            let elapsed = monitor.get_elapsed_since_last_run();
+            let has_run = monitor.has_run_yet();
+            app.update_monitor_timing(elapsed, has_run);
         }
 
         // Calculate monitor visible height before rendering

@@ -1,65 +1,143 @@
 use log::debug;
-use std::process::Command;
 use std::time::{Duration, Instant};
+use tokio::process::Command as AsyncCommand;
+use tokio::sync::mpsc;
 
-#[derive(Debug, Clone)]
-pub struct MonitorCommand {
-    command: String,
-    interval: u64,
-    last_run: Option<Instant>,
-    last_output: String,
+#[derive(Debug)]
+pub struct AsyncMonitorCommand {
+    result_rx: mpsc::Receiver<MonitorResult>,
+    last_run: std::sync::Arc<std::sync::RwLock<Option<std::time::Instant>>>,
 }
 
-impl MonitorCommand {
+#[derive(Debug, Clone)]
+pub enum MonitorResult {
+    Success(String),
+    Error(String),
+}
+
+impl AsyncMonitorCommand {
     pub fn new(command: String, interval: u64) -> Self {
+        let (result_tx, result_rx) = mpsc::channel(32);
+        let last_run = std::sync::Arc::new(std::sync::RwLock::new(None));
+
+        let command_clone = command.clone();
+        let last_run_clone = last_run.clone();
+        tokio::spawn(async move {
+            let mut last_run: Option<Instant> = None;
+
+            loop {
+                let should_run = if let Some(last_run_time) = last_run {
+                    last_run_time.elapsed() >= Duration::from_secs(interval)
+                } else {
+                    true
+                };
+
+                if should_run {
+                    debug!("Running async monitor command: {}", command_clone);
+
+                    let result = if cfg!(target_os = "windows") {
+                        AsyncCommand::new("cmd")
+                            .args(["/C", &command_clone])
+                            .output()
+                            .await
+                    } else {
+                        AsyncCommand::new("sh")
+                            .args(["-c", &command_clone])
+                            .output()
+                            .await
+                    };
+
+                    match result {
+                        Ok(output) => {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+
+                            if output.status.success() {
+                                let output_str = if stderr.is_empty() {
+                                    format!("$ {}\n{}", command_clone, stdout)
+                                } else {
+                                    format!("$ {}\n{}\n{}", command_clone, stdout, stderr)
+                                };
+
+                                if result_tx
+                                    .send(MonitorResult::Success(output_str))
+                                    .await
+                                    .is_err()
+                                {
+                                    break; // Channel closed, stop the task
+                                }
+                                debug!("Async monitor command completed successfully");
+                            } else {
+                                let error_str = format!(
+                                    "$ {}\nCommand failed: {}\n{}",
+                                    command_clone, stderr, stdout
+                                );
+
+                                if result_tx
+                                    .send(MonitorResult::Error(error_str))
+                                    .await
+                                    .is_err()
+                                {
+                                    break; // Channel closed, stop the task
+                                }
+                                debug!("Async monitor command failed: {}", stderr);
+                            }
+                        }
+                        Err(e) => {
+                            let error_str =
+                                format!("$ {}\nCommand execution failed: {}", command_clone, e);
+
+                            if result_tx
+                                .send(MonitorResult::Error(error_str))
+                                .await
+                                .is_err()
+                            {
+                                break; // Channel closed, stop the task
+                            }
+                            debug!("Async monitor command execution error: {}", e);
+                        }
+                    }
+
+                    let now = Instant::now();
+                    last_run = Some(now);
+                    if let Ok(mut shared_last_run) = last_run_clone.write() {
+                        *shared_last_run = Some(now);
+                    }
+                }
+
+                // Sleep for a short duration before checking again
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        });
+
         Self {
-            command,
-            interval,
-            last_run: None,
-            last_output: String::new(),
+            result_rx,
+            last_run,
         }
     }
 
-    pub fn should_run(&self) -> bool {
-        if let Some(last_run) = self.last_run {
-            last_run.elapsed() >= Duration::from_secs(self.interval)
-        } else {
-            true
+    pub fn try_get_result(&mut self) -> Option<MonitorResult> {
+        match self.result_rx.try_recv() {
+            Ok(result) => Some(result),
+            Err(mpsc::error::TryRecvError::Empty) => None,
+            Err(_) => None,
         }
     }
 
-    pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        debug!("Running monitor command: {}", self.command);
-
-        let output = if cfg!(target_os = "windows") {
-            Command::new("cmd").args(["/C", &self.command]).output()?
+    pub fn get_elapsed_since_last_run(&self) -> Option<Duration> {
+        if let Ok(last_run) = self.last_run.read() {
+            last_run.map(|instant| instant.elapsed())
         } else {
-            Command::new("sh").args(["-c", &self.command]).output()?
-        };
-
-        self.last_run = Some(Instant::now());
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        if output.status.success() {
-            self.last_output = if stderr.is_empty() {
-                format!("$ {}\n{}", self.command, stdout)
-            } else {
-                format!("$ {}\n{}\n{}", self.command, stdout, stderr)
-            };
-            debug!("Monitor command completed successfully");
-        } else {
-            self.last_output =
-                format!("$ {}\nCommand failed: {}\n{}", self.command, stderr, stdout);
-            debug!("Monitor command failed: {}", stderr);
+            None
         }
-
-        Ok(())
     }
 
-    pub fn get_output(&self) -> &str {
-        &self.last_output
+    pub fn has_run_yet(&self) -> bool {
+        if let Ok(last_run) = self.last_run.read() {
+            last_run.is_some()
+        } else {
+            false
+        }
     }
 }
 
@@ -68,35 +146,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_monitor_command_creation() {
-        let monitor = MonitorCommand::new("echo test".to_string(), 5);
-        assert_eq!(monitor.command, "echo test");
-        assert_eq!(monitor.interval, 5);
-        assert!(monitor.should_run());
-        assert_eq!(monitor.get_output(), "");
-    }
+    fn test_monitor_result_types() {
+        let success = MonitorResult::Success("test output".to_string());
+        let error = MonitorResult::Error("error output".to_string());
 
-    #[test]
-    fn test_monitor_command_should_run() {
-        let mut monitor = MonitorCommand::new("echo test".to_string(), 1);
+        match success {
+            MonitorResult::Success(output) => assert_eq!(output, "test output"),
+            MonitorResult::Error(_) => panic!("Expected success"),
+        }
 
-        // Initially should run
-        assert!(monitor.should_run());
-
-        // After setting last_run, should not run immediately
-        monitor.last_run = Some(Instant::now());
-        assert!(!monitor.should_run());
-    }
-
-    #[test]
-    fn test_monitor_command_update_output() {
-        let mut monitor = MonitorCommand::new("echo test".to_string(), 1);
-
-        // Initially empty output
-        assert_eq!(monitor.get_output(), "");
-
-        // Update output
-        monitor.last_output = "test output".to_string();
-        assert_eq!(monitor.get_output(), "test output");
+        match error {
+            MonitorResult::Success(_) => panic!("Expected error"),
+            MonitorResult::Error(output) => assert_eq!(output, "error output"),
+        }
     }
 }

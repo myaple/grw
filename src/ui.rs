@@ -44,6 +44,9 @@ pub struct App {
     monitor_scroll_offset: usize,
     show_monitor_pane: bool,
     monitor_visible_height: usize,
+    monitor_command_configured: bool,
+    monitor_elapsed_time: Option<std::time::Duration>,
+    monitor_has_run: bool,
     current_file_browser_pane: FileBrowserPane,
     current_information_pane: InformationPane,
 }
@@ -66,6 +69,9 @@ impl App {
             monitor_scroll_offset: 0,
             show_monitor_pane: false,
             monitor_visible_height: 10, // Default value
+            monitor_command_configured: false,
+            monitor_elapsed_time: None,
+            monitor_has_run: false,
             current_file_browser_pane: FileBrowserPane::FileTree,
             current_information_pane: InformationPane::Diff,
         }
@@ -399,6 +405,30 @@ impl App {
     pub fn set_monitor_visible_height(&mut self, height: usize) {
         self.monitor_visible_height = height;
     }
+
+    pub fn set_monitor_command_configured(&mut self, configured: bool) {
+        self.monitor_command_configured = configured;
+    }
+
+    pub fn update_monitor_timing(&mut self, elapsed: Option<std::time::Duration>, has_run: bool) {
+        self.monitor_elapsed_time = elapsed;
+        self.monitor_has_run = has_run;
+    }
+
+    fn format_elapsed_time(&self, elapsed: std::time::Duration) -> String {
+        let secs = elapsed.as_secs();
+        if secs < 60 {
+            format!("{}s", secs)
+        } else if secs < 3600 {
+            let mins = secs / 60;
+            let remaining_secs = secs % 60;
+            format!("{}m{}s", mins, remaining_secs)
+        } else {
+            let hours = secs / 3600;
+            let remaining_mins = (secs % 3600) / 60;
+            format!("{}h{}m", hours, remaining_mins)
+        }
+    }
 }
 
 #[allow(clippy::extra_unused_type_parameters)]
@@ -475,7 +505,20 @@ fn render_file_browser_pane(f: &mut Frame, app: &App, area: Rect) {
             }
         }
         FileBrowserPane::Monitor => {
-            render_monitor_pane(f, app, area);
+            // When in monitor pane mode, show file tree in top 50% and monitor in bottom 50%
+            let tree_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(50), // File tree (top half)
+                    Constraint::Percentage(50), // Monitor pane (bottom half)
+                ])
+                .split(area);
+
+            // Render file tree in top half
+            render_file_tree_content(f, app, tree_chunks[0]);
+
+            // Render monitor pane in bottom half
+            render_monitor_pane(f, app, tree_chunks[1]);
         }
     }
 }
@@ -856,10 +899,15 @@ fn render_monitor_pane(f: &mut Frame, app: &App, area: Rect) {
         .map(|line| Line::from(line.to_string()))
         .collect();
 
-    let title = if app.monitor_output.is_empty() {
-        "Monitor (no command configured)"
+    let title = if !app.monitor_command_configured {
+        "Monitor (no command configured)".to_string()
+    } else if !app.monitor_has_run {
+        "Monitor ⏳ loading...".to_string()
+    } else if let Some(elapsed) = app.monitor_elapsed_time {
+        let time_str = app.format_elapsed_time(elapsed);
+        format!("Monitor ⏱️ {} ago", time_str)
     } else {
-        "Monitor Output"
+        "Monitor Output".to_string()
     };
 
     let text = Text::from(display_lines);
@@ -885,6 +933,9 @@ mod tests {
         assert!(app.show_diff_panel);
         assert_eq!(app.current_file_browser_pane, FileBrowserPane::FileTree);
         assert_eq!(app.current_information_pane, InformationPane::Diff);
+        assert!(!app.monitor_command_configured);
+        assert!(app.monitor_elapsed_time.is_none());
+        assert!(!app.monitor_has_run);
     }
 
     #[test]
@@ -1023,6 +1074,55 @@ mod tests {
         app.toggle_monitor_pane();
         assert!(!app.is_showing_monitor_pane());
         assert_eq!(app.current_file_browser_pane, FileBrowserPane::FileTree);
+    }
+
+    #[test]
+    fn test_monitor_command_configured() {
+        let mut app = App::new_with_config(true);
+
+        // Initially no command configured
+        assert!(!app.monitor_command_configured);
+
+        // Set command as configured
+        app.set_monitor_command_configured(true);
+        assert!(app.monitor_command_configured);
+
+        // Set command as not configured
+        app.set_monitor_command_configured(false);
+        assert!(!app.monitor_command_configured);
+    }
+
+    #[test]
+    fn test_monitor_timing_update() {
+        let mut app = App::new_with_config(true);
+
+        // Initially no timing info
+        assert!(app.monitor_elapsed_time.is_none());
+        assert!(!app.monitor_has_run);
+
+        // Update timing info
+        let duration = std::time::Duration::from_secs(65);
+        app.update_monitor_timing(Some(duration), true);
+
+        assert_eq!(app.monitor_elapsed_time, Some(duration));
+        assert!(app.monitor_has_run);
+    }
+
+    #[test]
+    fn test_format_elapsed_time() {
+        let app = App::new_with_config(true);
+
+        // Test seconds
+        let secs = std::time::Duration::from_secs(45);
+        assert_eq!(app.format_elapsed_time(secs), "45s");
+
+        // Test minutes and seconds
+        let mins_secs = std::time::Duration::from_secs(125);
+        assert_eq!(app.format_elapsed_time(mins_secs), "2m5s");
+
+        // Test hours and minutes
+        let hours_mins = std::time::Duration::from_secs(3665);
+        assert_eq!(app.format_elapsed_time(hours_mins), "1h1m");
     }
 
     #[test]
