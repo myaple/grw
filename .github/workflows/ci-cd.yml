@@ -25,26 +25,8 @@ jobs:
       with:
         components: rustfmt, clippy
         
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry/index
-          ~/.cargo/registry/cache
-          ~/.cargo/git/db
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.toml') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-registry-
-          
-    - name: Cache cargo build
-      uses: actions/cache@v4
-      with:
-        path: target
-        key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('src/**/*.rs') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}-
-          ${{ runner.os }}-cargo-build-
-        
+            
+            
     - name: Check formatting
       run: cargo fmt --all -- --check
       
@@ -100,11 +82,4 @@ jobs:
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: |
-          type=gha
-          type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:deps-cache
-          type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-        cache-to: |
-          type=gha,mode=max
-          type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:deps-cache,mode=max
-          type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+        

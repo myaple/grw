@@ -17,25 +17,12 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Create app directory
 WORKDIR /app
 
-# Copy only dependency files first for better layer caching
+# Copy dependency files and source code
 COPY Cargo.toml Cargo.lock ./
-
-# Create a dummy main.rs to satisfy cargo build for dependencies
-RUN mkdir -p src && echo "fn main() {}" > src/main.rs
-
-# Build dependencies only - this layer will be cached unless Cargo files change
-RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry \
-    --mount=type=cache,target=/app/target,id=target-cache \
-    cargo build --release && \
-    rm -rf src
-
-# Copy actual source code
 COPY src ./src
 
-# Build final application - only rebuilds when source changes
-RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry \
-    --mount=type=cache,target=/app/target,id=target-cache \
-    cargo build --release && \
+# Build the application
+RUN cargo build --release && \
     cp /app/target/release/grw /grw
 
 # Runtime stage - minimal UBI9 image
