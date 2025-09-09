@@ -9,8 +9,7 @@ RUN microdnf update -y && \
         gcc \
         git \
         pkg-config \
-        openssl-devel \
-        curl && \
+        openssl-devel && \
     microdnf clean all
 
 # Install Rust
