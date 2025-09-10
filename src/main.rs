@@ -48,7 +48,13 @@ async fn main() -> Result<()> {
     log::debug!("Debug mode enabled");
     let mut git_repo = GitRepo::new(repo_path)?;
 
-    let mut app = App::new_with_config(!final_config.no_diff);
+    let mut app = App::new_with_config(
+        !final_config.no_diff,
+        match final_config.theme {
+            config::Theme::Dark => ui::Theme::Dark,
+            config::Theme::Light => ui::Theme::Light,
+        },
+    );
 
     let mut monitor_command = if let Some(cmd) = &final_config.monitor_command {
         Some(AsyncMonitorCommand::new(
@@ -67,7 +73,7 @@ async fn main() -> Result<()> {
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
-    terminal.clear();
+    let _ = terminal.clear();
 
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
@@ -263,6 +269,11 @@ fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
                 // g was pressed, wait for next key
                 false
             }
+        }
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            debug!("User pressed Ctrl+T - toggling theme");
+            app.toggle_theme();
+            false
         }
         KeyCode::Char('t') => {
             // Check if g was pressed recently

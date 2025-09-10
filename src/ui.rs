@@ -9,6 +9,103 @@ use ratatui::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Theme {
+    Dark,
+    Light,
+}
+
+impl Theme {
+    pub fn toggle(&mut self) {
+        *self = match *self {
+            Theme::Dark => Theme::Light,
+            Theme::Light => Theme::Dark,
+        };
+    }
+
+    pub fn background_color(self) -> Color {
+        match self {
+            Theme::Dark => Color::Black,
+            Theme::Light => Color::White,
+        }
+    }
+
+    pub fn foreground_color(self) -> Color {
+        match self {
+            Theme::Dark => Color::White,
+            Theme::Light => Color::Black,
+        }
+    }
+
+    pub fn primary_color(self) -> Color {
+        match self {
+            Theme::Dark => Color::Cyan,
+            Theme::Light => Color::Blue,
+        }
+    }
+
+    pub fn secondary_color(self) -> Color {
+        match self {
+            Theme::Dark => Color::Yellow,
+            Theme::Light => Color::Yellow,
+        }
+    }
+
+    pub fn success_color(self) -> Color {
+        match self {
+            Theme::Dark => Color::Green,
+            Theme::Light => Color::DarkGray,
+        }
+    }
+
+    pub fn error_color(self) -> Color {
+        match self {
+            Theme::Dark => Color::Red,
+            Theme::Light => Color::LightRed,
+        }
+    }
+
+    pub fn highlight_color(self) -> Color {
+        match self {
+            Theme::Dark => Color::Blue,
+            Theme::Light => Color::LightBlue,
+        }
+    }
+
+    pub fn border_color(self) -> Color {
+        match self {
+            Theme::Dark => Color::Gray,
+            Theme::Light => Color::DarkGray,
+        }
+    }
+
+    pub fn muted_color(self) -> Color {
+        match self {
+            Theme::Dark => Color::DarkGray,
+            Theme::Light => Color::Gray,
+        }
+    }
+
+    pub fn directory_color(self) -> Color {
+        match self {
+            Theme::Dark => Color::Cyan,
+            Theme::Light => Color::Blue,
+        }
+    }
+
+    pub fn added_color(self) -> Color {
+        self.success_color()
+    }
+
+    pub fn removed_color(self) -> Color {
+        self.error_color()
+    }
+
+    pub fn unchanged_color(self) -> Color {
+        self.muted_color()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FileBrowserPane {
     FileTree,
     Monitor,
@@ -49,10 +146,11 @@ pub struct App {
     monitor_has_run: bool,
     current_file_browser_pane: FileBrowserPane,
     current_information_pane: InformationPane,
+    theme: Theme,
 }
 
 impl App {
-    pub fn new_with_config(show_diff_panel: bool) -> Self {
+    pub fn new_with_config(show_diff_panel: bool, theme: Theme) -> Self {
         Self {
             files: Vec::new(),
             current_file_index: 0,
@@ -74,6 +172,7 @@ impl App {
             monitor_has_run: false,
             current_file_browser_pane: FileBrowserPane::FileTree,
             current_information_pane: InformationPane::Diff,
+            theme,
         }
     }
 
@@ -429,6 +528,14 @@ impl App {
             format!("{}h{}m", hours, remaining_mins)
         }
     }
+
+    pub fn get_theme(&self) -> Theme {
+        self.theme
+    }
+
+    pub fn toggle_theme(&mut self) {
+        self.theme.toggle();
+    }
 }
 
 #[allow(clippy::extra_unused_type_parameters)]
@@ -449,7 +556,7 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
         .constraints(header_constraints)
         .split(size);
 
-    render_status_bar(f, git_repo, chunks[0]);
+    render_status_bar(f, app, git_repo, chunks[0]);
 
     // Handle the information pane (right side)
     if app.is_showing_diff_panel() {
@@ -468,7 +575,7 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
         // When diff panel is hidden, file browser takes full width
         // But if help is showing, it takes over the full content area
         if app.is_showing_help() {
-            render_help_view(f, chunks[1]);
+            render_help_view(f, app, chunks[1]);
         } else {
             render_file_browser_pane(f, app, chunks[1]);
         }
@@ -478,7 +585,7 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
 fn render_file_browser_pane(f: &mut Frame, app: &App, area: Rect) {
     // If help is showing and diff panel is hidden, help takes over the full area
     if app.is_showing_help() && !app.is_showing_diff_panel() {
-        render_help_view(f, area);
+        render_help_view(f, app, area);
         return;
     }
 
@@ -544,8 +651,8 @@ impl InformationPaneRenderer for SideBySideDiffRenderer {
 }
 
 impl InformationPaneRenderer for HelpRenderer {
-    fn render(&self, f: &mut Frame, _app: &App, area: Rect, _max_lines: usize) {
-        render_help_view(f, area);
+    fn render(&self, f: &mut Frame, app: &App, area: Rect, _max_lines: usize) {
+        render_help_view(f, app, area);
     }
 }
 
@@ -560,6 +667,7 @@ fn render_information_pane(f: &mut Frame, app: &App, area: Rect, max_lines: usiz
 }
 
 fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect) {
+    let theme = app.get_theme();
     let tree_items: Vec<ListItem> = app
         .tree_nodes
         .iter()
@@ -576,7 +684,7 @@ fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect) {
                     spans.push(Span::styled(
                         "-> ",
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(theme.secondary_color())
                             .add_modifier(Modifier::BOLD),
                     ));
                 } else {
@@ -605,14 +713,16 @@ fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect) {
                         spans.push(Span::styled(
                             format!(" (+{})", diff.additions),
                             Style::default()
-                                .fg(Color::Green)
+                                .fg(theme.added_color())
                                 .add_modifier(Modifier::BOLD),
                         ));
                     }
                     if diff.deletions > 0 {
                         spans.push(Span::styled(
                             format!(" (-{})", diff.deletions),
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(theme.removed_color())
+                                .add_modifier(Modifier::BOLD),
                         ));
                     }
                 }
@@ -626,23 +736,23 @@ fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect) {
                     if file_idx < app.file_change_timestamps.len()
                         && app.is_file_recently_changed(file_idx)
                     {
-                        // Recently changed - blue highlight
+                        // Recently changed - highlight
                         Style::default()
-                            .fg(Color::White)
-                            .bg(Color::Blue)
+                            .fg(theme.foreground_color())
+                            .bg(theme.highlight_color())
                             .add_modifier(Modifier::BOLD)
                     } else {
                         // Not recently changed - normal
-                        Style::default().fg(Color::White)
+                        Style::default().fg(theme.foreground_color())
                     }
                 } else {
                     // File not found in files list - normal
-                    Style::default().fg(Color::White)
+                    Style::default().fg(theme.foreground_color())
                 }
             } else {
-                // Directory - cyan bold
+                // Directory
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.directory_color())
                     .add_modifier(Modifier::BOLD)
             };
 
@@ -657,18 +767,19 @@ fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title("Changed Files")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Gray)),
+                .border_style(Style::default().fg(theme.border_color())),
         )
         .highlight_style(
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.secondary_color())
                 .add_modifier(Modifier::BOLD),
         );
 
     f.render_widget(file_list, area);
 }
 
-fn render_status_bar(f: &mut Frame, git_repo: &GitRepo, area: Rect) {
+fn render_status_bar(f: &mut Frame, app: &App, git_repo: &GitRepo, area: Rect) {
+    let theme = app.get_theme();
     let repo_name = git_repo.get_repo_name();
     let branch = git_repo.get_current_branch();
     let (commit_sha, commit_summary) = git_repo.get_last_commit_info();
@@ -689,7 +800,12 @@ fn render_status_bar(f: &mut Frame, git_repo: &GitRepo, area: Rect) {
     );
 
     let paragraph = Paragraph::new(status_text)
-        .style(Style::default().add_modifier(Modifier::REVERSED))
+        .style(
+            Style::default()
+                .fg(theme.foreground_color())
+                .bg(theme.background_color())
+                .add_modifier(Modifier::REVERSED),
+        )
         .block(Block::default().borders(Borders::NONE))
         .wrap(Wrap { trim: false });
 
@@ -697,6 +813,7 @@ fn render_status_bar(f: &mut Frame, git_repo: &GitRepo, area: Rect) {
 }
 
 fn render_side_by_side_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
+    let theme = app.get_theme();
     if let Some(file) = app.get_current_file() {
         let file_path = file.path.to_string_lossy();
         let _title = format!("Side-by-side Diff: {file_path}");
@@ -735,19 +852,19 @@ fn render_side_by_side_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines
             };
 
             let left_style = if line.starts_with('-') {
-                Style::default().fg(Color::Red)
+                Style::default().fg(theme.removed_color())
             } else if line.starts_with(' ') || line.starts_with('+') {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(theme.unchanged_color())
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.foreground_color())
             };
 
             let right_style = if line.starts_with('+') {
-                Style::default().fg(Color::Green)
+                Style::default().fg(theme.added_color())
             } else if line.starts_with(' ') || line.starts_with('-') {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(theme.unchanged_color())
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.foreground_color())
             };
 
             left_lines.push(Line::from(Span::styled(left_content, left_style)));
@@ -760,11 +877,21 @@ fn render_side_by_side_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines
         let right_text = Text::from(right_lines);
 
         let left_paragraph = Paragraph::new(left_text)
-            .block(Block::default().title("Original").borders(Borders::ALL))
+            .block(
+                Block::default()
+                    .title("Original")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color())),
+            )
             .wrap(Wrap { trim: false });
 
         let right_paragraph = Paragraph::new(right_text)
-            .block(Block::default().title("Modified").borders(Borders::ALL))
+            .block(
+                Block::default()
+                    .title("Modified")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color())),
+            )
             .wrap(Wrap { trim: false });
 
         f.render_widget(left_paragraph, chunks[0]);
@@ -773,13 +900,15 @@ fn render_side_by_side_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines
         let paragraph = Paragraph::new("No changes detected").block(
             Block::default()
                 .title("Side-by-side Diff")
-                .borders(Borders::ALL),
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_color())),
         );
         f.render_widget(paragraph, area);
     }
 }
 
 fn render_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
+    let theme = app.get_theme();
     if let Some(file) = app.get_current_file() {
         let file_path = file.path.to_string_lossy();
         let title = format!("Diff: {file_path}");
@@ -796,13 +925,13 @@ fn render_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
             }
 
             let (style, line_text) = if line.starts_with('+') {
-                (Style::default().fg(Color::Green), line)
+                (Style::default().fg(theme.added_color()), line)
             } else if line.starts_with('-') {
-                (Style::default().fg(Color::Red), line)
+                (Style::default().fg(theme.removed_color()), line)
             } else if line.starts_with(' ') {
-                (Style::default().fg(Color::Gray), line)
+                (Style::default().fg(theme.unchanged_color()), line)
             } else {
-                (Style::default().fg(Color::White), line)
+                (Style::default().fg(theme.foreground_color()), line)
             };
 
             let span = Span::styled(line_text.clone(), style);
@@ -811,30 +940,40 @@ fn render_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
 
         let text = Text::from(lines);
         let paragraph = Paragraph::new(text)
-            .block(Block::default().title(title).borders(Borders::ALL))
+            .block(
+                Block::default()
+                    .title(title)
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color())),
+            )
             .wrap(Wrap { trim: false });
 
         f.render_widget(paragraph, area);
     } else {
-        let paragraph = Paragraph::new("No changes detected")
-            .block(Block::default().title("Diff").borders(Borders::ALL));
+        let paragraph = Paragraph::new("No changes detected").block(
+            Block::default()
+                .title("Diff")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_color())),
+        );
         f.render_widget(paragraph, area);
     }
 }
 
-fn render_help_view(f: &mut Frame, area: Rect) {
+fn render_help_view(f: &mut Frame, app: &App, area: Rect) {
+    let theme = app.get_theme();
     let help_text = vec![
         Line::from(Span::styled(
             "Git Repository Watcher - Help",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.secondary_color())
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
             "Navigation:",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.primary_color())
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from("  Tab           - Next file"),
@@ -845,7 +984,7 @@ fn render_help_view(f: &mut Frame, area: Rect) {
         Line::from(Span::styled(
             "Scrolling:",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.primary_color())
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from("  j / Down      - Scroll down one line"),
@@ -860,7 +999,7 @@ fn render_help_view(f: &mut Frame, area: Rect) {
         Line::from(Span::styled(
             "Other:",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.primary_color())
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from("  ?             - Show/hide this help page"),
@@ -869,22 +1008,39 @@ fn render_help_view(f: &mut Frame, area: Rect) {
         Line::from("  Ctrl+D        - Switch to single-pane diff view"),
         Line::from("  Ctrl+H        - Toggle diff panel visibility"),
         Line::from("  Ctrl+O        - Toggle monitor pane visibility"),
+        Line::from("  Ctrl+T        - Toggle light/dark theme"),
         Line::from("  Alt+j         - Scroll monitor pane down"),
         Line::from("  Alt+k         - Scroll monitor pane up"),
         Line::from("  q / Ctrl+C    - Quit application"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Theme:",
+            Style::default()
+                .fg(theme.primary_color())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  The application supports light and dark themes."),
+        Line::from("  Use Ctrl+T to toggle between themes at runtime."),
+        Line::from("  Theme can also be set via --theme CLI flag or config file."),
         Line::from(""),
         Line::from("Press ? or Esc to return to diff view"),
     ];
 
     let text = Text::from(help_text);
     let paragraph = Paragraph::new(text)
-        .block(Block::default().title("Help").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title("Help")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_color())),
+        )
         .wrap(Wrap { trim: false });
 
     f.render_widget(paragraph, area);
 }
 
 fn render_monitor_pane(f: &mut Frame, app: &App, area: Rect) {
+    let theme = app.get_theme();
     let monitor_lines: Vec<_> = app
         .monitor_output
         .lines()
@@ -896,7 +1052,12 @@ fn render_monitor_pane(f: &mut Frame, app: &App, area: Rect) {
     let display_lines: Vec<Line> = monitor_lines
         .iter()
         .take(visible_lines)
-        .map(|line| Line::from(line.to_string()))
+        .map(|line| {
+            Line::from(Span::styled(
+                line.to_string(),
+                Style::default().fg(theme.foreground_color()),
+            ))
+        })
         .collect();
 
     let title = if !app.monitor_command_configured {
@@ -912,7 +1073,12 @@ fn render_monitor_pane(f: &mut Frame, app: &App, area: Rect) {
 
     let text = Text::from(display_lines);
     let paragraph = Paragraph::new(text)
-        .block(Block::default().title(title).borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_color())),
+        )
         .wrap(Wrap { trim: false });
 
     f.render_widget(paragraph, area);
@@ -924,7 +1090,7 @@ mod tests {
 
     #[test]
     fn test_app_creation() {
-        let app = App::new_with_config(true);
+        let app = App::new_with_config(true, Theme::Dark);
         assert_eq!(app.files.len(), 0);
         assert_eq!(app.current_file_index, 0);
         assert_eq!(app.scroll_offset, 0);
@@ -936,17 +1102,18 @@ mod tests {
         assert!(!app.monitor_command_configured);
         assert!(app.monitor_elapsed_time.is_none());
         assert!(!app.monitor_has_run);
+        assert_eq!(app.get_theme(), Theme::Dark);
     }
 
     #[test]
     fn test_app_creation_no_diff() {
-        let app = App::new_with_config(false);
+        let app = App::new_with_config(false, Theme::Dark);
         assert!(!app.show_diff_panel);
     }
 
     #[test]
     fn test_scroll_up() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
         app.scroll_offset = 5;
         app.scroll_up();
         assert_eq!(app.scroll_offset, 4);
@@ -954,7 +1121,7 @@ mod tests {
 
     #[test]
     fn test_scroll_up_at_zero() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
         app.scroll_offset = 0;
         app.scroll_up();
         assert_eq!(app.scroll_offset, 0);
@@ -962,7 +1129,7 @@ mod tests {
 
     #[test]
     fn test_page_up() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
         app.scroll_offset = 25;
         app.page_up(10);
         assert_eq!(app.scroll_offset, 15);
@@ -970,7 +1137,7 @@ mod tests {
 
     #[test]
     fn test_page_up_underflow() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
         app.scroll_offset = 5;
         app.page_up(10);
         assert_eq!(app.scroll_offset, 0);
@@ -978,7 +1145,7 @@ mod tests {
 
     #[test]
     fn test_scroll_to_top() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
         app.scroll_offset = 100;
         app.scroll_to_top();
         assert_eq!(app.scroll_offset, 0);
@@ -986,7 +1153,7 @@ mod tests {
 
     #[test]
     fn test_toggle_help() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
         assert!(!app.is_showing_help());
         assert_eq!(app.current_information_pane, InformationPane::Diff);
 
@@ -1001,7 +1168,7 @@ mod tests {
 
     #[test]
     fn test_toggle_diff_panel() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
         assert!(app.show_diff_panel);
         app.toggle_diff_panel();
         assert!(!app.show_diff_panel);
@@ -1011,7 +1178,7 @@ mod tests {
 
     #[test]
     fn test_monitor_output_update() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
         assert_eq!(app.monitor_output, "");
         assert_eq!(app.monitor_scroll_offset, 0);
 
@@ -1025,7 +1192,7 @@ mod tests {
 
     #[test]
     fn test_monitor_scroll() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
 
         // Set a reasonable visible height for testing
         app.monitor_visible_height = 3;
@@ -1059,7 +1226,7 @@ mod tests {
 
     #[test]
     fn test_toggle_monitor_pane() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
 
         // Initially monitor pane should be hidden
         assert!(!app.is_showing_monitor_pane());
@@ -1078,7 +1245,7 @@ mod tests {
 
     #[test]
     fn test_monitor_command_configured() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
 
         // Initially no command configured
         assert!(!app.monitor_command_configured);
@@ -1094,7 +1261,7 @@ mod tests {
 
     #[test]
     fn test_monitor_timing_update() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
 
         // Initially no timing info
         assert!(app.monitor_elapsed_time.is_none());
@@ -1110,7 +1277,7 @@ mod tests {
 
     #[test]
     fn test_format_elapsed_time() {
-        let app = App::new_with_config(true);
+        let app = App::new_with_config(true, Theme::Dark);
 
         // Test seconds
         let secs = std::time::Duration::from_secs(45);
@@ -1127,7 +1294,7 @@ mod tests {
 
     #[test]
     fn test_diff_mode_switching() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
 
         // Initially in single-pane diff mode
         assert_eq!(app.current_information_pane, InformationPane::Diff);
@@ -1149,7 +1316,7 @@ mod tests {
 
     #[test]
     fn test_help_preserves_diff_mode() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
 
         // Set to side-by-side mode
         app.set_side_by_side_diff();
@@ -1172,7 +1339,7 @@ mod tests {
 
     #[test]
     fn test_help_movement_when_diff_panel_hidden() {
-        let mut app = App::new_with_config(true);
+        let mut app = App::new_with_config(true, Theme::Dark);
 
         // Initially showing diff panel
         assert!(app.is_showing_diff_panel());
@@ -1191,5 +1358,38 @@ mod tests {
         app.toggle_help();
         assert!(!app.is_showing_help());
         assert_eq!(app.current_information_pane, InformationPane::Diff);
+    }
+
+    #[test]
+    fn test_theme_toggle() {
+        let mut app = App::new_with_config(true, Theme::Dark);
+
+        // Initially dark theme
+        assert_eq!(app.get_theme(), Theme::Dark);
+
+        // Toggle to light theme
+        app.toggle_theme();
+        assert_eq!(app.get_theme(), Theme::Light);
+
+        // Toggle back to dark theme
+        app.toggle_theme();
+        assert_eq!(app.get_theme(), Theme::Dark);
+    }
+
+    #[test]
+    fn test_theme_colors() {
+        // Test dark theme colors
+        let dark_theme = Theme::Dark;
+        assert_eq!(dark_theme.background_color(), Color::Black);
+        assert_eq!(dark_theme.foreground_color(), Color::White);
+        assert_eq!(dark_theme.added_color(), Color::Green);
+        assert_eq!(dark_theme.removed_color(), Color::Red);
+
+        // Test light theme colors
+        let light_theme = Theme::Light;
+        assert_eq!(light_theme.background_color(), Color::White);
+        assert_eq!(light_theme.foreground_color(), Color::Black);
+        assert_eq!(light_theme.added_color(), Color::DarkGray);
+        assert_eq!(light_theme.removed_color(), Color::LightRed);
     }
 }

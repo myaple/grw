@@ -14,6 +14,7 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 - **Help system**: Built-in help page with all keybindings
 - **Logging**: Comprehensive logging with debug mode for troubleshooting
 - **Responsive UI**: Adapts to terminal size with intelligent header wrapping
+- **Light/Dark themes**: Toggle between light and dark themes with automatic adaptation
 
 ## Keybindings
 
@@ -36,6 +37,9 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 ### Panel Controls
 - `Ctrl+H` - Toggle diff panel visibility
 - `Ctrl+O` - Toggle monitor pane visibility
+
+### Theme Controls
+- `Ctrl+T` - Toggle between light and dark themes
 
 ### Help and Interface
 - `?` - Show/hide help
@@ -76,6 +80,7 @@ grw
 - `--no-diff` - Hide diff panel, show only file tree
 - `--monitor-command <COMMAND>` - Command to run in monitor pane
 - `--monitor-interval <SECONDS>` - Interval in seconds for monitor command refresh
+- `--theme <THEME>` - Set initial theme (light, dark, or auto)
 
 ### Examples
 
@@ -97,6 +102,15 @@ grw --monitor-command "git status --short" --monitor-interval 5
 
 # Run a custom script in monitor pane
 grw --monitor-command "./scripts/check-deps.sh" --monitor-interval 10
+
+# Start with light theme
+grw --theme light
+
+# Start with dark theme
+grw --theme dark
+
+# Use auto theme (detects terminal theme preference)
+grw --theme auto
 ```
 
 ### Configuration File
@@ -117,6 +131,7 @@ Configuration options:
 - `no_diff` (boolean): Hide diff panel, show only file tree (default: false)  
 - `monitor_command` (string): Command to run in monitor pane (optional)
 - `monitor_interval` (number): Interval in seconds for monitor command refresh (optional)
+- `theme` (string): Initial theme setting (light, dark, or auto) (optional)
 
 Command line arguments override configuration file settings.
 
@@ -134,6 +149,18 @@ The application will:
 - **Default mode**: Shows both file tree (30%) and diff panel (70%)
 - **No-diff mode**: Shows only file tree (100% width)
 - **Help mode**: Shows help documentation in place of diff panel or full content area
+
+### Theme System
+
+GRW includes a flexible theme system that supports light and dark modes:
+
+- **Dark theme**: Default theme optimized for terminal use with dark backgrounds
+- **Light theme**: Bright theme suitable for light terminal backgrounds or better readability in bright environments
+- **Auto theme**: Automatically detects terminal theme preference (when supported)
+- **Hotkey toggle**: Use `Ctrl+T` to quickly switch between light and dark themes during runtime
+- **Persistent setting**: Theme preference can be saved in the configuration file or set via command line
+
+The theme system intelligently adapts colors for optimal readability in both light and dark modes, ensuring that git diff colors (green for additions, red for deletions) remain clearly visible regardless of the selected theme.
 
 ### Logging
 
