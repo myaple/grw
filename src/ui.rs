@@ -53,7 +53,7 @@ impl Theme {
     pub fn success_color(self) -> Color {
         match self {
             Theme::Dark => Color::Green,
-            Theme::Light => Color::DarkGray,
+            Theme::Light => Color::Green,
         }
     }
 
@@ -80,7 +80,7 @@ impl Theme {
 
     pub fn muted_color(self) -> Color {
         match self {
-            Theme::Dark => Color::DarkGray,
+            Theme::Dark => Color::Gray,
             Theme::Light => Color::Gray,
         }
     }
@@ -93,7 +93,7 @@ impl Theme {
     }
 
     pub fn added_color(self) -> Color {
-        self.success_color()
+        Color::Green
     }
 
     pub fn removed_color(self) -> Color {
@@ -101,7 +101,7 @@ impl Theme {
     }
 
     pub fn unchanged_color(self) -> Color {
-        self.muted_color()
+        self.foreground_color()
     }
 }
 
