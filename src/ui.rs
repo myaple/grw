@@ -1,11 +1,12 @@
-use crate::git::{FileDiff, GitRepo, TreeNode, ViewMode};
+use crate::git::{FileDiff, GitRepo, TreeNode};
+use crate::pane::{PaneId, PaneRegistry};
 use ratatui::{
     Frame,
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -133,6 +134,7 @@ pub struct App {
     current_file_browser_pane: FileBrowserPane,
     current_information_pane: InformationPane,
     theme: Theme,
+    pane_registry: PaneRegistry,
 }
 
 impl App {
@@ -159,6 +161,7 @@ impl App {
             current_file_browser_pane: FileBrowserPane::FileTree,
             current_information_pane: InformationPane::Diff,
             theme,
+            pane_registry: PaneRegistry::new(theme),
         }
     }
 
@@ -332,40 +335,106 @@ impl App {
     }
 
     pub fn toggle_help(&mut self) {
-        if self.current_information_pane == InformationPane::Help {
-            // If currently showing help, return to previous diff mode
-            self.current_information_pane = if self.side_by_side_diff {
-                InformationPane::SideBySideDiff
-            } else {
-                InformationPane::Diff
-            };
+        let help_pane_visible = if let Some(help_pane) = self.pane_registry.get_pane(&PaneId::Help)
+        {
+            help_pane.visible()
         } else {
-            // Store current mode and switch to help
+            false
+        };
+
+        if help_pane_visible {
+            // Hide help pane
+            self.pane_registry
+                .with_pane_mut(&PaneId::Help, |help_pane| {
+                    help_pane.set_visible(false);
+                });
+            // Show the appropriate diff pane
+            if self.side_by_side_diff {
+                self.pane_registry
+                    .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
+                        diff_pane.set_visible(true);
+                    });
+                self.pane_registry
+                    .with_pane_mut(&PaneId::Diff, |diff_pane| {
+                        diff_pane.set_visible(false);
+                    });
+                // Update the legacy field for backward compatibility
+                self.current_information_pane = InformationPane::SideBySideDiff;
+            } else {
+                self.pane_registry
+                    .with_pane_mut(&PaneId::Diff, |diff_pane| {
+                        diff_pane.set_visible(true);
+                    });
+                self.pane_registry
+                    .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
+                        diff_pane.set_visible(false);
+                    });
+                // Update the legacy field for backward compatibility
+                self.current_information_pane = InformationPane::Diff;
+            }
+        } else {
+            // Show help pane
+            self.pane_registry
+                .with_pane_mut(&PaneId::Help, |help_pane| {
+                    help_pane.set_visible(true);
+                });
+            // Hide diff panes
+            self.pane_registry
+                .with_pane_mut(&PaneId::Diff, |diff_pane| {
+                    diff_pane.set_visible(false);
+                });
+            self.pane_registry
+                .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
+                    diff_pane.set_visible(false);
+                });
+            // Update the legacy field for backward compatibility
             self.current_information_pane = InformationPane::Help;
         }
     }
 
     pub fn is_showing_help(&self) -> bool {
-        self.current_information_pane == InformationPane::Help
+        if let Some(help_pane) = self.pane_registry.get_pane(&PaneId::Help) {
+            help_pane.visible()
+        } else {
+            false
+        }
     }
 
     pub fn set_single_pane_diff(&mut self) {
         self.side_by_side_diff = false;
         if !self.is_showing_help() {
-            self.current_information_pane = InformationPane::Diff;
+            self.pane_registry
+                .with_pane_mut(&PaneId::Diff, |diff_pane| {
+                    diff_pane.set_visible(true);
+                });
+            self.pane_registry
+                .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
+                    diff_pane.set_visible(false);
+                });
         }
     }
 
     pub fn set_side_by_side_diff(&mut self) {
         self.side_by_side_diff = true;
         if !self.is_showing_help() {
-            self.current_information_pane = InformationPane::SideBySideDiff;
+            self.pane_registry
+                .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
+                    diff_pane.set_visible(true);
+                });
+            self.pane_registry
+                .with_pane_mut(&PaneId::Diff, |diff_pane| {
+                    diff_pane.set_visible(false);
+                });
         }
     }
 
     #[allow(dead_code)]
     pub fn is_side_by_side_diff(&self) -> bool {
-        self.current_information_pane == InformationPane::SideBySideDiff
+        if let Some(diff_pane) = self.pane_registry.get_pane(&PaneId::SideBySideDiff) {
+            diff_pane.visible()
+        } else {
+            false
+        }
     }
 
     pub fn toggle_diff_panel(&mut self) {
@@ -374,14 +443,6 @@ impl App {
 
     pub fn is_showing_diff_panel(&self) -> bool {
         self.show_diff_panel
-    }
-
-    pub fn is_file_recently_changed(&self, file_index: usize) -> bool {
-        if let Some(timestamp) = self.file_change_timestamps.get(file_index) {
-            timestamp.elapsed().as_secs() < 3
-        } else {
-            false
-        }
     }
 
     pub fn next_file(&mut self) {
@@ -453,7 +514,12 @@ impl App {
     }
 
     pub fn update_monitor_output(&mut self, output: String) {
-        self.monitor_output = output;
+        self.monitor_output = output.clone();
+        // Update the pane registry as well
+        self.pane_registry
+            .with_pane_mut(&PaneId::Monitor, |monitor_pane| {
+                let _ = monitor_pane.handle_event(&crate::pane::AppEvent::DataUpdated((), output));
+            });
         // Don't reset scroll offset - preserve user's current scroll position
     }
 
@@ -476,6 +542,10 @@ impl App {
 
     pub fn toggle_monitor_pane(&mut self) {
         self.show_monitor_pane = !self.show_monitor_pane;
+        self.pane_registry
+            .with_pane_mut(&PaneId::Monitor, |monitor_pane| {
+                monitor_pane.set_visible(self.show_monitor_pane);
+            });
         if self.show_monitor_pane {
             self.current_file_browser_pane = FileBrowserPane::Monitor;
         } else {
@@ -500,7 +570,7 @@ impl App {
         self.monitor_has_run = has_run;
     }
 
-    fn format_elapsed_time(&self, elapsed: std::time::Duration) -> String {
+    pub fn format_elapsed_time(&self, elapsed: std::time::Duration) -> String {
         let secs = elapsed.as_secs();
         if secs < 60 {
             format!("{}s", secs)
@@ -521,6 +591,48 @@ impl App {
 
     pub fn toggle_theme(&mut self) {
         self.theme.toggle();
+        self.pane_registry.set_theme(self.theme);
+    }
+
+    // Public getters for private fields needed by panes
+    pub fn get_tree_nodes(&self) -> &Vec<(TreeNode, usize)> {
+        &self.tree_nodes
+    }
+
+    pub fn get_current_tree_index(&self) -> usize {
+        self.current_tree_index
+    }
+
+    pub fn get_files(&self) -> &Vec<FileDiff> {
+        &self.files
+    }
+
+    pub fn get_file_change_timestamps(&self) -> &Vec<std::time::Instant> {
+        &self.file_change_timestamps
+    }
+
+    pub fn get_monitor_command_configured(&self) -> bool {
+        self.monitor_command_configured
+    }
+
+    pub fn get_monitor_has_run(&self) -> bool {
+        self.monitor_has_run
+    }
+
+    pub fn get_monitor_elapsed_time(&self) -> Option<std::time::Duration> {
+        self.monitor_elapsed_time
+    }
+
+    pub fn get_scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
+
+    pub fn is_file_recently_changed(&self, file_index: usize) -> bool {
+        if let Some(timestamp) = self.file_change_timestamps.get(file_index) {
+            timestamp.elapsed().as_secs() < 3
+        } else {
+            false
+        }
     }
 }
 
@@ -542,7 +654,9 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
         .constraints(header_constraints)
         .split(size);
 
-    render_status_bar(f, app, git_repo, chunks[0]);
+    // Render status bar using new pane system
+    app.pane_registry
+        .render(f, app, chunks[0], PaneId::StatusBar, git_repo);
 
     // Handle the information pane (right side)
     if app.is_showing_diff_panel() {
@@ -552,26 +666,22 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
             .split(chunks[1]);
 
         // Render file browser pane (left side)
-        render_file_browser_pane(f, app, bottom_chunks[0]);
+        render_file_browser_pane(f, app, bottom_chunks[0], git_repo);
 
-        // Render information pane (right side)
+        // Render information pane (right side) using new pane system
         let diff_height = bottom_chunks[1].height.saturating_sub(2) as usize;
-        render_information_pane(f, app, bottom_chunks[1], diff_height);
+        render_information_pane(f, app, bottom_chunks[1], diff_height, git_repo);
     } else {
         // When diff panel is hidden, file browser takes full width
-        // But if help is showing, it takes over the full content area
-        if app.is_showing_help() {
-            render_help_view(f, app, chunks[1]);
-        } else {
-            render_file_browser_pane(f, app, chunks[1]);
-        }
+        render_file_browser_pane(f, app, chunks[1], git_repo);
     }
 }
 
-fn render_file_browser_pane(f: &mut Frame, app: &App, area: Rect) {
+fn render_file_browser_pane(f: &mut Frame, app: &App, area: Rect, git_repo: &GitRepo) {
     // If help is showing and diff panel is hidden, help takes over the full area
     if app.is_showing_help() && !app.is_showing_diff_panel() {
-        render_help_view(f, app, area);
+        app.pane_registry
+            .render(f, app, area, PaneId::Help, git_repo);
         return;
     }
 
@@ -588,13 +698,14 @@ fn render_file_browser_pane(f: &mut Frame, app: &App, area: Rect) {
                     .split(area);
 
                 // Render file tree in top half
-                render_file_tree_content(f, app, tree_chunks[0]);
+                render_file_tree_content(f, app, tree_chunks[0], git_repo);
 
-                // Render monitor pane in bottom half
-                render_monitor_pane(f, app, tree_chunks[1]);
+                // Render monitor pane in bottom half using new pane system
+                app.pane_registry
+                    .render(f, app, tree_chunks[1], PaneId::Monitor, git_repo);
             } else {
                 // Monitor pane is hidden, file tree takes full area
-                render_file_tree_content(f, app, area);
+                render_file_tree_content(f, app, area, git_repo);
             }
         }
         FileBrowserPane::Monitor => {
@@ -608,51 +719,38 @@ fn render_file_browser_pane(f: &mut Frame, app: &App, area: Rect) {
                 .split(area);
 
             // Render file tree in top half
-            render_file_tree_content(f, app, tree_chunks[0]);
+            render_file_tree_content(f, app, tree_chunks[0], git_repo);
 
-            // Render monitor pane in bottom half
-            render_monitor_pane(f, app, tree_chunks[1]);
+            // Render monitor pane in bottom half using new pane system
+            app.pane_registry
+                .render(f, app, tree_chunks[1], PaneId::Monitor, git_repo);
         }
     }
 }
 
-trait InformationPaneRenderer {
-    fn render(&self, f: &mut Frame, app: &App, area: Rect, max_lines: usize);
-}
+// Old InformationPaneRenderer trait replaced by new Pane trait system
 
-struct DiffRenderer;
-struct SideBySideDiffRenderer;
-struct HelpRenderer;
-
-impl InformationPaneRenderer for DiffRenderer {
-    fn render(&self, f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
-        render_diff_view(f, app, area, max_lines);
+fn render_information_pane(
+    f: &mut Frame,
+    app: &App,
+    area: Rect,
+    _max_lines: usize,
+    git_repo: &GitRepo,
+) {
+    // If help is showing, it should take precedence over diff panes
+    if app.is_showing_help() {
+        app.pane_registry
+            .render(f, app, area, PaneId::Help, git_repo);
+    } else if app.side_by_side_diff {
+        app.pane_registry
+            .render(f, app, area, PaneId::SideBySideDiff, git_repo);
+    } else {
+        app.pane_registry
+            .render(f, app, area, PaneId::Diff, git_repo);
     }
 }
 
-impl InformationPaneRenderer for SideBySideDiffRenderer {
-    fn render(&self, f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
-        render_side_by_side_diff_view(f, app, area, max_lines);
-    }
-}
-
-impl InformationPaneRenderer for HelpRenderer {
-    fn render(&self, f: &mut Frame, app: &App, area: Rect, _max_lines: usize) {
-        render_help_view(f, app, area);
-    }
-}
-
-fn render_information_pane(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
-    let renderer: Box<dyn InformationPaneRenderer> = match app.current_information_pane {
-        InformationPane::Diff => Box::new(DiffRenderer),
-        InformationPane::SideBySideDiff => Box::new(SideBySideDiffRenderer),
-        InformationPane::Help => Box::new(HelpRenderer),
-    };
-
-    renderer.render(f, app, area, max_lines);
-}
-
-fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect) {
+fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect, _git_repo: &GitRepo) {
     let theme = app.get_theme();
     let tree_items: Vec<ListItem> = app
         .tree_nodes
@@ -764,312 +862,6 @@ fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(file_list, area);
 }
 
-fn render_status_bar(f: &mut Frame, app: &App, git_repo: &GitRepo, area: Rect) {
-    let theme = app.get_theme();
-    let repo_name = git_repo.get_repo_name();
-    let branch = git_repo.get_current_branch();
-    let (commit_sha, commit_summary) = git_repo.get_last_commit_info();
-    let (total_files, total_additions, total_deletions) = git_repo.get_total_stats();
-    let view_mode = git_repo.get_current_view_mode();
-
-    // Get view mode display text
-    let view_mode_text = match view_mode {
-        ViewMode::WorkingTree => "💼 Working Tree",
-        ViewMode::Staged => "📋 Staged Files",
-        ViewMode::DirtyDirectory => "🗂️ Dirty Directory",
-        ViewMode::LastCommit => "📜 Last Commit",
-    };
-
-    // Build the complete status text
-    let status_text = format!(
-        "📂 {repo_name} | 🌿 {branch} | {view_mode_text} | 🎯 {commit_sha} > {commit_summary} | 📊 {total_files} files (+{total_additions}/-{total_deletions})"
-    );
-
-    let paragraph = Paragraph::new(status_text)
-        .style(
-            Style::default()
-                .fg(theme.foreground_color())
-                .bg(theme.background_color())
-                .add_modifier(Modifier::REVERSED),
-        )
-        .block(Block::default().borders(Borders::NONE))
-        .wrap(Wrap { trim: false });
-
-    f.render_widget(paragraph, area);
-}
-
-fn render_side_by_side_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
-    let theme = app.get_theme();
-    if let Some(file) = app.get_current_file() {
-        let file_path = file.path.to_string_lossy();
-        let _title = format!("Side-by-side Diff: {file_path}");
-
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
-
-        let mut left_lines = Vec::new();
-        let mut right_lines = Vec::new();
-
-        let mut line_count = 0;
-        for (i, line) in file.line_strings.iter().enumerate() {
-            if i < app.scroll_offset {
-                continue;
-            }
-
-            if line_count >= max_lines {
-                break;
-            }
-
-            let (left_content, right_content) = if let Some(stripped) = line.strip_prefix('+') {
-                // Addition: empty on left, content on right
-                ("".to_string(), stripped.to_string())
-            } else if let Some(stripped) = line.strip_prefix('-') {
-                // Deletion: content on left, empty on right
-                (stripped.to_string(), "".to_string())
-            } else if let Some(stripped) = line.strip_prefix(' ') {
-                // Unchanged: same content on both sides
-                let content = stripped.to_string();
-                (content.clone(), content)
-            } else {
-                // Header/context line: same content on both sides
-                (line.to_string(), line.to_string())
-            };
-
-            let left_style = if line.starts_with('-') {
-                Style::default().fg(theme.removed_color())
-            } else if line.starts_with(' ') || line.starts_with('+') {
-                Style::default().fg(theme.unchanged_color())
-            } else {
-                Style::default().fg(theme.foreground_color())
-            };
-
-            let right_style = if line.starts_with('+') {
-                Style::default().fg(theme.added_color())
-            } else if line.starts_with(' ') || line.starts_with('-') {
-                Style::default().fg(theme.unchanged_color())
-            } else {
-                Style::default().fg(theme.foreground_color())
-            };
-
-            left_lines.push(Line::from(Span::styled(left_content, left_style)));
-            right_lines.push(Line::from(Span::styled(right_content, right_style)));
-
-            line_count += 1;
-        }
-
-        let left_text = Text::from(left_lines);
-        let right_text = Text::from(right_lines);
-
-        let left_paragraph = Paragraph::new(left_text)
-            .block(
-                Block::default()
-                    .title("Original")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border_color())),
-            )
-            .wrap(Wrap { trim: false });
-
-        let right_paragraph = Paragraph::new(right_text)
-            .block(
-                Block::default()
-                    .title("Modified")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border_color())),
-            )
-            .wrap(Wrap { trim: false });
-
-        f.render_widget(left_paragraph, chunks[0]);
-        f.render_widget(right_paragraph, chunks[1]);
-    } else {
-        let paragraph = Paragraph::new("No changes detected").block(
-            Block::default()
-                .title("Side-by-side Diff")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border_color())),
-        );
-        f.render_widget(paragraph, area);
-    }
-}
-
-fn render_diff_view(f: &mut Frame, app: &App, area: Rect, max_lines: usize) {
-    let theme = app.get_theme();
-    if let Some(file) = app.get_current_file() {
-        let file_path = file.path.to_string_lossy();
-        let title = format!("Diff: {file_path}");
-
-        let mut lines = Vec::new();
-
-        for (i, line) in file.line_strings.iter().enumerate() {
-            if i < app.scroll_offset {
-                continue;
-            }
-
-            if lines.len() >= max_lines {
-                break;
-            }
-
-            let (style, line_text) = if line.starts_with('+') {
-                (Style::default().fg(theme.added_color()), line)
-            } else if line.starts_with('-') {
-                (Style::default().fg(theme.removed_color()), line)
-            } else if line.starts_with(' ') {
-                (Style::default().fg(theme.unchanged_color()), line)
-            } else {
-                (Style::default().fg(theme.foreground_color()), line)
-            };
-
-            let span = Span::styled(line_text.clone(), style);
-            lines.push(Line::from(span));
-        }
-
-        let text = Text::from(lines);
-        let paragraph = Paragraph::new(text)
-            .block(
-                Block::default()
-                    .title(title)
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border_color())),
-            )
-            .wrap(Wrap { trim: false });
-
-        f.render_widget(paragraph, area);
-    } else {
-        let paragraph = Paragraph::new("No changes detected").block(
-            Block::default()
-                .title("Diff")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border_color())),
-        );
-        f.render_widget(paragraph, area);
-    }
-}
-
-fn render_help_view(f: &mut Frame, app: &App, area: Rect) {
-    let theme = app.get_theme();
-    let help_text = vec![
-        Line::from(Span::styled(
-            "Git Repository Watcher - Help",
-            Style::default()
-                .fg(theme.secondary_color())
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Navigation:",
-            Style::default()
-                .fg(theme.primary_color())
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  Tab           - Next file"),
-        Line::from("  Shift+Tab     - Previous file"),
-        Line::from("  g t           - Next file (same as Tab)"),
-        Line::from("  g T           - Previous file (same as Shift+Tab)"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Scrolling:",
-            Style::default()
-                .fg(theme.primary_color())
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  j / Down      - Scroll down one line"),
-        Line::from("  k / Up        - Scroll up one line"),
-        Line::from("  Ctrl+e        - Scroll down one line"),
-        Line::from("  Ctrl+y        - Scroll up one line"),
-        Line::from("  PageDown      - Scroll down one page"),
-        Line::from("  PageUp        - Scroll up one page"),
-        Line::from("  g g           - Go to top of diff"),
-        Line::from("  Shift+G       - Go to bottom of diff"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Other:",
-            Style::default()
-                .fg(theme.primary_color())
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  ?             - Show/hide this help page"),
-        Line::from("  Esc           - Exit help page"),
-        Line::from("  Ctrl+S        - Switch to side-by-side diff view"),
-        Line::from("  Ctrl+D        - Switch to single-pane diff view"),
-        Line::from("  Ctrl+H        - Toggle diff panel visibility"),
-        Line::from("  Ctrl+O        - Toggle monitor pane visibility"),
-        Line::from("  Ctrl+T        - Toggle light/dark theme"),
-        Line::from("  Alt+j         - Scroll monitor pane down"),
-        Line::from("  Alt+k         - Scroll monitor pane up"),
-        Line::from("  q / Ctrl+C    - Quit application"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Theme:",
-            Style::default()
-                .fg(theme.primary_color())
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  The application supports light and dark themes."),
-        Line::from("  Use Ctrl+T to toggle between themes at runtime."),
-        Line::from("  Theme can also be set via --theme CLI flag or config file."),
-        Line::from(""),
-        Line::from("Press ? or Esc to return to diff view"),
-    ];
-
-    let text = Text::from(help_text);
-    let paragraph = Paragraph::new(text)
-        .block(
-            Block::default()
-                .title("Help")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border_color())),
-        )
-        .wrap(Wrap { trim: false });
-
-    f.render_widget(paragraph, area);
-}
-
-fn render_monitor_pane(f: &mut Frame, app: &App, area: Rect) {
-    let theme = app.get_theme();
-    let monitor_lines: Vec<_> = app
-        .monitor_output
-        .lines()
-        .skip(app.monitor_scroll_offset)
-        .collect();
-    let visible_lines = area.height.saturating_sub(2) as usize; // Account for borders
-
-    // Take only the lines that will fit in the visible area
-    let display_lines: Vec<Line> = monitor_lines
-        .iter()
-        .take(visible_lines)
-        .map(|line| {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default().fg(theme.foreground_color()),
-            ))
-        })
-        .collect();
-
-    let title = if !app.monitor_command_configured {
-        "Monitor (no command configured)".to_string()
-    } else if !app.monitor_has_run {
-        "Monitor ⏳ loading...".to_string()
-    } else if let Some(elapsed) = app.monitor_elapsed_time {
-        let time_str = app.format_elapsed_time(elapsed);
-        format!("Monitor ⏱️ {} ago", time_str)
-    } else {
-        "Monitor Output".to_string()
-    };
-
-    let text = Text::from(display_lines);
-    let paragraph = Paragraph::new(text)
-        .block(
-            Block::default()
-                .title(title)
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border_color())),
-        )
-        .wrap(Wrap { trim: false });
-
-    f.render_widget(paragraph, area);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1145,11 +937,13 @@ mod tests {
 
         app.toggle_help();
         assert!(app.is_showing_help());
-        assert_eq!(app.current_information_pane, InformationPane::Help);
+        // Check that help pane is visible through the pane registry
+        assert!(&app.pane_registry.get_pane(&PaneId::Help).unwrap().visible());
 
         app.toggle_help();
         assert!(!app.is_showing_help());
-        assert_eq!(app.current_information_pane, InformationPane::Diff);
+        // Check that help pane is hidden through the pane registry
+        assert!(!&app.pane_registry.get_pane(&PaneId::Help).unwrap().visible());
     }
 
     #[test]
@@ -1288,15 +1082,27 @@ mod tests {
 
         // Switch to side-by-side mode
         app.set_side_by_side_diff();
-        assert_eq!(
-            app.current_information_pane,
-            InformationPane::SideBySideDiff
+        // Check through pane registry
+        assert!(
+            &app.pane_registry
+                .get_pane(&PaneId::SideBySideDiff)
+                .unwrap()
+                .visible()
         );
+        assert!(!&app.pane_registry.get_pane(&PaneId::Diff).unwrap().visible());
         assert!(app.is_side_by_side_diff());
 
         // Switch back to single-pane mode
         app.set_single_pane_diff();
-        assert_eq!(app.current_information_pane, InformationPane::Diff);
+        // Check through pane registry
+        assert!(
+            !&app
+                .pane_registry
+                .get_pane(&PaneId::SideBySideDiff)
+                .unwrap()
+                .visible()
+        );
+        assert!(&app.pane_registry.get_pane(&PaneId::Diff).unwrap().visible());
         assert!(!app.is_side_by_side_diff());
     }
 
@@ -1306,20 +1112,32 @@ mod tests {
 
         // Set to side-by-side mode
         app.set_side_by_side_diff();
-        assert_eq!(
-            app.current_information_pane,
-            InformationPane::SideBySideDiff
+        assert!(
+            &app.pane_registry
+                .get_pane(&PaneId::SideBySideDiff)
+                .unwrap()
+                .visible()
         );
 
         // Show help
         app.toggle_help();
-        assert_eq!(app.current_information_pane, InformationPane::Help);
+        assert!(&app.pane_registry.get_pane(&PaneId::Help).unwrap().visible());
+        assert!(
+            !&app
+                .pane_registry
+                .get_pane(&PaneId::SideBySideDiff)
+                .unwrap()
+                .visible()
+        );
 
         // Hide help - should return to side-by-side mode
         app.toggle_help();
-        assert_eq!(
-            app.current_information_pane,
-            InformationPane::SideBySideDiff
+        assert!(!&app.pane_registry.get_pane(&PaneId::Help).unwrap().visible());
+        assert!(
+            &app.pane_registry
+                .get_pane(&PaneId::SideBySideDiff)
+                .unwrap()
+                .visible()
         );
     }
 
@@ -1344,6 +1162,41 @@ mod tests {
         app.toggle_help();
         assert!(!app.is_showing_help());
         assert_eq!(app.current_information_pane, InformationPane::Diff);
+    }
+
+    // Test that help works when both file tree and diff panes are visible
+    #[test]
+    fn test_help_with_both_panes_visible() {
+        let mut app = App::new_with_config(true, Theme::Dark);
+
+        // Initially both file tree and diff panels should be showing
+        assert!(app.is_showing_diff_panel());
+        assert!(!app.is_showing_help());
+
+        // Show help while both panes are visible
+        app.toggle_help();
+        assert!(app.is_showing_help());
+        assert_eq!(app.current_information_pane, InformationPane::Help);
+
+        // Help should be visible via the pane registry
+        assert!(app.pane_registry.get_pane(&PaneId::Help).unwrap().visible());
+
+        // Diff panes should be hidden while help is showing
+        assert!(!app.pane_registry.get_pane(&PaneId::Diff).unwrap().visible());
+        assert!(
+            !app.pane_registry
+                .get_pane(&PaneId::SideBySideDiff)
+                .unwrap()
+                .visible()
+        );
+
+        // Hide help
+        app.toggle_help();
+        assert!(!app.is_showing_help());
+        assert_eq!(app.current_information_pane, InformationPane::Diff);
+
+        // Diff pane should be visible again
+        assert!(app.pane_registry.get_pane(&PaneId::Diff).unwrap().visible());
     }
 
     #[test]

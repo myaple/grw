@@ -18,6 +18,7 @@ mod config;
 mod git;
 mod logging;
 mod monitor;
+mod pane;
 mod ui;
 
 use config::{Args, Config};
