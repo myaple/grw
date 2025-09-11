@@ -44,11 +44,11 @@ impl std::fmt::Display for Theme {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
-    pub debug: bool,
-    pub no_diff: bool,
+    pub debug: Option<bool>,
+    pub no_diff: Option<bool>,
     pub monitor_command: Option<String>,
     pub monitor_interval: Option<u64>,
-    pub theme: Theme,
+    pub theme: Option<Theme>,
 }
 
 impl Config {
@@ -73,14 +73,14 @@ impl Config {
 
     pub fn merge_with_args(&self, args: &Args) -> Self {
         Self {
-            debug: args.debug || self.debug,
-            no_diff: args.no_diff || self.no_diff,
+            debug: Some(args.debug).or(self.debug),
+            no_diff: Some(args.no_diff).or(self.no_diff),
             monitor_command: args
                 .monitor_command
                 .clone()
                 .or_else(|| self.monitor_command.clone()),
             monitor_interval: args.monitor_interval.or(self.monitor_interval),
-            theme: args.theme.as_ref().unwrap_or(&self.theme).clone(),
+            theme: args.theme.clone().or_else(|| self.theme.clone()),
         }
     }
 }
@@ -114,60 +114,59 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert!(!config.debug);
-        assert!(!config.no_diff);
+        assert_eq!(config.debug, None);
+        assert_eq!(config.no_diff, None);
         assert!(config.monitor_command.is_none());
         assert!(config.monitor_interval.is_none());
-        assert_eq!(config.theme, Theme::Dark);
+        assert_eq!(config.theme, None);
     }
 
     #[test]
     fn test_config_new() {
         let config = Config::default();
-        assert!(!config.debug);
-        assert!(!config.no_diff);
+        assert_eq!(config.debug, None);
+        assert_eq!(config.no_diff, None);
         assert!(config.monitor_command.is_none());
         assert!(config.monitor_interval.is_none());
-        assert_eq!(config.theme, Theme::Dark);
+        assert_eq!(config.theme, None);
     }
 
     #[test]
     fn test_merge_with_args() {
         let mut config = Config::default();
-        config.debug = true;
+        config.debug = Some(true);
         config.monitor_command = Some("echo test".to_string());
-        config.theme = Theme::Light;
+        config.theme = Some(Theme::Light);
 
-        let mut args = Args::parse_from(&[
+        let args = Args::parse_from(&[
             "grw",
+            "--debug", // CLI args take precedence
             "--no-diff",
             "--monitor-interval",
             "10",
             "--theme",
             "dark",
         ]);
-        args.debug = false; // Should be overridden by config
-        args.monitor_command = None; // Should use config value
 
         let merged = config.merge_with_args(&args);
 
-        assert!(merged.debug); // From config
-        assert!(merged.no_diff); // From args
+        assert_eq!(merged.debug, Some(true)); // From args (CLI takes precedence)
+        assert_eq!(merged.no_diff, Some(true)); // From args
         assert_eq!(merged.monitor_command, Some("echo test".to_string())); // From config
         assert_eq!(merged.monitor_interval, Some(10)); // From args
-        assert_eq!(merged.theme, Theme::Dark); // From args (CLI takes precedence)
+        assert_eq!(merged.theme, Some(Theme::Dark)); // From args (CLI takes precedence)
     }
 
     #[test]
     fn test_merge_with_args_theme_from_config() {
         let mut config = Config::default();
-        config.theme = Theme::Light;
+        config.theme = Some(Theme::Light);
 
         let args = Args::parse_from(&["grw"]); // No theme specified
 
         let merged = config.merge_with_args(&args);
 
-        assert_eq!(merged.theme, Theme::Light); // From config
+        assert_eq!(merged.theme, Some(Theme::Light)); // From config
     }
 
     #[test]
@@ -240,6 +239,7 @@ mod tests {
         let json_light_upper = r#"{"debug": false, "no_diff": false, "theme": "LIGHT"}"#;
         let json_light_lower = r#"{"debug": false, "no_diff": false, "theme": "light"}"#;
         let json_light_mixed = r#"{"debug": false, "no_diff": false, "theme": "LiGhT"}"#;
+        let json_no_theme = r#"{"debug": false, "no_diff": false}"#;
 
         let config_dark_upper: Config = serde_json::from_str(json_dark_upper).unwrap();
         let config_dark_lower: Config = serde_json::from_str(json_dark_lower).unwrap();
@@ -247,12 +247,18 @@ mod tests {
         let config_light_upper: Config = serde_json::from_str(json_light_upper).unwrap();
         let config_light_lower: Config = serde_json::from_str(json_light_lower).unwrap();
         let config_light_mixed: Config = serde_json::from_str(json_light_mixed).unwrap();
+        let config_no_theme: Config = serde_json::from_str(json_no_theme).unwrap();
 
-        assert_eq!(config_dark_upper.theme, Theme::Dark);
-        assert_eq!(config_dark_lower.theme, Theme::Dark);
-        assert_eq!(config_dark_mixed.theme, Theme::Dark);
-        assert_eq!(config_light_upper.theme, Theme::Light);
-        assert_eq!(config_light_lower.theme, Theme::Light);
-        assert_eq!(config_light_mixed.theme, Theme::Light);
+        assert_eq!(config_dark_upper.debug, Some(false));
+        assert_eq!(config_dark_upper.no_diff, Some(false));
+        assert_eq!(config_dark_upper.theme, Some(Theme::Dark));
+        assert_eq!(config_dark_lower.theme, Some(Theme::Dark));
+        assert_eq!(config_dark_mixed.theme, Some(Theme::Dark));
+        assert_eq!(config_light_upper.theme, Some(Theme::Light));
+        assert_eq!(config_light_lower.theme, Some(Theme::Light));
+        assert_eq!(config_light_mixed.theme, Some(Theme::Light));
+        assert_eq!(config_no_theme.debug, Some(false));
+        assert_eq!(config_no_theme.no_diff, Some(false));
+        assert_eq!(config_no_theme.theme, None);
     }
 }

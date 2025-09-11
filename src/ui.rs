@@ -50,13 +50,6 @@ impl Theme {
         }
     }
 
-    pub fn success_color(self) -> Color {
-        match self {
-            Theme::Dark => Color::Green,
-            Theme::Light => Color::Green,
-        }
-    }
-
     pub fn error_color(self) -> Color {
         match self {
             Theme::Dark => Color::Red,
@@ -75,13 +68,6 @@ impl Theme {
         match self {
             Theme::Dark => Color::Gray,
             Theme::Light => Color::DarkGray,
-        }
-    }
-
-    pub fn muted_color(self) -> Color {
-        match self {
-            Theme::Dark => Color::Gray,
-            Theme::Light => Color::Gray,
         }
     }
 

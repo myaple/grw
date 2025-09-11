@@ -303,36 +303,32 @@ impl GitRepo {
     fn get_last_commit_files(&self) -> Vec<FileDiff> {
         let mut files = Vec::new();
 
-        if let Some(commit_id) = &self.last_commit_id {
-            if let Ok(commit) = self
+        if let Some(commit_id) = &self.last_commit_id
+            && let Ok(commit) = self
                 .repo
                 .find_commit(git2::Oid::from_str(commit_id).unwrap_or(git2::Oid::zero()))
+            && let Ok(tree) = commit.tree()
+            && let Ok(parent_tree) = commit.parent(0).and_then(|parent| parent.tree())
+        {
+            // Get the diff between the commit and its parent
+            if let Ok(diff) = self
+                .repo
+                .diff_tree_to_tree(Some(&parent_tree), Some(&tree), None)
             {
-                if let Ok(tree) = commit.tree() {
-                    if let Ok(parent_tree) = commit.parent(0).and_then(|parent| parent.tree()) {
-                        // Get the diff between the commit and its parent
-                        if let Ok(diff) =
-                            self.repo
-                                .diff_tree_to_tree(Some(&parent_tree), Some(&tree), None)
-                        {
-                            for delta in diff.deltas() {
-                                if let Some(old_file) = delta.old_file().path() {
-                                    if let Some(new_file) = delta.new_file().path() {
-                                        let file_path = self.path.join(new_file);
-                                        let diff_content =
-                                            self.get_commit_diff_content(old_file, new_file);
+                for delta in diff.deltas() {
+                    if let Some(old_file) = delta.old_file().path()
+                        && let Some(new_file) = delta.new_file().path()
+                    {
+                        let file_path = self.path.join(new_file);
+                        let diff_content = self.get_commit_diff_content(old_file, new_file);
 
-                                        files.push(FileDiff {
-                                            path: file_path,
-                                            status: Status::from_bits_truncate(4), // INDEX_MODIFIED
-                                            line_strings: diff_content,
-                                            additions: 0, // Would need to parse diff to get accurate counts
-                                            deletions: 0,
-                                        });
-                                    }
-                                }
-                            }
-                        }
+                        files.push(FileDiff {
+                            path: file_path,
+                            status: Status::from_bits_truncate(4), // INDEX_MODIFIED
+                            line_strings: diff_content,
+                            additions: 0, // Would need to parse diff to get accurate counts
+                            deletions: 0,
+                        });
                     }
                 }
             }
@@ -345,8 +341,8 @@ impl GitRepo {
         let mut content = Vec::new();
 
         // Use git show to get the diff content for the commit
-        if let Some(commit_id) = &self.last_commit_id {
-            if let Ok(output) = std::process::Command::new("git")
+        if let Some(commit_id) = &self.last_commit_id
+            && let Ok(output) = std::process::Command::new("git")
                 .args([
                     "show",
                     "--format=",
@@ -356,11 +352,10 @@ impl GitRepo {
                     new_path.to_str().unwrap_or(""),
                 ])
                 .output()
-            {
-                let diff_text = String::from_utf8_lossy(&output.stdout);
-                for line in diff_text.lines() {
-                    content.push(line.to_string());
-                }
+        {
+            let diff_text = String::from_utf8_lossy(&output.stdout);
+            for line in diff_text.lines() {
+                content.push(line.to_string());
             }
         }
 

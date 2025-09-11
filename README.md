@@ -14,7 +14,7 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 - **Help system**: Built-in help page with all keybindings
 - **Logging**: Comprehensive logging with debug mode for troubleshooting
 - **Responsive UI**: Adapts to terminal size with intelligent header wrapping
-- **Light/Dark themes**: Toggle between light and dark themes with automatic adaptation
+- **Light/Dark themes**: Toggle between light and dark themes
 
 ## Keybindings
 
@@ -80,7 +80,7 @@ grw
 - `--no-diff` - Hide diff panel, show only file tree
 - `--monitor-command <COMMAND>` - Command to run in monitor pane
 - `--monitor-interval <SECONDS>` - Interval in seconds for monitor command refresh
-- `--theme <THEME>` - Set initial theme (light, dark, or auto)
+- `--theme <THEME>` - Set initial theme (light or dark)
 
 ### Examples
 
@@ -108,9 +108,6 @@ grw --theme light
 
 # Start with dark theme
 grw --theme dark
-
-# Use auto theme (detects terminal theme preference)
-grw --theme auto
 ```
 
 ### Configuration File
@@ -122,16 +119,26 @@ GRW supports a configuration file at `~/.config/grw/config.json` that can be use
   "debug": false,
   "no_diff": false,
   "monitor_command": "git status --short",
-  "monitor_interval": 5
+  "monitor_interval": 5,
+  "theme": "dark"
+}
+```
+
+Or a minimal configuration with only some settings:
+
+```json
+{
+  "debug": true,
+  "theme": "light"
 }
 ```
 
 Configuration options:
-- `debug` (boolean): Enable debug logging (default: false)
-- `no_diff` (boolean): Hide diff panel, show only file tree (default: false)  
+- `debug` (boolean): Enable debug logging (optional, default: false)
+- `no_diff` (boolean): Hide diff panel, show only file tree (optional, default: false)  
 - `monitor_command` (string): Command to run in monitor pane (optional)
 - `monitor_interval` (number): Interval in seconds for monitor command refresh (optional)
-- `theme` (string): Initial theme setting (light, dark, or auto) (optional)
+- `theme` (string): Initial theme setting (light or dark) (optional)
 
 Command line arguments override configuration file settings.
 
@@ -156,7 +163,6 @@ GRW includes a flexible theme system that supports light and dark modes:
 
 - **Dark theme**: Default theme optimized for terminal use with dark backgrounds
 - **Light theme**: Bright theme suitable for light terminal backgrounds or better readability in bright environments
-- **Auto theme**: Automatically detects terminal theme preference (when supported)
 - **Hotkey toggle**: Use `Ctrl+T` to quickly switch between light and dark themes during runtime
 - **Persistent setting**: Theme preference can be saved in the configuration file or set via command line
 

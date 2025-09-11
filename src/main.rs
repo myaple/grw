@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     let config = Config::load()?;
     let final_config = config.merge_with_args(&args);
 
-    logging::init_logging(final_config.debug)?;
+    logging::init_logging(final_config.debug.unwrap_or(false))?;
     color_eyre::install()?;
 
     let repo_path = std::env::current_dir()?;
@@ -49,8 +49,8 @@ async fn main() -> Result<()> {
     let mut git_repo = GitRepo::new(repo_path)?;
 
     let mut app = App::new_with_config(
-        !final_config.no_diff,
-        match final_config.theme {
+        !final_config.no_diff.unwrap_or(false),
+        match final_config.theme.unwrap_or(config::Theme::Dark) {
             config::Theme::Dark => ui::Theme::Dark,
             config::Theme::Light => ui::Theme::Light,
         },
