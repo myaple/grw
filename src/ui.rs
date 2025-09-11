@@ -1389,7 +1389,7 @@ mod tests {
         let light_theme = Theme::Light;
         assert_eq!(light_theme.background_color(), Color::White);
         assert_eq!(light_theme.foreground_color(), Color::Black);
-        assert_eq!(light_theme.added_color(), Color::DarkGray);
+        assert_eq!(light_theme.added_color(), Color::Green);
         assert_eq!(light_theme.removed_color(), Color::LightRed);
     }
 }
