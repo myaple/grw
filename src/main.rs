@@ -219,6 +219,7 @@ async fn main() -> Result<()> {
 
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+    let _ = terminal.clear();
 
     log::info!("Application shutdown complete");
     Ok(())
