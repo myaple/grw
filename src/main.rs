@@ -16,13 +16,17 @@ use std::time::Duration;
 
 mod config;
 mod git;
+mod llm;
 mod logging;
 mod monitor;
 mod pane;
 mod ui;
 
+use std::env;
+
 use config::{Args, Config};
 use git::GitRepo;
+use llm::AsyncLLMCommand;
 use log::debug;
 use monitor::AsyncMonitorCommand;
 use ui::App;
@@ -72,6 +76,19 @@ async fn main() -> Result<()> {
         app.set_monitor_command_configured(true);
     }
 
+    let mut llm_command = if let Some(llm_config) = &final_config.llm {
+        if llm_config.api_key.is_some() || env::var("OPENAI_API_KEY").is_ok() {
+            Some(AsyncLLMCommand::new(
+                llm_config.clone(),
+                llm_config.interval.unwrap_or(60),
+            ))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     let _ = terminal.clear();
@@ -119,6 +136,21 @@ async fn main() -> Result<()> {
             let elapsed = monitor.get_elapsed_since_last_run();
             let has_run = monitor.has_run_yet();
             app.update_monitor_timing(elapsed, has_run);
+        }
+
+        // Update llm command if it exists
+        if let Some(ref mut llm) = llm_command
+            && let Some(result) = llm.try_get_result()
+        {
+            match result {
+                llm::LLMResult::Success(output) => {
+                    app.update_llm_advice(output);
+                }
+                llm::LLMResult::Error(output) => {
+                    log::error!("LLM command failed");
+                    app.update_llm_advice(output);
+                }
+            }
         }
 
         // Calculate monitor visible height before rendering
@@ -237,32 +269,74 @@ fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
             true
         }
         KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-            app.scroll_to_bottom(app.current_diff_height);
-            false
+            if app.forward_key_to_panes(key) {
+                // Key was handled by a pane
+                false
+            } else {
+                // Fall back to default behavior
+                app.scroll_to_bottom(app.current_diff_height);
+                false
+            }
         }
         KeyCode::Char('j') if key.modifiers.is_empty() => {
-            app.scroll_down(app.current_diff_height);
-            false
+            if app.forward_key_to_panes(key) {
+                // Key was handled by a pane
+                false
+            } else {
+                // Fall back to default behavior
+                app.scroll_down(app.current_diff_height);
+                false
+            }
         }
         KeyCode::Down => {
-            app.scroll_down(app.current_diff_height);
-            false
+            if app.forward_key_to_panes(key) {
+                // Key was handled by a pane
+                false
+            } else {
+                // Fall back to default behavior
+                app.scroll_down(app.current_diff_height);
+                false
+            }
         }
         KeyCode::Char('k') if key.modifiers.is_empty() => {
-            app.scroll_up();
-            false
+            if app.forward_key_to_panes(key) {
+                // Key was handled by a pane
+                false
+            } else {
+                // Fall back to default behavior
+                app.scroll_up();
+                false
+            }
         }
         KeyCode::Up => {
-            app.scroll_up();
-            false
+            if app.forward_key_to_panes(key) {
+                // Key was handled by a pane
+                false
+            } else {
+                // Fall back to default behavior
+                app.scroll_up();
+                false
+            }
         }
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.scroll_down(app.current_diff_height);
-            false
+            if app.forward_key_to_panes(key) {
+                // Key was handled by a pane
+                false
+            } else {
+                // Fall back to default behavior
+                app.scroll_down(app.current_diff_height);
+                false
+            }
         }
         KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.scroll_up();
-            false
+            if app.forward_key_to_panes(key) {
+                // Key was handled by a pane
+                false
+            } else {
+                // Fall back to default behavior
+                app.scroll_up();
+                false
+            }
         }
         KeyCode::Char('g') => {
             if app.handle_g_press() {
@@ -355,6 +429,11 @@ fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
             debug!("User pressed Ctrl+O - toggling monitor pane");
             app.toggle_monitor_pane();
             debug!("Monitor pane is now: {}", app.is_showing_monitor_pane());
+            false
+        }
+        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            debug!("User pressed Ctrl+L - switching to advice pane");
+            app.set_advice_pane();
             false
         }
         _ => false,

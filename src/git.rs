@@ -486,4 +486,20 @@ impl GitRepo {
             self.flatten_tree_recursive(child, depth + 1, result);
         }
     }
+
+    pub fn get_diff_string(&self) -> String {
+        self.get_display_files()
+            .iter()
+            .map(|f| {
+                let mut diff_content = format!(
+                    "diff --git a/{} b/{}\n",
+                    f.path.to_string_lossy(),
+                    f.path.to_string_lossy()
+                );
+                diff_content.push_str(&f.line_strings.join("\n"));
+                diff_content
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+    }
 }
