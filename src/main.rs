@@ -16,6 +16,7 @@ use std::time::Duration;
 
 mod config;
 mod git;
+mod git_worker;
 mod llm;
 mod logging;
 mod monitor;
@@ -25,9 +26,9 @@ mod ui;
 use std::env;
 
 use config::{Args, Config};
-use git::GitRepo;
+use git::AsyncGitRepo;
 use llm::AsyncLLMCommand;
-use log::debug;
+use log::{debug, error};
 use monitor::AsyncMonitorCommand;
 use ui::App;
 
@@ -51,7 +52,7 @@ async fn main() -> Result<()> {
     let repo_path = std::env::current_dir()?;
     log::info!("Starting grw in directory: {:?}", repo_path);
     log::debug!("Debug mode enabled");
-    let mut git_repo = GitRepo::new(repo_path)?;
+    let mut git_repo = AsyncGitRepo::new(repo_path, 500)?;
 
     let mut app = App::new_with_config(
         !final_config.no_diff.unwrap_or(false),
@@ -96,26 +97,23 @@ async fn main() -> Result<()> {
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
 
-    let mut last_git_update = std::time::Instant::now();
-    let git_update_interval = Duration::from_millis(500);
-
     loop {
-        // Update git repo
-        if last_git_update.elapsed() >= git_update_interval {
-            let update_start = std::time::Instant::now();
-            git_repo.update()?;
-            let update_duration = update_start.elapsed();
+        // Poll for git updates
+        git_repo.update();
+        if let Some(result) = git_repo.try_get_result() {
+            match result {
+                git::GitWorkerResult::Update(repo) => {
+                    let changed_files = repo.get_display_files();
+                    let tree = repo.get_file_tree();
 
-            let changed_files = git_repo.get_display_files();
-            let tree = git_repo.get_file_tree();
-
-            app.update_files(changed_files.clone());
-            app.update_tree(&tree);
-
-            log::debug!("Git repo update took {:?}", update_duration);
-            log::debug!("Found {} changed files", changed_files.len());
-
-            last_git_update = std::time::Instant::now();
+                    app.update_files(changed_files.clone());
+                    app.update_tree(&tree);
+                    git_repo.repo = Some(repo);
+                }
+                git::GitWorkerResult::Error(e) => {
+                    error!("Git worker error: {}", e);
+                }
+            }
         }
 
         // Update monitor command if it exists
@@ -139,16 +137,21 @@ async fn main() -> Result<()> {
         }
 
         // Update llm command if it exists
-        if let Some(ref mut llm) = llm_command
-            && let Some(result) = llm.try_get_result()
-        {
-            match result {
-                llm::LLMResult::Success(output) => {
-                    app.update_llm_advice(output);
-                }
-                llm::LLMResult::Error(output) => {
-                    log::error!("LLM command failed");
-                    app.update_llm_advice(output);
+        if let Some(ref mut llm) = llm_command {
+            if let Some(repo) = &git_repo.repo {
+                let _ = llm.git_repo_tx.send(Some(repo.clone()));
+            }
+
+            if let Some(result) = llm.try_get_result() {
+                match result {
+                    llm::LLMResult::Success(output) => {
+                        app.update_llm_advice(output);
+                    }
+                    llm::LLMResult::Error(output) => {
+                        log::error!("LLM command failed");
+                        app.update_llm_advice(output);
+                    }
+                    llm::LLMResult::Noop => {}
                 }
             }
         }
@@ -234,7 +237,9 @@ async fn main() -> Result<()> {
                 app.current_diff_height = 20;
             }
 
-            ui::render::<CrosstermBackend<std::io::Stdout>>(f, &app, &git_repo);
+            if let Some(repo) = &git_repo.repo {
+                ui::render::<CrosstermBackend<std::io::Stdout>>(f, &app, repo);
+            }
         })?;
         let render_duration = render_start.elapsed();
 
