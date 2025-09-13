@@ -42,6 +42,31 @@ impl std::fmt::Display for Theme {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum LlmProvider {
+    #[default]
+    OpenAI,
+}
+
+impl FromStr for LlmProvider {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "openai" => Ok(LlmProvider::OpenAI),
+            _ => Err(format!("Invalid LLM provider: {}", s)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LlmConfig {
+    pub provider: Option<LlmProvider>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    pub interval: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub debug: Option<bool>,
@@ -49,6 +74,7 @@ pub struct Config {
     pub monitor_command: Option<String>,
     pub monitor_interval: Option<u64>,
     pub theme: Option<Theme>,
+    pub llm: Option<LlmConfig>,
 }
 
 impl Config {
@@ -72,6 +98,7 @@ impl Config {
     }
 
     pub fn merge_with_args(&self, args: &Args) -> Self {
+        let llm_config = self.llm.clone().unwrap_or_default();
         Self {
             debug: Some(args.debug).or(self.debug),
             no_diff: Some(args.no_diff).or(self.no_diff),
@@ -81,6 +108,12 @@ impl Config {
                 .or_else(|| self.monitor_command.clone()),
             monitor_interval: args.monitor_interval.or(self.monitor_interval),
             theme: args.theme.clone().or_else(|| self.theme.clone()),
+            llm: Some(LlmConfig {
+                provider: args.llm_provider.clone().or(llm_config.provider),
+                model: args.llm_model.clone().or(llm_config.model),
+                api_key: args.llm_api_key.clone().or(llm_config.api_key),
+                interval: args.llm_interval.or(llm_config.interval),
+            }),
         }
     }
 }
@@ -104,6 +137,22 @@ pub struct Args {
 
     #[arg(long, help = "Theme to use (dark or light)")]
     pub theme: Option<Theme>,
+
+    #[arg(long, help = "LLM provider to use for advice (e.g., openai)")]
+    pub llm_provider: Option<LlmProvider>,
+
+    #[arg(long, help = "LLM model to use for advice")]
+    pub llm_model: Option<String>,
+
+    #[arg(long, help = "API key for the LLM provider")]
+    pub llm_api_key: Option<String>,
+
+    #[arg(
+        long,
+        help = "Interval in seconds for LLM advice refresh",
+        default_value = "60"
+    )]
+    pub llm_interval: Option<u64>,
 }
 
 #[cfg(test)]

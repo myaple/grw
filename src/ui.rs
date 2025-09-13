@@ -1,5 +1,6 @@
 use crate::git::{FileDiff, GitRepo, TreeNode};
 use crate::pane::{PaneId, PaneRegistry};
+use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     backend::Backend,
@@ -103,6 +104,7 @@ pub enum InformationPane {
     Diff,
     SideBySideDiff,
     Help,
+    Advice,
     // Add new pane types here in the future
     // Examples:
     // Stats,
@@ -135,6 +137,7 @@ pub struct App {
     current_information_pane: InformationPane,
     theme: Theme,
     pane_registry: PaneRegistry,
+    llm_advice: String,
 }
 
 impl App {
@@ -162,6 +165,7 @@ impl App {
             current_information_pane: InformationPane::Diff,
             theme,
             pane_registry: PaneRegistry::new(theme),
+            llm_advice: String::new(),
         }
     }
 
@@ -348,8 +352,29 @@ impl App {
                 .with_pane_mut(&PaneId::Help, |help_pane| {
                     help_pane.set_visible(false);
                 });
-            // Show the appropriate diff pane
-            if self.side_by_side_diff {
+            // Show the appropriate pane (diff or advice) based on which was active
+            let advice_visible = self
+                .pane_registry
+                .get_pane(&PaneId::Advice)
+                .is_some_and(|p| p.visible());
+
+            if advice_visible {
+                // Advice pane was active, restore it
+                self.pane_registry
+                    .with_pane_mut(&PaneId::Advice, |advice_pane| {
+                        advice_pane.set_visible(true);
+                    });
+                self.pane_registry
+                    .with_pane_mut(&PaneId::Diff, |diff_pane| {
+                        diff_pane.set_visible(false);
+                    });
+                self.pane_registry
+                    .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
+                        diff_pane.set_visible(false);
+                    });
+                self.current_information_pane = InformationPane::Advice;
+            } else if self.side_by_side_diff {
+                // Side-by-side diff was active
                 self.pane_registry
                     .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
                         diff_pane.set_visible(true);
@@ -358,9 +383,13 @@ impl App {
                     .with_pane_mut(&PaneId::Diff, |diff_pane| {
                         diff_pane.set_visible(false);
                     });
-                // Update the legacy field for backward compatibility
+                self.pane_registry
+                    .with_pane_mut(&PaneId::Advice, |advice_pane| {
+                        advice_pane.set_visible(false);
+                    });
                 self.current_information_pane = InformationPane::SideBySideDiff;
             } else {
+                // Inline diff was active
                 self.pane_registry
                     .with_pane_mut(&PaneId::Diff, |diff_pane| {
                         diff_pane.set_visible(true);
@@ -369,7 +398,10 @@ impl App {
                     .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
                         diff_pane.set_visible(false);
                     });
-                // Update the legacy field for backward compatibility
+                self.pane_registry
+                    .with_pane_mut(&PaneId::Advice, |advice_pane| {
+                        advice_pane.set_visible(false);
+                    });
                 self.current_information_pane = InformationPane::Diff;
             }
         } else {
@@ -378,7 +410,7 @@ impl App {
                 .with_pane_mut(&PaneId::Help, |help_pane| {
                     help_pane.set_visible(true);
                 });
-            // Hide diff panes
+            // Hide all other information panes
             self.pane_registry
                 .with_pane_mut(&PaneId::Diff, |diff_pane| {
                     diff_pane.set_visible(false);
@@ -386,6 +418,10 @@ impl App {
             self.pane_registry
                 .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
                     diff_pane.set_visible(false);
+                });
+            self.pane_registry
+                .with_pane_mut(&PaneId::Advice, |advice_pane| {
+                    advice_pane.set_visible(false);
                 });
             // Update the legacy field for backward compatibility
             self.current_information_pane = InformationPane::Help;
@@ -411,6 +447,10 @@ impl App {
                 .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
                     diff_pane.set_visible(false);
                 });
+            self.pane_registry
+                .with_pane_mut(&PaneId::Advice, |advice_pane| {
+                    advice_pane.set_visible(false);
+                });
         }
     }
 
@@ -424,6 +464,10 @@ impl App {
             self.pane_registry
                 .with_pane_mut(&PaneId::Diff, |diff_pane| {
                     diff_pane.set_visible(false);
+                });
+            self.pane_registry
+                .with_pane_mut(&PaneId::Advice, |advice_pane| {
+                    advice_pane.set_visible(false);
                 });
         }
     }
@@ -557,6 +601,25 @@ impl App {
         self.show_monitor_pane
     }
 
+    pub fn is_showing_advice_pane(&self) -> bool {
+        matches!(self.current_information_pane, InformationPane::Advice)
+    }
+
+    pub fn forward_key_to_panes(&mut self, key: KeyEvent) -> bool {
+        let mut handled = false;
+
+        // Forward to advice pane if it's visible
+        if self.is_showing_advice_pane()
+            && let Some(pane_handled) = self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
+                pane.handle_event(&crate::pane::AppEvent::Key(key))
+            })
+        {
+            handled |= pane_handled;
+        }
+
+        handled
+    }
+
     pub fn set_monitor_visible_height(&mut self, height: usize) {
         self.monitor_visible_height = height;
     }
@@ -592,6 +655,32 @@ impl App {
     pub fn toggle_theme(&mut self) {
         self.theme.toggle();
         self.pane_registry.set_theme(self.theme);
+    }
+
+    pub fn set_advice_pane(&mut self) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::Advice, |p| p.set_visible(true));
+        // Hide other information panes
+        self.pane_registry
+            .with_pane_mut(&PaneId::Diff, |p| p.set_visible(false));
+        self.pane_registry
+            .with_pane_mut(&PaneId::SideBySideDiff, |p| p.set_visible(false));
+        self.pane_registry
+            .with_pane_mut(&PaneId::Help, |p| p.set_visible(false));
+        // Update the legacy field for consistency
+        self.current_information_pane = InformationPane::Advice;
+    }
+
+    pub fn update_llm_advice(&mut self, advice: String) {
+        self.llm_advice = advice.clone();
+        self.pane_registry.with_pane_mut(&PaneId::Advice, |p| {
+            let _ = p.handle_event(&crate::pane::AppEvent::DataUpdated((), advice));
+        });
+    }
+
+    #[allow(dead_code)]
+    pub fn get_llm_advice(&self) -> &str {
+        &self.llm_advice
     }
 
     // Public getters for private fields needed by panes
@@ -737,10 +826,21 @@ fn render_information_pane(
     _max_lines: usize,
     git_repo: &GitRepo,
 ) {
-    // If help is showing, it should take precedence over diff panes
-    if app.is_showing_help() {
+    let help_visible = app
+        .pane_registry
+        .get_pane(&PaneId::Help)
+        .is_some_and(|p| p.visible());
+    let advice_visible = app
+        .pane_registry
+        .get_pane(&PaneId::Advice)
+        .is_some_and(|p| p.visible());
+
+    if help_visible {
         app.pane_registry
             .render(f, app, area, PaneId::Help, git_repo);
+    } else if advice_visible {
+        app.pane_registry
+            .render(f, app, area, PaneId::Advice, git_repo);
     } else if app.side_by_side_diff {
         app.pane_registry
             .render(f, app, area, PaneId::SideBySideDiff, git_repo);

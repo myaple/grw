@@ -33,6 +33,7 @@ pub enum PaneId {
     SideBySideDiff,
     Help,
     StatusBar,
+    Advice,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +76,7 @@ impl PaneRegistry {
         self.register_pane(PaneId::SideBySideDiff, Box::new(SideBySideDiffPane::new()));
         self.register_pane(PaneId::Help, Box::new(HelpPane::new()));
         self.register_pane(PaneId::StatusBar, Box::new(StatusBarPane::new()));
+        self.register_pane(PaneId::Advice, Box::new(AdvicePane::new()));
     }
 
     pub fn register_pane(&mut self, id: PaneId, pane: Box<dyn Pane>) {
@@ -713,12 +715,27 @@ impl Pane for HelpPane {
             Line::from("  ?             - Show/hide this help page"),
             Line::from("  Esc           - Exit help page"),
             Line::from("  Ctrl+S        - Switch to side-by-side diff view"),
-            Line::from("  Ctrl+D        - Switch to single-pane diff view"),
+            Line::from("  Ctrl+D        - Switch to inline diff view"),
+            Line::from("  Ctrl+L        - Switch to LLM advice pane"),
             Line::from("  Ctrl+H        - Toggle diff panel visibility"),
             Line::from("  Ctrl+O        - Toggle monitor pane visibility"),
             Line::from("  Ctrl+T        - Toggle light/dark theme"),
             Line::from("  Alt+j         - Scroll monitor pane down"),
             Line::from("  Alt+k         - Scroll monitor pane up"),
+            Line::from("  Ctrl+L        - Switch to LLM advice pane"),
+            Line::from("  ?             - Show/hide this help page"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Pane System:",
+                Style::default()
+                    .fg(theme.primary_color())
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from("  The right side pane can show one of three modes:"),
+            Line::from("  • Inline diff (Ctrl+D) - Shows changes in a unified format"),
+            Line::from("  • Side-by-side diff (Ctrl+S) - Shows original vs modified"),
+            Line::from("  • LLM advice (Ctrl+L) - Shows AI-generated code analysis"),
+            Line::from("  • Help (?) - Shows this help text (overlays other panes)"),
             Line::from("  q / Ctrl+C    - Quit application"),
             Line::from(""),
             Line::from(Span::styled(
@@ -731,7 +748,7 @@ impl Pane for HelpPane {
             Line::from("  Use Ctrl+T to toggle between themes at runtime."),
             Line::from("  Theme can also be set via --theme CLI flag or config file."),
             Line::from(""),
-            Line::from("Press ? or Esc to return to diff view"),
+            Line::from("Press ? or Esc to return to the previous pane"),
         ];
 
         let text = ratatui::text::Text::from(help_text);
@@ -850,6 +867,134 @@ impl Pane for StatusBarPane {
     }
 }
 
+// Advice Pane Implementation
+pub struct AdvicePane {
+    visible: bool,
+    content: String,
+    scroll_offset: usize,
+}
+
+impl AdvicePane {
+    pub fn new() -> Self {
+        Self {
+            visible: false,
+            content: "Waiting for advice...".to_string(),
+            scroll_offset: 0,
+        }
+    }
+}
+
+impl Pane for AdvicePane {
+    fn title(&self) -> String {
+        "LLM Advice".to_string()
+    }
+
+    fn render(
+        &self,
+        f: &mut Frame,
+        app: &App,
+        area: Rect,
+        _git_repo: &GitRepo,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use ratatui::{
+            style::Style,
+            text::{Line, Span},
+            widgets::{Block, Borders, Paragraph, Wrap},
+        };
+
+        let theme = app.get_theme();
+        let advice_lines: Vec<_> = self.content.lines().skip(self.scroll_offset).collect();
+        let visible_lines = area.height.saturating_sub(2) as usize;
+
+        let display_lines: Vec<Line> = advice_lines
+            .iter()
+            .take(visible_lines)
+            .map(|line| {
+                Line::from(Span::styled(
+                    line.to_string(),
+                    Style::default().fg(theme.foreground_color()),
+                ))
+            })
+            .collect();
+
+        let paragraph = Paragraph::new(display_lines)
+            .block(
+                Block::default()
+                    .title(self.title())
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color())),
+            )
+            .wrap(Wrap { trim: false });
+
+        f.render_widget(paragraph, area);
+        Ok(())
+    }
+
+    fn handle_event(&mut self, event: &AppEvent) -> bool {
+        match event {
+            AppEvent::Key(key) => match key.code {
+                KeyCode::Char('j') if key.modifiers.is_empty() => {
+                    let content_lines: Vec<_> = self.content.lines().collect();
+                    let max_scroll = content_lines.len().saturating_sub(1);
+                    self.scroll_offset =
+                        std::cmp::min(self.scroll_offset.saturating_add(1), max_scroll);
+                    true
+                }
+                KeyCode::Char('k') if key.modifiers.is_empty() => {
+                    self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                    true
+                }
+                KeyCode::Down => {
+                    let content_lines: Vec<_> = self.content.lines().collect();
+                    let max_scroll = content_lines.len().saturating_sub(1);
+                    self.scroll_offset =
+                        std::cmp::min(self.scroll_offset.saturating_add(1), max_scroll);
+                    true
+                }
+                KeyCode::Up => {
+                    self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                    true
+                }
+                KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    // Go to bottom of content
+                    let content_lines: Vec<_> = self.content.lines().collect();
+                    self.scroll_offset = content_lines.len().saturating_sub(1);
+                    true
+                }
+                KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Scroll down by one line
+                    let content_lines: Vec<_> = self.content.lines().collect();
+                    let max_scroll = content_lines.len().saturating_sub(1);
+                    self.scroll_offset =
+                        std::cmp::min(self.scroll_offset.saturating_add(1), max_scroll);
+                    true
+                }
+                KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Scroll up by one line
+                    self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                    true
+                }
+                _ => false,
+            },
+            AppEvent::DataUpdated(_, data) => {
+                self.content = data.clone();
+                // Reset scroll offset when content is updated
+                self.scroll_offset = 0;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn visible(&self) -> bool {
+        self.visible
+    }
+
+    fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -857,10 +1002,11 @@ mod tests {
     #[test]
     fn test_pane_registry_creation() {
         let registry = PaneRegistry::new(Theme::Dark);
-        assert_eq!(registry.panes.len(), 6); // Default panes
+        assert_eq!(registry.panes.len(), 7); // Default panes + advice
         assert!(registry.get_pane(&PaneId::FileTree).is_some());
         assert!(registry.get_pane(&PaneId::Monitor).is_some());
         assert!(registry.get_pane(&PaneId::Diff).is_some());
+        assert!(registry.get_pane(&PaneId::Advice).is_some());
     }
 
     #[test]
