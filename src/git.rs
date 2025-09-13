@@ -69,6 +69,7 @@ pub enum GitWorkerCommand {
     Update,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum GitWorkerResult {
     Update(GitRepo),
     Error(String),
