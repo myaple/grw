@@ -820,11 +820,11 @@ impl Pane for StatusBarPane {
         };
 
         let theme = app.get_theme();
-        let repo_name = git_repo.get_repo_name();
-        let branch = git_repo.get_current_branch();
-        let (commit_sha, commit_summary) = git_repo.get_last_commit_info();
-        let (total_files, total_additions, total_deletions) = git_repo.get_total_stats();
-        let view_mode = git_repo.get_current_view_mode();
+        let repo_name = &git_repo.repo_name;
+        let branch = &git_repo.branch_name;
+        let (commit_sha, commit_summary) = &git_repo.commit_info;
+        let (total_files, total_additions, total_deletions) = git_repo.total_stats;
+        let view_mode = git_repo.current_view_mode;
 
         // Get view mode display text
         let view_mode_text = match view_mode {

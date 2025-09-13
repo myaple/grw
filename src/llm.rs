@@ -1,26 +1,29 @@
 use crate::config::LlmConfig;
 use crate::git::GitRepo;
-use log::{debug, error};
+use log::debug;
 use openai_api_rs::v1::api::OpenAIClient;
 use openai_api_rs::v1::chat_completion::{self, ChatCompletionRequest};
 use std::env;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 #[derive(Debug)]
 pub struct AsyncLLMCommand {
     pub result_rx: mpsc::Receiver<LLMResult>,
+    pub git_repo_tx: watch::Sender<Option<GitRepo>>,
 }
 
 #[derive(Debug, Clone)]
 pub enum LLMResult {
     Success(String),
     Error(String),
+    Noop,
 }
 
 impl AsyncLLMCommand {
     pub fn new(config: LlmConfig, interval: u64) -> Self {
         let (result_tx, result_rx) = mpsc::channel(32);
+        let (git_repo_tx, mut git_repo_rx) = watch::channel(None);
 
         tokio::spawn(async move {
             let mut last_run_time: Option<Instant> = None;
@@ -49,31 +52,24 @@ impl AsyncLLMCommand {
                         continue;
                     }
 
-                    let repo_path = match std::env::current_dir() {
-                        Ok(path) => path,
-                        Err(e) => {
-                            error!("Failed to get current directory: {}", e);
-                            break;
-                        }
-                    };
-
-                    let mut git_repo = match GitRepo::new(repo_path) {
-                        Ok(repo) => repo,
-                        Err(e) => {
-                            error!("Failed to create GitRepo: {}", e);
-                            break;
-                        }
-                    };
-
-                    if let Err(e) = git_repo.update() {
-                        error!("Failed to update git repo: {}", e);
+                    if git_repo_rx.changed().await.is_err() {
                         break;
                     }
+
+                    let git_repo = git_repo_rx.borrow().clone();
+
+                    if git_repo.is_none() {
+                        continue;
+                    }
+                    let git_repo: GitRepo = git_repo.unwrap();
 
                     let diff = git_repo.get_diff_string();
 
                     if diff.is_empty() {
                         debug!("No diff found, skipping LLM query.");
+                        if result_tx.send(LLMResult::Noop).await.is_err() {
+                            break;
+                        }
                         last_run_time = Some(Instant::now());
                         tokio::time::sleep(Duration::from_millis(100)).await;
                         continue;
@@ -138,7 +134,10 @@ Keep the response concise and focused on practical improvements.
             }
         });
 
-        Self { result_rx }
+        Self {
+            result_rx,
+            git_repo_tx,
+        }
     }
 
     pub fn try_get_result(&mut self) -> Option<LLMResult> {
