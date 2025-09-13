@@ -134,7 +134,10 @@ Keep the response concise and focused on practical improvements.
             }
         });
 
-        Self { result_rx, git_repo_tx }
+        Self {
+            result_rx,
+            git_repo_tx,
+        }
     }
 
     pub fn try_get_result(&mut self) -> Option<LLMResult> {

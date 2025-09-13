@@ -1,6 +1,6 @@
 use crate::git_worker::GitWorker;
 use color_eyre::eyre::Result;
-use git2::{Status};
+use git2::Status;
 use log::debug;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -197,7 +197,7 @@ impl AsyncGitRepo {
     pub fn update(&mut self) {
         if self.last_update.elapsed() >= self.update_interval {
             debug!("Requesting git update");
-            if self.tx.blocking_send(GitWorkerCommand::Update).is_ok() {
+            if self.tx.try_send(GitWorkerCommand::Update).is_ok() {
                 self.last_update = Instant::now();
             }
         }
