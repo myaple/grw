@@ -113,6 +113,16 @@ pub enum InformationPane {
     // Search,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ActivePane {
+    #[default]
+    FileTree,
+    Monitor,
+    Diff,
+    SideBySideDiff,
+    Advice,
+}
+
 #[derive(Debug)]
 pub struct App {
     files: Vec<FileDiff>,
@@ -138,6 +148,7 @@ pub struct App {
     theme: Theme,
     pane_registry: PaneRegistry,
     llm_advice: String,
+    last_active_pane: ActivePane,
 }
 
 impl App {
@@ -166,6 +177,7 @@ impl App {
             theme,
             pane_registry: PaneRegistry::new(theme),
             llm_advice: String::new(),
+            last_active_pane: ActivePane::default(),
         }
     }
 
@@ -405,6 +417,35 @@ impl App {
                 self.current_information_pane = InformationPane::Diff;
             }
         } else {
+            // Determine which pane is active before showing help
+            if self
+                .pane_registry
+                .get_pane(&PaneId::Monitor)
+                .is_some_and(|p| p.visible())
+            {
+                self.last_active_pane = ActivePane::Monitor;
+            } else if self
+                .pane_registry
+                .get_pane(&PaneId::Diff)
+                .is_some_and(|p| p.visible())
+            {
+                self.last_active_pane = ActivePane::Diff;
+            } else if self
+                .pane_registry
+                .get_pane(&PaneId::SideBySideDiff)
+                .is_some_and(|p| p.visible())
+            {
+                self.last_active_pane = ActivePane::SideBySideDiff;
+            } else if self
+                .pane_registry
+                .get_pane(&PaneId::Advice)
+                .is_some_and(|p| p.visible())
+            {
+                self.last_active_pane = ActivePane::Advice;
+            } else {
+                self.last_active_pane = ActivePane::FileTree;
+            }
+
             // Show help pane
             self.pane_registry
                 .with_pane_mut(&PaneId::Help, |help_pane| {
@@ -723,6 +764,10 @@ impl App {
             false
         }
     }
+
+    pub fn get_last_active_pane(&self) -> ActivePane {
+        self.last_active_pane
+    }
 }
 
 #[allow(clippy::extra_unused_type_parameters)]
@@ -981,6 +1026,7 @@ mod tests {
         assert!(app.monitor_elapsed_time.is_none());
         assert!(!app.monitor_has_run);
         assert_eq!(app.get_theme(), Theme::Dark);
+        assert_eq!(app.last_active_pane, ActivePane::default());
     }
 
     #[test]
