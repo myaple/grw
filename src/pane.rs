@@ -722,6 +722,7 @@ impl Pane for HelpPane {
                     "  /               - Enter input mode",
                     "  Enter           - Submit question",
                     "  Esc             - Exit input mode",
+                    "  Ctrl+r          - Refresh LLM advice",
                 ],
             ),
         };
@@ -1104,28 +1105,10 @@ impl Pane for AdvicePane {
         }
 
         if let AppEvent::DataUpdated(_, data) = event {
-            let conversation_start = self.content.find("\n\n> ");
-            if let Some(index) = conversation_start {
-                let conversation = &self.content[index..];
-                self.content = format!("{}{}", data, conversation);
-            } else {
-                self.content = data.clone();
-            }
-
+            self.content = data.clone();
             self.scroll_offset = 0;
+            self.conversation_history.clear();
             self.initial_data = Some(data.clone());
-
-            if !self.conversation_history.is_empty() {
-                if self.conversation_history.len() > 1 {
-                    self.conversation_history[1] = chat_completion::ChatCompletionMessage {
-                        role: chat_completion::MessageRole::user,
-                        content: chat_completion::Content::Text(data.clone()),
-                        name: None,
-                        tool_calls: None,
-                        tool_call_id: None,
-                    };
-                }
-            }
             return true;
         }
 

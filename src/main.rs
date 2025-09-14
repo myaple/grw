@@ -79,7 +79,10 @@ async fn main() -> Result<()> {
 
     let mut llm_command = if let Some(llm_config) = &final_config.llm {
         if llm_config.api_key.is_some() || env::var("OPENAI_API_KEY").is_ok() {
-            Some(AsyncLLMCommand::new(llm_config.clone()))
+            let command = AsyncLLMCommand::new(llm_config.clone());
+            log::debug!("Triggering initial LLM advice refresh");
+            command.refresh();
+            Some(command)
         } else {
             None
         }
