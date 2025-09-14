@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::git::GitRepo;
-use crate::ui::{App, Theme};
+use crate::ui::{ActivePane, App, Theme};
 
 pub trait Pane {
     fn title(&self) -> String;
@@ -672,7 +672,9 @@ impl Pane for HelpPane {
         };
 
         let theme = app.get_theme();
-        let help_text = vec![
+        let last_active_pane = app.get_last_active_pane();
+
+        let mut help_text = vec![
             Line::from(Span::styled(
                 "Git Repository Watcher - Help",
                 Style::default()
@@ -680,76 +682,76 @@ impl Pane for HelpPane {
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
+        ];
+
+        // Pane-specific hotkeys
+        let (pane_title, pane_hotkeys) = match last_active_pane {
+            ActivePane::FileTree => (
+                "File Tree",
+                vec![
+                    "  Tab / g t     - Next file",
+                    "  Shift+Tab / g T - Previous file",
+                ],
+            ),
+            ActivePane::Monitor => (
+                "Monitor",
+                vec![
+                    "  Alt+j / Alt+Down  - Scroll down",
+                    "  Alt+k / Alt+Up    - Scroll up",
+                ],
+            ),
+            ActivePane::Diff | ActivePane::SideBySideDiff => (
+                "Diff View",
+                vec![
+                    "  j / Down / Ctrl+e - Scroll down",
+                    "  k / Up / Ctrl+y   - Scroll up",
+                    "  PageDown          - Page down",
+                    "  PageUp            - Page up",
+                    "  g g               - Go to top",
+                    "  Shift+G           - Go to bottom",
+                ],
+            ),
+            ActivePane::Advice => ("LLM Advice", vec!["  j / k           - Scroll up/down"]),
+        };
+
+        help_text.push(Line::from(Span::styled(
+            format!("{} Hotkeys:", pane_title),
+            Style::default()
+                .fg(theme.primary_color())
+                .add_modifier(Modifier::BOLD),
+        )));
+        for hotkey in pane_hotkeys {
+            help_text.push(Line::from(hotkey));
+        }
+        help_text.push(Line::from(""));
+
+        // General hotkeys
+        help_text.extend(vec![
             Line::from(Span::styled(
-                "Navigation:",
-                Style::default()
-                    .fg(theme.primary_color())
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from("  Tab           - Next file"),
-            Line::from("  Shift+Tab     - Previous file"),
-            Line::from("  g t           - Next file (same as Tab)"),
-            Line::from("  g T           - Previous file (same as Shift+Tab)"),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Scrolling:",
-                Style::default()
-                    .fg(theme.primary_color())
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from("  j / Down      - Scroll down one line"),
-            Line::from("  k / Up        - Scroll up one line"),
-            Line::from("  Ctrl+e        - Scroll down one line"),
-            Line::from("  Ctrl+y        - Scroll up one line"),
-            Line::from("  PageDown      - Scroll down one page"),
-            Line::from("  PageUp        - Scroll up one page"),
-            Line::from("  g g           - Go to top of diff"),
-            Line::from("  Shift+G       - Go to bottom of diff"),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Other:",
+                "General:",
                 Style::default()
                     .fg(theme.primary_color())
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from("  ?             - Show/hide this help page"),
             Line::from("  Esc           - Exit help page"),
-            Line::from("  Ctrl+S        - Switch to side-by-side diff view"),
-            Line::from("  Ctrl+D        - Switch to inline diff view"),
-            Line::from("  Ctrl+L        - Switch to LLM advice pane"),
-            Line::from("  Ctrl+H        - Toggle diff panel visibility"),
-            Line::from("  Ctrl+O        - Toggle monitor pane visibility"),
-            Line::from("  Ctrl+T        - Toggle light/dark theme"),
-            Line::from("  Alt+j         - Scroll monitor pane down"),
-            Line::from("  Alt+k         - Scroll monitor pane up"),
-            Line::from("  Ctrl+L        - Switch to LLM advice pane"),
-            Line::from("  ?             - Show/hide this help page"),
+            Line::from("  Ctrl+h        - Toggle diff panel visibility"),
+            Line::from("  Ctrl+o        - Toggle monitor pane visibility"),
+            Line::from("  Ctrl+t        - Toggle light/dark theme"),
+            Line::from("  q / Ctrl+c    - Quit application"),
             Line::from(""),
             Line::from(Span::styled(
-                "Pane System:",
+                "Pane Modes:",
                 Style::default()
                     .fg(theme.primary_color())
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from("  The right side pane can show one of three modes:"),
-            Line::from("  • Inline diff (Ctrl+D) - Shows changes in a unified format"),
-            Line::from("  • Side-by-side diff (Ctrl+S) - Shows original vs modified"),
-            Line::from("  • LLM advice (Ctrl+L) - Shows AI-generated code analysis"),
-            Line::from("  • Help (?) - Shows this help text (overlays other panes)"),
-            Line::from("  q / Ctrl+C    - Quit application"),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Theme:",
-                Style::default()
-                    .fg(theme.primary_color())
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from("  The application supports light and dark themes."),
-            Line::from("  Use Ctrl+T to toggle between themes at runtime."),
-            Line::from("  Theme can also be set via --theme CLI flag or config file."),
+            Line::from("  Ctrl+d        - Switch to inline diff view"),
+            Line::from("  Ctrl+s        - Switch to side-by-side diff view"),
+            Line::from("  Ctrl+l        - Switch to LLM advice pane"),
             Line::from(""),
             Line::from("Press ? or Esc to return to the previous pane"),
-        ];
+        ]);
 
         let text = ratatui::text::Text::from(help_text);
         let paragraph = Paragraph::new(text)

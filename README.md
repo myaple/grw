@@ -18,35 +18,37 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 
 ## Keybindings
 
-### File Navigation
+### General
+- `?` - Show/hide help
+- `Esc` - Exit help page
+- `Ctrl+h` - Toggle diff panel visibility
+- `Ctrl+o` - Toggle monitor pane visibility
+- `Ctrl+t` - Toggle light/dark theme
+- `q` / `Ctrl+c` - Quit application
+
+### Pane Modes
+- `Ctrl+d` - Switch to inline diff view
+- `Ctrl+s` - Switch to side-by-side diff view
+- `Ctrl+l` - Switch to LLM advice pane
+
+### File Tree
 - `Tab` / `g t` - Next file
 - `Shift+Tab` / `g T` - Previous file
 
-### Scrolling
-- `j` / `Down` / `Ctrl+e` - Scroll down one line
-- `k` / `Up` / `Ctrl+y` - Scroll up one line
-- `PageDown` - Scroll down one page
-- `PageUp` - Scroll up one page
-- `g g` - Go to top of diff
-- `Shift+G` - Go to bottom of diff
+### Diff View
+- `j` / `Down` / `Ctrl+e` - Scroll down
+- `k` / `Up` / `Ctrl+y` - Scroll up
+- `PageDown` - Page down
+- `PageUp` - Page up
+- `g g` - Go to top
+- `Shift+G` - Go to bottom
 
-### Diff View Modes
-- `Ctrl+S` - Switch to side-by-side diff view
-- `Ctrl+D` - Switch to single-pane diff view
+### Monitor
+- `Alt+j` / `Alt+Down` - Scroll down
+- `Alt+k` / `Alt+Up` - Scroll up
 
-### Panel Controls
-- `Ctrl+H` - Toggle diff panel visibility
-- `Ctrl+O` - Toggle monitor pane visibility
-
-### Theme Controls
-- `Ctrl+T` - Toggle between light and dark themes
-
-### Help and Interface
-- `?` - Show/hide help
-- `Esc` - Exit help page
-
-### Application Control
-- `q` / `Ctrl+C` - Quit application
+### LLM Advice
+- `j` / `k` - Scroll up/down
 
 ## Installation
 
@@ -81,6 +83,10 @@ grw
 - `--monitor-command <COMMAND>` - Command to run in monitor pane
 - `--monitor-interval <SECONDS>` - Interval in seconds for monitor command refresh
 - `--theme <THEME>` - Set initial theme (light or dark)
+- `--llm-provider <PROVIDER>` - LLM provider to use for advice (e.g., openai)
+- `--llm-model <MODEL>` - LLM model to use for advice
+- `--llm-api-key <KEY>` - API key for the LLM provider
+- `--llm-interval <SECONDS>` - Interval in seconds for LLM advice refresh
 
 ### Examples
 
@@ -135,10 +141,33 @@ Or a minimal configuration with only some settings:
 
 Configuration options:
 - `debug` (boolean): Enable debug logging (optional, default: false)
-- `no_diff` (boolean): Hide diff panel, show only file tree (optional, default: false)  
+- `no_diff` (boolean): Hide diff panel, show only file tree (optional, default: false)
 - `monitor_command` (string): Command to run in monitor pane (optional)
 - `monitor_interval` (number): Interval in seconds for monitor command refresh (optional)
 - `theme` (string): Initial theme setting (light or dark) (optional)
+- `llm` (object): LLM provider configuration (optional)
+  - `provider` (string): LLM provider (e.g., "openai")
+  - `model` (string): LLM model name
+  - `api_key` (string): API key for the LLM provider
+  - `interval` (number): Interval in seconds for LLM advice refresh
+
+A full configuration with LLM settings might look like this:
+
+```json
+{
+  "debug": false,
+  "no_diff": false,
+  "monitor_command": "git status --short",
+  "monitor_interval": 5,
+  "theme": "dark",
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-4",
+    "api_key": "your-api-key-here",
+    "interval": 120
+  }
+}
+```
 
 Command line arguments override configuration file settings.
 
