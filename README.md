@@ -49,6 +49,9 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 
 ### LLM Advice
 - `j` / `k` - Scroll up/down
+- `/` - Enter input mode to ask a question
+- `Enter` - Submit the question to the LLM
+- `Esc` - Exit input mode
 
 ## Installation
 

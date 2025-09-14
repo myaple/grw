@@ -144,3 +144,34 @@ Keep the response concise and focused on practical improvements.
         self.result_rx.try_recv().ok()
     }
 }
+
+pub async fn get_llm_advice(
+    history: Vec<chat_completion::ChatCompletionMessage>,
+) -> Result<String, String> {
+    let api_key = env::var("OPENAI_API_KEY");
+
+    if api_key.is_err() {
+        return Err(
+            "OpenAI API key not found. Please set it as an environment variable.".to_string(),
+        );
+    }
+
+    let mut client = OpenAIClient::builder()
+        .with_api_key(api_key.unwrap())
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let req = ChatCompletionRequest::new("gpt-3.5-turbo".to_string(), history);
+
+    match client.chat_completion(req).await {
+        Ok(response) => {
+            if let Some(choice) = response.choices.first() {
+                let content = choice.message.content.clone().unwrap_or_default();
+                Ok(content)
+            } else {
+                Err("No response from LLM".to_string())
+            }
+        }
+        Err(e) => Err(format!("LLM command execution failed: {}", e)),
+    }
+}
