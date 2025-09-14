@@ -361,12 +361,22 @@ impl GitWorker {
                         let file_path = self.path.join(new_file);
                         let diff_content = self.get_commit_diff_content(old_file, new_file);
 
+                        let mut additions = 0;
+                        let mut deletions = 0;
+                        for line in &diff_content {
+                            if line.starts_with('+') && !line.starts_with("+++") {
+                                additions += 1;
+                            } else if line.starts_with('-') && !line.starts_with("---") {
+                                deletions += 1;
+                            }
+                        }
+
                         files.push(FileDiff {
                             path: file_path,
                             status: Status::from_bits_truncate(4), // INDEX_MODIFIED
                             line_strings: diff_content,
-                            additions: 0, // Would need to parse diff to get accurate counts
-                            deletions: 0,
+                            additions,
+                            deletions,
                         });
                     }
                 }
