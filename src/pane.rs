@@ -27,6 +27,9 @@ pub trait Pane {
     fn handle_event(&mut self, event: &AppEvent) -> bool;
     fn visible(&self) -> bool;
     fn set_visible(&mut self, visible: bool);
+    fn as_advice_pane(&self) -> Option<&AdvicePane> {
+        None
+    }
     fn as_advice_pane_mut(&mut self) -> Option<&mut AdvicePane> {
         None
     }
@@ -719,6 +722,7 @@ impl Pane for HelpPane {
                     "  /               - Enter input mode",
                     "  Enter           - Submit question",
                     "  Esc             - Exit input mode",
+                    "  Ctrl+r          - Refresh LLM advice",
                 ],
             ),
         };
@@ -893,6 +897,7 @@ pub struct AdvicePane {
     input_cursor_position: usize,
     input_scroll_offset: usize,
     initial_data: Option<String>,
+    pub refresh_requested: bool,
 }
 
 impl AdvicePane {
@@ -900,7 +905,7 @@ impl AdvicePane {
         let (llm_tx, llm_rx) = mpsc::channel(1);
         Self {
             visible: false,
-            content: "Press 'Ctrl+l' to open the LLM advice pane. Press '/' to start typing.".to_string(),
+            content: "⏳ Loading LLM advice...".to_string(),
             scroll_offset: 0,
             input: String::new(),
             input_mode: false,
@@ -911,6 +916,7 @@ impl AdvicePane {
             input_cursor_position: 0,
             input_scroll_offset: 0,
             initial_data: None,
+            refresh_requested: false,
         }
     }
 
@@ -1088,6 +1094,13 @@ impl Pane for AdvicePane {
                         self.scroll_offset = content_lines.len().saturating_sub(1);
                         return true;
                     }
+                    KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        log::debug!("Ctrl+r pressed, requesting LLM advice refresh");
+                        self.content = "⏳ Loading LLM advice...".to_string();
+                        log::debug!("Set advice pane content to loading message");
+                        self.refresh_requested = true;
+                        return true;
+                    }
                     _ => return false,
                 }
             }
@@ -1098,30 +1111,6 @@ impl Pane for AdvicePane {
             self.scroll_offset = 0;
             self.conversation_history.clear();
             self.initial_data = Some(data.clone());
-
-            self.conversation_history.push(chat_completion::ChatCompletionMessage {
-                role: chat_completion::MessageRole::system,
-                content: chat_completion::Content::Text(SYSTEM_PROMPT.to_string()),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-            });
-            self.conversation_history.push(chat_completion::ChatCompletionMessage {
-                role: chat_completion::MessageRole::user,
-                content: chat_completion::Content::Text(data.clone()),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-            });
-
-            self.is_loading = true;
-            let history = self.conversation_history.clone();
-            let tx = self.llm_tx.clone();
-            tokio::spawn(async move {
-                let res = llm::get_llm_advice(history).await;
-                let _ = tx.send(res).await;
-            });
-
             return true;
         }
 
@@ -1134,6 +1123,10 @@ impl Pane for AdvicePane {
 
     fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
+    }
+
+    fn as_advice_pane(&self) -> Option<&AdvicePane> {
+        Some(self)
     }
 
     fn as_advice_pane_mut(&mut self) -> Option<&mut AdvicePane> {

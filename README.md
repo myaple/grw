@@ -52,6 +52,7 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 - `/` - Enter input mode to ask a question
 - `Enter` - Submit the question to the LLM
 - `Esc` - Exit input mode
+- `Ctrl+r` - Refresh LLM advice
 
 ## Installation
 
@@ -89,7 +90,6 @@ grw
 - `--llm-provider <PROVIDER>` - LLM provider to use for advice (e.g., openai)
 - `--llm-model <MODEL>` - LLM model to use for advice
 - `--llm-api-key <KEY>` - API key for the LLM provider
-- `--llm-interval <SECONDS>` - Interval in seconds for LLM advice refresh
 
 ### Examples
 
@@ -152,7 +152,6 @@ Configuration options:
   - `provider` (string): LLM provider (e.g., "openai")
   - `model` (string): LLM model name
   - `api_key` (string): API key for the LLM provider
-  - `interval` (number): Interval in seconds for LLM advice refresh
 
 A full configuration with LLM settings might look like this:
 
@@ -166,8 +165,7 @@ A full configuration with LLM settings might look like this:
   "llm": {
     "provider": "openai",
     "model": "gpt-4",
-    "api_key": "your-api-key-here",
-    "interval": 120
+    "api_key": "your-api-key-here"
   }
 }
 ```
