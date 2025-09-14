@@ -364,72 +364,37 @@ impl App {
                 .with_pane_mut(&PaneId::Help, |help_pane| {
                     help_pane.set_visible(false);
                 });
-            // Show the appropriate pane (diff or advice) based on which was active
-            let advice_visible = self
-                .pane_registry
-                .get_pane(&PaneId::Advice)
-                .is_some_and(|p| p.visible());
-
-            if advice_visible {
-                // Advice pane was active, restore it
-                self.pane_registry
-                    .with_pane_mut(&PaneId::Advice, |advice_pane| {
-                        advice_pane.set_visible(true);
-                    });
-                self.pane_registry
-                    .with_pane_mut(&PaneId::Diff, |diff_pane| {
-                        diff_pane.set_visible(false);
-                    });
-                self.pane_registry
-                    .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
-                        diff_pane.set_visible(false);
-                    });
-                self.current_information_pane = InformationPane::Advice;
-            } else if self.side_by_side_diff {
-                // Side-by-side diff was active
-                self.pane_registry
-                    .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
-                        diff_pane.set_visible(true);
-                    });
-                self.pane_registry
-                    .with_pane_mut(&PaneId::Diff, |diff_pane| {
-                        diff_pane.set_visible(false);
-                    });
-                self.pane_registry
-                    .with_pane_mut(&PaneId::Advice, |advice_pane| {
-                        advice_pane.set_visible(false);
-                    });
-                self.current_information_pane = InformationPane::SideBySideDiff;
-            } else {
-                // Inline diff was active
-                self.pane_registry
-                    .with_pane_mut(&PaneId::Diff, |diff_pane| {
-                        diff_pane.set_visible(true);
-                    });
-                self.pane_registry
-                    .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
-                        diff_pane.set_visible(false);
-                    });
-                self.pane_registry
-                    .with_pane_mut(&PaneId::Advice, |advice_pane| {
-                        advice_pane.set_visible(false);
-                    });
-                self.current_information_pane = InformationPane::Diff;
+            // Hide help pane and restore the last active pane
+            match self.last_active_pane {
+                ActivePane::FileTree => {
+                    // This case implies the information pane was not shown.
+                    // We can't restore this state perfectly without more info,
+                    // so we'll default to the standard diff view.
+                    self.set_single_pane_diff();
+                    self.current_information_pane = InformationPane::Diff;
+                }
+                ActivePane::Monitor => {
+                    // Same as above, monitor is on the left. Default to diff view on right.
+                    self.set_single_pane_diff();
+                    self.current_information_pane = InformationPane::Diff;
+                }
+                ActivePane::Diff => {
+                    self.set_single_pane_diff();
+                    self.current_information_pane = InformationPane::Diff;
+                }
+                ActivePane::SideBySideDiff => {
+                    self.set_side_by_side_diff();
+                    self.current_information_pane = InformationPane::SideBySideDiff;
+                }
+                ActivePane::Advice => {
+                    self.set_advice_pane();
+                    self.current_information_pane = InformationPane::Advice;
+                }
             }
         } else {
             // Determine which pane is active before showing help
-            if self
-                .pane_registry
-                .get_pane(&PaneId::Monitor)
-                .is_some_and(|p| p.visible())
-            {
-                self.last_active_pane = ActivePane::Monitor;
-            } else if self
-                .pane_registry
-                .get_pane(&PaneId::Diff)
-                .is_some_and(|p| p.visible())
-            {
-                self.last_active_pane = ActivePane::Diff;
+            if self.is_showing_advice_pane() {
+                self.last_active_pane = ActivePane::Advice;
             } else if self
                 .pane_registry
                 .get_pane(&PaneId::SideBySideDiff)
@@ -438,10 +403,12 @@ impl App {
                 self.last_active_pane = ActivePane::SideBySideDiff;
             } else if self
                 .pane_registry
-                .get_pane(&PaneId::Advice)
+                .get_pane(&PaneId::Diff)
                 .is_some_and(|p| p.visible())
             {
-                self.last_active_pane = ActivePane::Advice;
+                self.last_active_pane = ActivePane::Diff;
+            } else if self.is_showing_monitor_pane() {
+                self.last_active_pane = ActivePane::Monitor;
             } else {
                 self.last_active_pane = ActivePane::FileTree;
             }
