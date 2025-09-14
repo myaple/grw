@@ -905,7 +905,7 @@ impl AdvicePane {
         let (llm_tx, llm_rx) = mpsc::channel(1);
         Self {
             visible: false,
-            content: "Press 'Ctrl+l' to open the LLM advice pane. Press '/' to start typing.".to_string(),
+            content: "⏳ Loading LLM advice...".to_string(),
             scroll_offset: 0,
             input: String::new(),
             input_mode: false,
@@ -1096,6 +1096,8 @@ impl Pane for AdvicePane {
                     }
                     KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         log::debug!("Ctrl+r pressed, requesting LLM advice refresh");
+                        self.content = "⏳ Loading LLM advice...".to_string();
+                        log::debug!("Set advice pane content to loading message");
                         self.refresh_requested = true;
                         return true;
                     }
