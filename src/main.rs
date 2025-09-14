@@ -136,6 +136,9 @@ async fn main() -> Result<()> {
             app.update_monitor_timing(elapsed, has_run);
         }
 
+        // Poll for LLM advice responses
+        app.poll_llm_advice();
+
         // Update llm command if it exists
         if let Some(ref mut llm) = llm_command {
             if let Some(repo) = &git_repo.repo {
@@ -155,9 +158,6 @@ async fn main() -> Result<()> {
                 }
             }
         }
-
-        // Poll for LLM advice responses
-        app.poll_llm_advice();
 
         // Calculate monitor visible height before rendering
         let terminal_size = terminal.size()?;
@@ -267,6 +267,12 @@ async fn main() -> Result<()> {
 }
 
 fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
+    if app.is_showing_advice_pane() {
+        if app.forward_key_to_panes(key) {
+            return false;
+        }
+    }
+
     match key.code {
         KeyCode::Char('q') => {
             log::info!("User requested quit");

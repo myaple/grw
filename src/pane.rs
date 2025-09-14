@@ -869,6 +869,16 @@ impl Pane for StatusBarPane {
     }
 }
 
+const SYSTEM_PROMPT: &str = "You are acting in the role of a staff engineer providing a code review. \
+Please provide a brief review of the following code changes. \
+The review should focus on 'Maintainability' and any obvious safety bugs. \
+In the maintainability part, include 0-3 actionable suggestions to enhance code maintainability. \
+Don't be afraid to say that this code is okay at maintainability and not provide suggestions. \
+When you provide suggestions, give a brief before and after example using the code diffs below \
+to provide context and examples of what you mean. \
+Each suggestion should be clear, specific, and implementable. \
+Keep the response concise and focused on practical improvements.";
+
 // Advice Pane Implementation
 pub struct AdvicePane {
     visible: bool,
@@ -881,6 +891,8 @@ pub struct AdvicePane {
     llm_rx: mpsc::Receiver<Result<String, String>>,
     is_loading: bool,
     input_cursor_position: usize,
+    input_scroll_offset: usize,
+    initial_data: Option<String>,
 }
 
 impl AdvicePane {
@@ -897,6 +909,8 @@ impl AdvicePane {
             llm_rx,
             is_loading: false,
             input_cursor_position: 0,
+            input_scroll_offset: 0,
+            initial_data: None,
         }
     }
 
@@ -968,10 +982,11 @@ impl Pane for AdvicePane {
             let input_block = Block::default().borders(Borders::ALL).title("Input");
             let input_paragraph = Paragraph::new(&*self.input)
                 .style(Style::default().fg(theme.foreground_color()))
+                .scroll((0, self.input_scroll_offset as u16))
                 .block(input_block);
             f.render_widget(input_paragraph, chunks[1]);
             f.set_cursor(
-                chunks[1].x + self.input_cursor_position as u16 + 1,
+                chunks[1].x + (self.input_cursor_position - self.input_scroll_offset) as u16 + 1,
                 chunks[1].y + 1,
             );
         }
@@ -1000,6 +1015,7 @@ impl Pane for AdvicePane {
                         self.content.push_str("\n\n> ");
                         self.content.push_str(&prompt);
                         self.is_loading = true;
+                        self.input_mode = false;
 
                         let history = self.conversation_history.clone();
                         let tx = self.llm_tx.clone();
@@ -1036,6 +1052,24 @@ impl Pane for AdvicePane {
                  match key.code {
                     KeyCode::Char('/') => {
                         self.input_mode = true;
+                        if self.conversation_history.is_empty() {
+                            if let Some(data) = &self.initial_data {
+                                self.conversation_history.push(chat_completion::ChatCompletionMessage {
+                                    role: chat_completion::MessageRole::system,
+                                    content: chat_completion::Content::Text(SYSTEM_PROMPT.to_string()),
+                                    name: None,
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                });
+                                self.conversation_history.push(chat_completion::ChatCompletionMessage {
+                                    role: chat_completion::MessageRole::user,
+                                    content: chat_completion::Content::Text(data.clone()),
+                                    name: None,
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                });
+                            }
+                        }
                         return true;
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
@@ -1063,16 +1097,7 @@ impl Pane for AdvicePane {
             self.content = data.clone();
             self.scroll_offset = 0;
             self.conversation_history.clear();
-
-            const SYSTEM_PROMPT: &str = "You are acting in the role of a staff engineer providing a code review. \
-Please provide a brief review of the following code changes. \
-The review should focus on 'Maintainability' and any obvious safety bugs. \
-In the maintainability part, include 0-3 actionable suggestions to enhance code maintainability. \
-Don't be afraid to say that this code is okay at maintainability and not provide suggestions. \
-When you provide suggestions, give a brief before and after example using the code diffs below \
-to provide context and examples of what you mean. \
-Each suggestion should be clear, specific, and implementable. \
-Keep the response concise and focused on practical improvements.";
+            self.initial_data = Some(data.clone());
 
             self.conversation_history.push(chat_completion::ChatCompletionMessage {
                 role: chat_completion::MessageRole::system,
