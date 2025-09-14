@@ -928,6 +928,7 @@ impl AdvicePane {
                         tool_calls: None,
                         tool_call_id: None,
                     });
+                    self.scroll_offset = usize::MAX;
                 }
                 Err(e) => {
                     self.content.push_str("\n\nError: ");
