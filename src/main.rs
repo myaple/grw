@@ -156,6 +156,9 @@ async fn main() -> Result<()> {
             }
         }
 
+        // Poll for LLM advice responses
+        app.poll_llm_advice();
+
         // Calculate monitor visible height before rendering
         let terminal_size = terminal.size()?;
         let terminal_rect =

@@ -3,12 +3,16 @@ use std::collections::HashMap;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
-    layout::Rect,
-    style::Modifier,
-    widgets::{Block, Borders},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::Line,
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
+use tokio::sync::mpsc;
+use openai_api_rs::v1::chat_completion;
 
 use crate::git::GitRepo;
+use crate::llm;
 use crate::ui::{ActivePane, App, Theme};
 
 pub trait Pane {
@@ -23,6 +27,9 @@ pub trait Pane {
     fn handle_event(&mut self, event: &AppEvent) -> bool;
     fn visible(&self) -> bool;
     fn set_visible(&mut self, visible: bool);
+    fn as_advice_pane_mut(&mut self) -> Option<&mut AdvicePane> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -332,7 +339,6 @@ impl Pane for MonitorPane {
             text::{Line, Span},
             widgets::{Block, Borders, Paragraph, Wrap},
         };
-
         let theme = app.get_theme();
         let monitor_lines: Vec<_> = self.output.lines().skip(self.scroll_offset).collect();
         let visible_lines = area.height.saturating_sub(2) as usize;
@@ -555,17 +561,13 @@ impl Pane for SideBySideDiffPane {
                 }
 
                 let (left_content, right_content) = if let Some(stripped) = line.strip_prefix('+') {
-                    // Addition: empty on left, content on right
                     ("".to_string(), stripped.to_string())
                 } else if let Some(stripped) = line.strip_prefix('-') {
-                    // Deletion: content on left, empty on right
                     (stripped.to_string(), "".to_string())
                 } else if let Some(stripped) = line.strip_prefix(' ') {
-                    // Unchanged: same content on both sides
                     let content = stripped.to_string();
                     (content.clone(), content)
                 } else {
-                    // Header/context line: same content on both sides
                     (line.to_string(), line.to_string())
                 };
 
@@ -684,7 +686,6 @@ impl Pane for HelpPane {
             Line::from(""),
         ];
 
-        // Pane-specific hotkeys
         let (pane_title, pane_hotkeys) = match last_active_pane {
             ActivePane::FileTree => (
                 "File Tree",
@@ -711,7 +712,15 @@ impl Pane for HelpPane {
                     "  Shift+G           - Go to bottom",
                 ],
             ),
-            ActivePane::Advice => ("LLM Advice", vec!["  j / k           - Scroll up/down"]),
+            ActivePane::Advice => (
+                "LLM Advice",
+                vec![
+                    "  j / k           - Scroll up/down",
+                    "  /               - Enter input mode",
+                    "  Enter           - Submit question",
+                    "  Esc             - Exit input mode",
+                ],
+            ),
         };
 
         help_text.push(Line::from(Span::styled(
@@ -725,7 +734,6 @@ impl Pane for HelpPane {
         }
         help_text.push(Line::from(""));
 
-        // General hotkeys
         help_text.extend(vec![
             Line::from(Span::styled(
                 "General:",
@@ -816,11 +824,6 @@ impl Pane for StatusBarPane {
         area: Rect,
         git_repo: &GitRepo,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        use ratatui::{
-            style::Style,
-            widgets::{Block, Borders, Paragraph, Wrap},
-        };
-
         let theme = app.get_theme();
         let repo_name = &git_repo.repo_name;
         let branch = &git_repo.branch_name;
@@ -828,7 +831,6 @@ impl Pane for StatusBarPane {
         let (total_files, total_additions, total_deletions) = git_repo.total_stats;
         let view_mode = git_repo.current_view_mode;
 
-        // Get view mode display text
         let view_mode_text = match view_mode {
             crate::git::ViewMode::WorkingTree => "💼 Working Tree",
             crate::git::ViewMode::Staged => "📋 Staged Files",
@@ -836,7 +838,6 @@ impl Pane for StatusBarPane {
             crate::git::ViewMode::LastCommit => "📜 Last Commit",
         };
 
-        // Build the complete status text
         let status_text = format!(
             "📂 {repo_name} | 🌿 {branch} | {view_mode_text} | 🎯 {commit_sha} > {commit_summary} | 📊 {total_files} files (+{total_additions}/-{total_deletions})"
         );
@@ -856,7 +857,6 @@ impl Pane for StatusBarPane {
     }
 
     fn handle_event(&mut self, _event: &AppEvent) -> bool {
-        // Status bar doesn't handle events
         false
     }
 
@@ -874,14 +874,52 @@ pub struct AdvicePane {
     visible: bool,
     content: String,
     scroll_offset: usize,
+    input: String,
+    input_mode: bool,
+    conversation_history: Vec<chat_completion::ChatCompletionMessage>,
+    llm_tx: mpsc::Sender<Result<String, String>>,
+    llm_rx: mpsc::Receiver<Result<String, String>>,
+    is_loading: bool,
+    input_cursor_position: usize,
 }
 
 impl AdvicePane {
     pub fn new() -> Self {
+        let (llm_tx, llm_rx) = mpsc::channel(1);
         Self {
             visible: false,
-            content: "Waiting for advice...".to_string(),
+            content: "Press 'Ctrl+l' to open the LLM advice pane. Press '/' to start typing.".to_string(),
             scroll_offset: 0,
+            input: String::new(),
+            input_mode: false,
+            conversation_history: Vec::new(),
+            llm_tx,
+            llm_rx,
+            is_loading: false,
+            input_cursor_position: 0,
+        }
+    }
+
+    pub fn poll_llm_response(&mut self) {
+        if let Ok(result) = self.llm_rx.try_recv() {
+            self.is_loading = false;
+            match result {
+                Ok(response) => {
+                    self.content.push_str("\n\n");
+                    self.content.push_str(&response);
+                    self.conversation_history.push(chat_completion::ChatCompletionMessage {
+                        role: chat_completion::MessageRole::assistant,
+                        content: chat_completion::Content::Text(response),
+                        name: None,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    });
+                }
+                Err(e) => {
+                    self.content.push_str("\n\nError: ");
+                    self.content.push_str(&e);
+                }
+            }
         }
     }
 }
@@ -898,94 +936,171 @@ impl Pane for AdvicePane {
         area: Rect,
         _git_repo: &GitRepo,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        use ratatui::{
-            style::Style,
-            text::{Line, Span},
-            widgets::{Block, Borders, Paragraph, Wrap},
-        };
-
         let theme = app.get_theme();
-        let advice_lines: Vec<_> = self.content.lines().skip(self.scroll_offset).collect();
-        let visible_lines = area.height.saturating_sub(2) as usize;
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(
+                [
+                    Constraint::Min(0),
+                    Constraint::Length(if self.input_mode { 3 } else { 0 }),
+                ]
+                .as_ref(),
+            )
+            .split(area);
 
-        let display_lines: Vec<Line> = advice_lines
-            .iter()
-            .take(visible_lines)
-            .map(|line| {
-                Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default().fg(theme.foreground_color()),
-                ))
-            })
-            .collect();
+        let mut text_lines: Vec<Line> = self.content.lines().map(|l| Line::from(l.to_string())).collect();
+        if self.is_loading {
+            text_lines.push(Line::from("Loading..."));
+        }
 
-        let paragraph = Paragraph::new(display_lines)
+        let paragraph = Paragraph::new(text_lines)
             .block(
                 Block::default()
                     .title(self.title())
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme.border_color())),
             )
-            .wrap(Wrap { trim: false });
+            .wrap(Wrap { trim: true })
+            .scroll((self.scroll_offset as u16, 0));
+        f.render_widget(paragraph, chunks[0]);
 
-        f.render_widget(paragraph, area);
+        if self.input_mode {
+            let input_block = Block::default().borders(Borders::ALL).title("Input");
+            let input_paragraph = Paragraph::new(&*self.input)
+                .style(Style::default().fg(theme.foreground_color()))
+                .block(input_block);
+            f.render_widget(input_paragraph, chunks[1]);
+            f.set_cursor(
+                chunks[1].x + self.input_cursor_position as u16 + 1,
+                chunks[1].y + 1,
+            );
+        }
+
         Ok(())
     }
 
     fn handle_event(&mut self, event: &AppEvent) -> bool {
-        match event {
-            AppEvent::Key(key) => match key.code {
-                KeyCode::Char('j') if key.modifiers.is_empty() => {
-                    let content_lines: Vec<_> = self.content.lines().collect();
-                    let max_scroll = content_lines.len().saturating_sub(1);
-                    self.scroll_offset =
-                        std::cmp::min(self.scroll_offset.saturating_add(1), max_scroll);
-                    true
+        if let AppEvent::Key(key) = event {
+            if self.input_mode {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.input_mode = false;
+                        return true;
+                    }
+                    KeyCode::Enter => {
+                        let prompt = self.input.drain(..).collect::<String>();
+                        self.conversation_history.push(chat_completion::ChatCompletionMessage {
+                            role: chat_completion::MessageRole::user,
+                            content: chat_completion::Content::Text(prompt.clone()),
+                            name: None,
+                            tool_calls: None,
+                            tool_call_id: None,
+                        });
+
+                        self.content.push_str("\n\n> ");
+                        self.content.push_str(&prompt);
+                        self.is_loading = true;
+
+                        let history = self.conversation_history.clone();
+                        let tx = self.llm_tx.clone();
+                        tokio::spawn(async move {
+                            let res = llm::get_llm_advice(history).await;
+                            let _ = tx.send(res).await;
+                        });
+                        self.input_cursor_position = 0;
+                        return true;
+                    }
+                    KeyCode::Char(c) => {
+                        self.input.insert(self.input_cursor_position, c);
+                        self.input_cursor_position += 1;
+                        return true;
+                    }
+                    KeyCode::Backspace => {
+                        if self.input_cursor_position > 0 {
+                            self.input_cursor_position -= 1;
+                            self.input.remove(self.input_cursor_position);
+                        }
+                        return true;
+                    }
+                    KeyCode::Left => {
+                        self.input_cursor_position = self.input_cursor_position.saturating_sub(1);
+                        return true;
+                    }
+                    KeyCode::Right => {
+                        self.input_cursor_position = self.input_cursor_position.saturating_add(1).min(self.input.len());
+                        return true;
+                    }
+                    _ => return false,
                 }
-                KeyCode::Char('k') if key.modifiers.is_empty() => {
-                    self.scroll_offset = self.scroll_offset.saturating_sub(1);
-                    true
+            } else {
+                 match key.code {
+                    KeyCode::Char('/') => {
+                        self.input_mode = true;
+                        return true;
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        let content_lines: Vec<_> = self.content.lines().collect();
+                        let max_scroll = content_lines.len().saturating_sub(1);
+                        self.scroll_offset =
+                            std::cmp::min(self.scroll_offset.saturating_add(1), max_scroll);
+                        return true;
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                        return true;
+                    }
+                    KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                        let content_lines: Vec<_> = self.content.lines().collect();
+                        self.scroll_offset = content_lines.len().saturating_sub(1);
+                        return true;
+                    }
+                    _ => return false,
                 }
-                KeyCode::Down => {
-                    let content_lines: Vec<_> = self.content.lines().collect();
-                    let max_scroll = content_lines.len().saturating_sub(1);
-                    self.scroll_offset =
-                        std::cmp::min(self.scroll_offset.saturating_add(1), max_scroll);
-                    true
-                }
-                KeyCode::Up => {
-                    self.scroll_offset = self.scroll_offset.saturating_sub(1);
-                    true
-                }
-                KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                    // Go to bottom of content
-                    let content_lines: Vec<_> = self.content.lines().collect();
-                    self.scroll_offset = content_lines.len().saturating_sub(1);
-                    true
-                }
-                KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    // Scroll down by one line
-                    let content_lines: Vec<_> = self.content.lines().collect();
-                    let max_scroll = content_lines.len().saturating_sub(1);
-                    self.scroll_offset =
-                        std::cmp::min(self.scroll_offset.saturating_add(1), max_scroll);
-                    true
-                }
-                KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    // Scroll up by one line
-                    self.scroll_offset = self.scroll_offset.saturating_sub(1);
-                    true
-                }
-                _ => false,
-            },
-            AppEvent::DataUpdated(_, data) => {
-                self.content = data.clone();
-                // Reset scroll offset when content is updated
-                self.scroll_offset = 0;
-                true
             }
-            _ => false,
         }
+
+        if let AppEvent::DataUpdated(_, data) = event {
+            self.content = data.clone();
+            self.scroll_offset = 0;
+            self.conversation_history.clear();
+
+            const SYSTEM_PROMPT: &str = "You are acting in the role of a staff engineer providing a code review. \
+Please provide a brief review of the following code changes. \
+The review should focus on 'Maintainability' and any obvious safety bugs. \
+In the maintainability part, include 0-3 actionable suggestions to enhance code maintainability. \
+Don't be afraid to say that this code is okay at maintainability and not provide suggestions. \
+When you provide suggestions, give a brief before and after example using the code diffs below \
+to provide context and examples of what you mean. \
+Each suggestion should be clear, specific, and implementable. \
+Keep the response concise and focused on practical improvements.";
+
+            self.conversation_history.push(chat_completion::ChatCompletionMessage {
+                role: chat_completion::MessageRole::system,
+                content: chat_completion::Content::Text(SYSTEM_PROMPT.to_string()),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            });
+            self.conversation_history.push(chat_completion::ChatCompletionMessage {
+                role: chat_completion::MessageRole::user,
+                content: chat_completion::Content::Text(data.clone()),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            });
+
+            self.is_loading = true;
+            let history = self.conversation_history.clone();
+            let tx = self.llm_tx.clone();
+            tokio::spawn(async move {
+                let res = llm::get_llm_advice(history).await;
+                let _ = tx.send(res).await;
+            });
+
+            return true;
+        }
+
+        false
     }
 
     fn visible(&self) -> bool {
@@ -994,6 +1109,10 @@ impl Pane for AdvicePane {
 
     fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
+    }
+
+    fn as_advice_pane_mut(&mut self) -> Option<&mut AdvicePane> {
+        Some(self)
     }
 }
 

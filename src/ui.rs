@@ -768,6 +768,15 @@ impl App {
     pub fn get_last_active_pane(&self) -> ActivePane {
         self.last_active_pane
     }
+
+    pub fn poll_llm_advice(&mut self) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::Advice, |pane| {
+                if let Some(advice_pane) = pane.as_advice_pane_mut() {
+                    advice_pane.poll_llm_response();
+                }
+            });
+    }
 }
 
 #[allow(clippy::extra_unused_type_parameters)]
