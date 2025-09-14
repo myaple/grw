@@ -79,10 +79,7 @@ async fn main() -> Result<()> {
 
     let mut llm_command = if let Some(llm_config) = &final_config.llm {
         if llm_config.api_key.is_some() || env::var("OPENAI_API_KEY").is_ok() {
-            Some(AsyncLLMCommand::new(
-                llm_config.clone(),
-                llm_config.interval.unwrap_or(60),
-            ))
+            Some(AsyncLLMCommand::new(llm_config.clone()))
         } else {
             None
         }
@@ -250,11 +247,19 @@ async fn main() -> Result<()> {
             log::debug!("Slow render detected: {:?}", render_duration);
         }
 
-        if crossterm::event::poll(Duration::from_millis(10))?
-            && let Event::Key(key) = crossterm::event::read()?
-            && handle_key_event(key, &mut app)
-        {
-            break;
+        if crossterm::event::poll(Duration::from_millis(10))? {
+            if let Event::Key(key) = crossterm::event::read()? {
+                if handle_key_event(key, &mut app) {
+                    break;
+                }
+            }
+        }
+
+        if app.is_advice_refresh_requested() {
+            if let Some(llm) = &mut llm_command {
+                llm.refresh();
+            }
+            app.reset_advice_refresh_request();
         }
     }
 

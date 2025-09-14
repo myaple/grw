@@ -64,7 +64,6 @@ pub struct LlmConfig {
     pub provider: Option<LlmProvider>,
     pub model: Option<String>,
     pub api_key: Option<String>,
-    pub interval: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -112,7 +111,6 @@ impl Config {
                 provider: args.llm_provider.clone().or(llm_config.provider),
                 model: args.llm_model.clone().or(llm_config.model),
                 api_key: args.llm_api_key.clone().or(llm_config.api_key),
-                interval: args.llm_interval.or(llm_config.interval),
             }),
         }
     }
@@ -146,13 +144,6 @@ pub struct Args {
 
     #[arg(long, help = "API key for the LLM provider")]
     pub llm_api_key: Option<String>,
-
-    #[arg(
-        long,
-        help = "Interval in seconds for LLM advice refresh",
-        default_value = "60"
-    )]
-    pub llm_interval: Option<u64>,
 }
 
 #[cfg(test)]

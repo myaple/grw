@@ -777,6 +777,24 @@ impl App {
                 }
             });
     }
+
+    pub fn is_advice_refresh_requested(&self) -> bool {
+        if let Some(pane) = self.pane_registry.get_pane(&PaneId::Advice) {
+            if let Some(advice_pane) = pane.as_advice_pane() {
+                return advice_pane.refresh_requested;
+            }
+        }
+        false
+    }
+
+    pub fn reset_advice_refresh_request(&mut self) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::Advice, |pane| {
+                if let Some(advice_pane) = pane.as_advice_pane_mut() {
+                    advice_pane.refresh_requested = false;
+                }
+            });
+    }
 }
 
 #[allow(clippy::extra_unused_type_parameters)]
