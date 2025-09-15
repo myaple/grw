@@ -90,6 +90,7 @@ grw
 - `--llm-provider <PROVIDER>` - LLM provider to use for advice (e.g., openai)
 - `--llm-model <MODEL>` - LLM model to use for advice
 - `--llm-api-key <KEY>` - API key for the LLM provider
+- `--llm-prompt <PROMPT>` - Prompt to use for LLM advice
 
 ### Examples
 
@@ -152,6 +153,7 @@ Configuration options:
   - `provider` (string): LLM provider (e.g., "openai")
   - `model` (string): LLM model name
   - `api_key` (string): API key for the LLM provider
+  - `prompt` (string): Prompt to use for LLM advice
 
 A full configuration with LLM settings might look like this:
 

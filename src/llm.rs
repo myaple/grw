@@ -46,10 +46,8 @@ impl AsyncLLMCommand {
                             continue;
                         }
 
-                        if git_repo_rx.borrow().is_none() {
-                            if git_repo_rx.changed().await.is_err() {
-                                break;
-                            }
+                        if git_repo_rx.borrow().is_none() && git_repo_rx.changed().await.is_err() {
+                            break;
                         }
 
                         let git_repo = git_repo_rx.borrow().clone();
@@ -85,8 +83,7 @@ impl AsyncLLMCommand {
                         });
 
                         let prompt = format!(
-                            "{}\n\n{}\n\n```diff\n{}\n```",
-                            claude_instructions, prompt_template, diff
+                            "{claude_instructions}\n\n{prompt_template}\n\n```diff\n{diff}\n```"
                         );
 
                         let mut client = OpenAIClient::builder()
