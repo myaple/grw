@@ -64,6 +64,7 @@ pub struct LlmConfig {
     pub provider: Option<LlmProvider>,
     pub model: Option<String>,
     pub api_key: Option<String>,
+    pub prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -111,6 +112,7 @@ impl Config {
                 provider: args.llm_provider.clone().or(llm_config.provider),
                 model: args.llm_model.clone().or(llm_config.model),
                 api_key: args.llm_api_key.clone().or(llm_config.api_key),
+                prompt: args.llm_prompt.clone().or(llm_config.prompt),
             }),
         }
     }
@@ -144,6 +146,9 @@ pub struct Args {
 
     #[arg(long, help = "API key for the LLM provider")]
     pub llm_api_key: Option<String>,
+
+    #[arg(long, help = "Prompt to use for LLM advice")]
+    pub llm_prompt: Option<String>,
 }
 
 #[cfg(test)]
