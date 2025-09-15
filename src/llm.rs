@@ -4,6 +4,7 @@ use log::debug;
 use openai_api_rs::v1::api::OpenAIClient;
 use openai_api_rs::v1::chat_completion::{self, ChatCompletionRequest};
 use std::env;
+use std::fs;
 use tokio::sync::{mpsc, watch};
 
 #[derive(Debug)]
@@ -68,8 +69,11 @@ impl AsyncLLMCommand {
                             continue;
                         }
 
+                        let claude_instructions =
+                            fs::read_to_string("CLAUDE.md").unwrap_or_default();
+
                         let prompt = format!(
-                            "You are acting in the role of a staff engineer providing a code review. \
+                            "{}\n\nYou are acting in the role of a staff engineer providing a code review. \
     Please provide a brief review of the following code changes. \
     The review should focus on 'Maintainability' and any obvious safety bugs. \
     In the maintainability part, include 0-3 actionable suggestions to enhance code maintainability. \
@@ -82,7 +86,7 @@ impl AsyncLLMCommand {
     ```diff
     {}
     ```",
-                            diff
+                            claude_instructions, diff
                         );
 
                         let mut client = OpenAIClient::builder()
