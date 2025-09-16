@@ -939,10 +939,14 @@ impl AdvicePane {
                         tool_calls: None,
                         tool_call_id: None,
                     });
+                    let content_lines: Vec<_> = self.content.lines().collect();
+                    self.scroll_offset = content_lines.len().saturating_sub(1);
                 }
                 Err(e) => {
                     self.content.push_str("\n\nError: ");
                     self.content.push_str(&e);
+                    let content_lines: Vec<_> = self.content.lines().collect();
+                    self.scroll_offset = content_lines.len().saturating_sub(1);
                 }
             }
         }
@@ -1028,6 +1032,10 @@ impl Pane for AdvicePane {
                         self.is_loading = true;
                         self.input_mode = false;
 
+                        // Scroll to bottom
+                        let content_lines: Vec<_> = self.content.lines().collect();
+                        self.scroll_offset = content_lines.len().saturating_sub(1);
+
                         if let Some(llm_client) = self.llm_client.as_ref() {
                             let history = self.conversation_history.clone();
                             let tx = self.llm_tx.clone();
@@ -1105,6 +1113,7 @@ impl Pane for AdvicePane {
                     KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         log::debug!("Ctrl+r pressed, requesting LLM advice refresh");
                         self.content = "⏳ Loading LLM advice...".to_string();
+                        self.scroll_offset = 0;
                         log::debug!("Set advice pane content to loading message");
                         self.refresh_requested = true;
                         return true;
