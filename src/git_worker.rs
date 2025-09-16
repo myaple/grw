@@ -80,7 +80,7 @@ impl GitWorker {
         let mut new_staged_files = Vec::new();
         let mut new_dirty_directory_files = Vec::new();
         let status_count = statuses.len();
-        debug!("Found {} total status entries", status_count);
+        debug!("Found {status_count} total status entries");
 
         for status in statuses.iter() {
             let path = status.path().unwrap_or("");
@@ -119,7 +119,7 @@ impl GitWorker {
             // Dirty directory detection (files that would be shown by git diff --name-only)
             if self.is_file_in_dirty_directory(&file_path) {
                 let diff = self.get_dirty_directory_diff(&file_path);
-                debug!("Processing dirty directory file: {}", path);
+                debug!("Processing dirty directory file: {path}");
                 new_dirty_directory_files.push(diff);
             }
         }
@@ -153,7 +153,7 @@ impl GitWorker {
     }
 
     fn get_file_diff(&self, path: &Path, status: Status) -> FileDiff {
-        debug!("Computing diff for file: {:?} (status: {:?})", path, status);
+        debug!("Computing diff for file: {path:?} (status: {status:?})");
 
         let mut line_strings = Vec::new();
         let mut additions = 0;
@@ -162,7 +162,7 @@ impl GitWorker {
         if status.is_wt_new() {
             if let Ok(content) = std::fs::read_to_string(path) {
                 let line_count = content.lines().count();
-                debug!("New file has {} lines", line_count);
+                debug!("New file has {line_count} lines");
                 for line in content.lines() {
                     line_strings.push(format!("+ {line}"));
                     additions += 1;
@@ -182,7 +182,7 @@ impl GitWorker {
                     }
                     line_strings.push(line.to_string());
                 }
-                debug!("Modified file: +{} -{}", additions, deletions);
+                debug!("Modified file: +{additions} -{deletions}");
             }
         } else if status.is_wt_deleted()
             && let Ok(output) = std::process::Command::new("git")
@@ -196,7 +196,7 @@ impl GitWorker {
                 }
                 line_strings.push(line.to_string());
             }
-            debug!("Deleted file: -{} lines", deletions);
+            debug!("Deleted file: -{deletions} lines");
         }
 
         FileDiff {
@@ -210,8 +210,7 @@ impl GitWorker {
 
     fn get_staged_file_diff(&self, path: &Path, status: Status) -> FileDiff {
         debug!(
-            "Computing staged diff for file: {:?} (status: {:?})",
-            path, status
+            "Computing staged diff for file: {path:?} (status: {status:?})"
         );
 
         let mut line_strings = Vec::new();
@@ -237,7 +236,7 @@ impl GitWorker {
                 }
                 line_strings.push(line.to_string());
             }
-            debug!("Staged file: +{} -{}", additions, deletions);
+            debug!("Staged file: +{additions} -{deletions}");
         }
 
         FileDiff {
@@ -250,7 +249,7 @@ impl GitWorker {
     }
 
     fn get_dirty_directory_diff(&self, path: &Path) -> FileDiff {
-        debug!("Computing dirty directory diff for file: {:?}", path);
+        debug!("Computing dirty directory diff for file: {path:?}");
 
         let mut line_strings = Vec::new();
         let mut additions = 0;
@@ -270,7 +269,7 @@ impl GitWorker {
                 }
                 line_strings.push(line.to_string());
             }
-            debug!("Dirty directory file: +{} -{}", additions, deletions);
+            debug!("Dirty directory file: +{additions} -{deletions}");
         }
 
         FileDiff {

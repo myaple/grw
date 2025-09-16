@@ -5,7 +5,66 @@ use openai_api_rs::v1::api::OpenAIClient;
 use openai_api_rs::v1::chat_completion::{self, ChatCompletionRequest};
 use std::env;
 use std::fs;
-use tokio::sync::{mpsc, watch};
+use std::sync::Arc;
+use tokio::sync::{mpsc, watch, Mutex};
+
+const DEFAULT_MODEL: &str = "gpt-5-mini";
+
+#[derive(Clone)]
+pub struct LlmClient {
+    client: Arc<Mutex<OpenAIClient>>,
+    config: LlmConfig,
+}
+
+impl LlmClient {
+    pub fn new(config: LlmConfig) -> Result<Self, String> {
+        let api_key = config
+            .api_key
+            .clone()
+            .or_else(|| env::var("OPENAI_API_KEY").ok())
+            .ok_or_else(|| {
+                "OpenAI API key not found. Please set it in the config file or as an environment variable."
+                    .to_string()
+            })?;
+
+        let mut builder = OpenAIClient::builder().with_api_key(api_key);
+
+        if let Some(base_url) = &config.base_url {
+            builder = builder.with_endpoint(base_url);
+        }
+
+        let client = Arc::new(Mutex::new(builder.build().map_err(|e| e.to_string())?));
+
+        Ok(Self { client, config })
+    }
+
+    pub async fn get_llm_advice(
+        &self,
+        history: Vec<chat_completion::ChatCompletionMessage>,
+    ) -> Result<String, String> {
+        let model = self
+            .config
+            .model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+
+        let req = ChatCompletionRequest::new(model, history);
+
+        let mut client = self.client.lock().await;
+
+        match client.chat_completion(req).await {
+            Ok(response) => {
+                if let Some(choice) = response.choices.first() {
+                    let content = choice.message.content.clone().unwrap_or_default();
+                    Ok(content)
+                } else {
+                    Err("No response from LLM".to_string())
+                }
+            }
+            Err(e) => Err(format!("LLM command execution failed: {e}")),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct AsyncLLMCommand {
@@ -22,7 +81,7 @@ pub enum LLMResult {
 }
 
 impl AsyncLLMCommand {
-    pub fn new(config: LlmConfig) -> Self {
+    pub fn new(llm_client: LlmClient) -> Self {
         let (result_tx, result_rx) = mpsc::channel(32);
         let (git_repo_tx, mut git_repo_rx) = watch::channel(None);
         let (refresh_tx, mut refresh_rx) = mpsc::channel(1);
@@ -32,19 +91,6 @@ impl AsyncLLMCommand {
                 tokio::select! {
                     Some(()) = refresh_rx.recv() => {
                         debug!("Running async LLM command");
-
-                        let api_key = config
-                            .api_key
-                            .clone()
-                            .or_else(|| env::var("OPENAI_API_KEY").ok());
-
-                        if api_key.is_none() {
-                            let error_str = "OpenAI API key not found. Please set it in the config file or as an environment variable.".to_string();
-                            if result_tx.send(LLMResult::Error(error_str)).await.is_err() {
-                                break;
-                            }
-                            continue;
-                        }
 
                         if git_repo_rx.borrow().is_none() && git_repo_rx.changed().await.is_err() {
                             break;
@@ -70,7 +116,7 @@ impl AsyncLLMCommand {
                         let claude_instructions =
                             fs::read_to_string("CLAUDE.md").unwrap_or_default();
 
-                        let prompt_template = config.prompt.clone().unwrap_or_else(|| {
+                        let prompt_template = llm_client.config.prompt.clone().unwrap_or_else(|| {
                             "You are acting in the role of a staff engineer providing a code review. \
     Please provide a brief review of the following code changes. \
     The review should focus on 'Maintainability' and any obvious safety bugs. \
@@ -86,37 +132,27 @@ impl AsyncLLMCommand {
                             "{claude_instructions}\n\n{prompt_template}\n\n```diff\n{diff}\n```"
                         );
 
-                        let mut client = OpenAIClient::builder()
-                            .with_api_key(api_key.unwrap())
-                            .build()
-                            .unwrap();
-                        let req = ChatCompletionRequest::new(
-                            config.model.clone().unwrap_or("gpt-3.5-turbo".to_string()),
-                            vec![chat_completion::ChatCompletionMessage {
-                                role: chat_completion::MessageRole::user,
-                                content: chat_completion::Content::Text(prompt),
-                                name: None,
-                                tool_calls: None,
-                                tool_call_id: None,
-                            }],
-                        );
+                        let history = vec![chat_completion::ChatCompletionMessage {
+                            role: chat_completion::MessageRole::user,
+                            content: chat_completion::Content::Text(prompt),
+                            name: None,
+                            tool_calls: None,
+                            tool_call_id: None,
+                        }];
 
-                        match client.chat_completion(req).await {
-                            Ok(response) => {
-                                if let Some(choice) = response.choices.first() {
-                                    let content = choice.message.content.clone().unwrap_or_default();
-                                    if result_tx.send(LLMResult::Success(content)).await.is_err() {
-                                        break;
-                                    }
-                                    debug!("Async LLM command completed successfully");
+                        match llm_client.get_llm_advice(history).await {
+                            Ok(content) => {
+                                if result_tx.send(LLMResult::Success(content)).await.is_err() {
+                                    break;
                                 }
+                                debug!("Async LLM command completed successfully");
                             }
                             Err(e) => {
-                                let error_str = format!("LLM command execution failed: {}", e);
+                                let error_str = format!("LLM command execution failed: {e}");
                                 if result_tx.send(LLMResult::Error(error_str)).await.is_err() {
                                     break;
                                 }
-                                debug!("Async LLM command execution error: {}", e);
+                                debug!("Async LLM command execution error: {e}");
                             }
                         }
                     },
@@ -139,36 +175,5 @@ impl AsyncLLMCommand {
 
     pub fn try_get_result(&mut self) -> Option<LLMResult> {
         self.result_rx.try_recv().ok()
-    }
-}
-
-pub async fn get_llm_advice(
-    history: Vec<chat_completion::ChatCompletionMessage>,
-) -> Result<String, String> {
-    let api_key = env::var("OPENAI_API_KEY");
-
-    if api_key.is_err() {
-        return Err(
-            "OpenAI API key not found. Please set it as an environment variable.".to_string(),
-        );
-    }
-
-    let mut client = OpenAIClient::builder()
-        .with_api_key(api_key.unwrap())
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let req = ChatCompletionRequest::new("gpt-3.5-turbo".to_string(), history);
-
-    match client.chat_completion(req).await {
-        Ok(response) => {
-            if let Some(choice) = response.choices.first() {
-                let content = choice.message.content.clone().unwrap_or_default();
-                Ok(content)
-            } else {
-                Err("No response from LLM".to_string())
-            }
-        }
-        Err(e) => Err(format!("LLM command execution failed: {}", e)),
     }
 }

@@ -28,7 +28,7 @@ impl FromStr for Theme {
         match s.to_lowercase().as_str() {
             "dark" => Ok(Theme::Dark),
             "light" => Ok(Theme::Light),
-            _ => Err(format!("Invalid theme: {}. Must be 'dark' or 'light'", s)),
+            _ => Err(format!("Invalid theme: {s}. Must be 'dark' or 'light'")),
         }
     }
 }
@@ -54,7 +54,7 @@ impl FromStr for LlmProvider {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "openai" => Ok(LlmProvider::OpenAI),
-            _ => Err(format!("Invalid LLM provider: {}", s)),
+            _ => Err(format!("Invalid LLM provider: {s}")),
         }
     }
 }
@@ -64,6 +64,7 @@ pub struct LlmConfig {
     pub provider: Option<LlmProvider>,
     pub model: Option<String>,
     pub api_key: Option<String>,
+    pub base_url: Option<String>,
     pub prompt: Option<String>,
 }
 
@@ -112,6 +113,7 @@ impl Config {
                 provider: args.llm_provider.clone().or(llm_config.provider),
                 model: args.llm_model.clone().or(llm_config.model),
                 api_key: args.llm_api_key.clone().or(llm_config.api_key),
+                base_url: args.llm_base_url.clone().or(llm_config.base_url),
                 prompt: args.llm_prompt.clone().or(llm_config.prompt),
             }),
         }
@@ -147,6 +149,9 @@ pub struct Args {
     #[arg(long, help = "API key for the LLM provider")]
     pub llm_api_key: Option<String>,
 
+    #[arg(long, help = "Base URL for the LLM provider")]
+    pub llm_base_url: Option<String>,
+
     #[arg(long, help = "Prompt to use for LLM advice")]
     pub llm_prompt: Option<String>,
 }
@@ -178,12 +183,14 @@ mod tests {
 
     #[test]
     fn test_merge_with_args() {
-        let mut config = Config::default();
-        config.debug = Some(true);
-        config.monitor_command = Some("echo test".to_string());
-        config.theme = Some(Theme::Light);
+        let config = Config {
+            debug: Some(true),
+            monitor_command: Some("echo test".to_string()),
+            theme: Some(Theme::Light),
+            ..Default::default()
+        };
 
-        let args = Args::parse_from(&[
+        let args = Args::parse_from([
             "grw",
             "--debug", // CLI args take precedence
             "--no-diff",
@@ -204,10 +211,12 @@ mod tests {
 
     #[test]
     fn test_merge_with_args_theme_from_config() {
-        let mut config = Config::default();
-        config.theme = Some(Theme::Light);
+        let config = Config {
+            theme: Some(Theme::Light),
+            ..Default::default()
+        };
 
-        let args = Args::parse_from(&["grw"]); // No theme specified
+        let args = Args::parse_from(["grw"]); // No theme specified
 
         let merged = config.merge_with_args(&args);
 
@@ -216,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_args_parsing() {
-        let args = Args::parse_from(&[
+        let args = Args::parse_from([
             "grw",
             "--debug",
             "--no-diff",
@@ -237,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_args_parsing_minimal() {
-        let args = Args::parse_from(&["grw"]);
+        let args = Args::parse_from(["grw"]);
 
         assert!(!args.debug);
         assert!(!args.no_diff);
@@ -263,16 +272,16 @@ mod tests {
 
     #[test]
     fn test_args_parsing_with_theme() {
-        let args = Args::parse_from(&["grw", "--theme", "light"]);
+        let args = Args::parse_from(["grw", "--theme", "light"]);
         assert_eq!(args.theme, Some(Theme::Light));
 
-        let args = Args::parse_from(&["grw", "--theme", "dark"]);
+        let args = Args::parse_from(["grw", "--theme", "dark"]);
         assert_eq!(args.theme, Some(Theme::Dark));
     }
 
     #[test]
     fn test_args_parsing_invalid_theme() {
-        let result = Args::try_parse_from(&["grw", "--theme", "invalid"]);
+        let result = Args::try_parse_from(["grw", "--theme", "invalid"]);
         assert!(result.is_err(), "Should fail to parse invalid theme");
     }
 

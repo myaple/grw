@@ -33,7 +33,7 @@ impl AsyncMonitorCommand {
                 };
 
                 if should_run {
-                    debug!("Running async monitor command: {}", command_clone);
+                    debug!("Running async monitor command: {command_clone}");
 
                     let result = if cfg!(target_os = "windows") {
                         AsyncCommand::new("cmd")
@@ -54,9 +54,9 @@ impl AsyncMonitorCommand {
 
                             if output.status.success() {
                                 let output_str = if stderr.is_empty() {
-                                    format!("$ {}\n{}", command_clone, stdout)
+                                    format!("$ {command_clone}\n{stdout}")
                                 } else {
-                                    format!("$ {}\n{}\n{}", command_clone, stdout, stderr)
+                                    format!("$ {command_clone}\n{stdout}\n{stderr}")
                                 };
 
                                 if result_tx
@@ -69,8 +69,7 @@ impl AsyncMonitorCommand {
                                 debug!("Async monitor command completed successfully");
                             } else {
                                 let error_str = format!(
-                                    "$ {}\nCommand failed: {}\n{}",
-                                    command_clone, stderr, stdout
+                                    "$ {command_clone}\nCommand failed: {stderr}\n{stdout}"
                                 );
 
                                 if result_tx
@@ -80,12 +79,12 @@ impl AsyncMonitorCommand {
                                 {
                                     break; // Channel closed, stop the task
                                 }
-                                debug!("Async monitor command failed: {}", stderr);
+                                debug!("Async monitor command failed: {stderr}");
                             }
                         }
                         Err(e) => {
                             let error_str =
-                                format!("$ {}\nCommand execution failed: {}", command_clone, e);
+                                format!("$ {command_clone}\nCommand execution failed: {e}");
 
                             if result_tx
                                 .send(MonitorResult::Error(error_str))
@@ -94,7 +93,7 @@ impl AsyncMonitorCommand {
                             {
                                 break; // Channel closed, stop the task
                             }
-                            debug!("Async monitor command execution error: {}", e);
+                            debug!("Async monitor command execution error: {e}");
                         }
                     }
 

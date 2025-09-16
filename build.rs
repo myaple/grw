@@ -23,5 +23,5 @@ fn main() {
         "unknown".to_string()
     };
 
-    writeln!(&mut f, "pub const GIT_SHA: &str = \"{}\";", git_sha).unwrap();
+    writeln!(&mut f, "pub const GIT_SHA: &str = \"{git_sha}\";").unwrap();
 }

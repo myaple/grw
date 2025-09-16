@@ -37,7 +37,7 @@ pub fn init_logging(debug: bool) -> Result<()> {
         })
         .init();
 
-    log::info!("Logging initialized with level: {}", log_level);
+    log::info!("Logging initialized with level: {log_level}");
     Ok(())
 }
 
