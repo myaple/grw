@@ -27,8 +27,8 @@ use std::env;
 
 use config::{Args, Config};
 use git::AsyncGitRepo;
-use llm::AsyncLLMCommand;
-use log::{debug, error};
+use llm::{AsyncLLMCommand, LlmClient};
+use log::{debug, error, info};
 use monitor::AsyncMonitorCommand;
 use ui::App;
 
@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     if args.version {
-        println!("grw version 0.1.0 (git: {})", GIT_SHA);
+        println!("grw version 0.1.0 (git: {GIT_SHA})");
         return Ok(());
     }
 
@@ -50,9 +50,25 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
 
     let repo_path = std::env::current_dir()?;
-    log::info!("Starting grw in directory: {:?}", repo_path);
+    log::info!("Starting grw in directory: {repo_path:?}");
     log::debug!("Debug mode enabled");
     let mut git_repo = AsyncGitRepo::new(repo_path, 500)?;
+
+    let llm_client = if let Some(llm_config) = &final_config.llm {
+        if llm_config.api_key.is_some() || env::var("OPENAI_API_KEY").is_ok() {
+            match LlmClient::new(llm_config.clone()) {
+                Ok(client) => Some(client),
+                Err(e) => {
+                    info!("Failed to create LLM client: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let mut app = App::new_with_config(
         !final_config.no_diff.unwrap_or(false),
@@ -60,6 +76,7 @@ async fn main() -> Result<()> {
             config::Theme::Dark => ui::Theme::Dark,
             config::Theme::Light => ui::Theme::Light,
         },
+        llm_client.clone(),
     );
 
     let mut monitor_command = if let Some(cmd) = &final_config.monitor_command {
@@ -77,15 +94,11 @@ async fn main() -> Result<()> {
         app.set_monitor_command_configured(true);
     }
 
-    let mut llm_command = if let Some(llm_config) = &final_config.llm {
-        if llm_config.api_key.is_some() || env::var("OPENAI_API_KEY").is_ok() {
-            let command = AsyncLLMCommand::new(llm_config.clone());
-            log::debug!("Triggering initial LLM advice refresh");
-            command.refresh();
-            Some(command)
-        } else {
-            None
-        }
+    let mut llm_command = if let Some(client) = &llm_client {
+        let command = AsyncLLMCommand::new(client.clone());
+        log::debug!("Triggering initial LLM advice refresh");
+        command.refresh();
+        Some(command)
     } else {
         None
     };
@@ -111,7 +124,7 @@ async fn main() -> Result<()> {
                     git_repo.repo = Some(repo);
                 }
                 git::GitWorkerResult::Error(e) => {
-                    error!("Git worker error: {}", e);
+                    error!("Git worker error: {e}");
                 }
             }
         }
@@ -247,7 +260,7 @@ async fn main() -> Result<()> {
         let render_duration = render_start.elapsed();
 
         if render_duration.as_millis() > 10 {
-            log::debug!("Slow render detected: {:?}", render_duration);
+            log::debug!("Slow render detected: {render_duration:?}");
         }
 
         if crossterm::event::poll(Duration::from_millis(10))? {
@@ -275,11 +288,10 @@ async fn main() -> Result<()> {
 }
 
 fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
-    if app.is_showing_advice_pane() {
-        if app.forward_key_to_panes(key) {
+    if app.is_showing_advice_pane()
+        && app.forward_key_to_panes(key) {
             return false;
         }
-    }
 
     match key.code {
         KeyCode::Char('q') => {

@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use openai_api_rs::v1::chat_completion;
 
 use crate::git::GitRepo;
-use crate::llm;
+use crate::llm::LlmClient;
 use crate::ui::{ActivePane, App, Theme};
 
 pub trait Pane {
@@ -69,24 +69,27 @@ impl std::fmt::Debug for PaneRegistry {
 }
 
 impl PaneRegistry {
-    pub fn new(theme: Theme) -> Self {
+    pub fn new(theme: Theme, llm_client: LlmClient) -> Self {
         let mut registry = Self {
             panes: HashMap::new(),
             theme,
         };
 
-        registry.register_default_panes();
+        registry.register_default_panes(llm_client);
         registry
     }
 
-    fn register_default_panes(&mut self) {
+    fn register_default_panes(&mut self, llm_client: LlmClient) {
         self.register_pane(PaneId::FileTree, Box::new(FileTreePane::new()));
         self.register_pane(PaneId::Monitor, Box::new(MonitorPane::new()));
         self.register_pane(PaneId::Diff, Box::new(DiffPane::new()));
         self.register_pane(PaneId::SideBySideDiff, Box::new(SideBySideDiffPane::new()));
         self.register_pane(PaneId::Help, Box::new(HelpPane::new()));
         self.register_pane(PaneId::StatusBar, Box::new(StatusBarPane::new()));
-        self.register_pane(PaneId::Advice, Box::new(AdvicePane::new()));
+        self.register_pane(
+            PaneId::Advice,
+            Box::new(AdvicePane::new(Some(llm_client))),
+        );
     }
 
     pub fn register_pane(&mut self, id: PaneId, pane: Box<dyn Pane>) {
@@ -116,7 +119,7 @@ impl PaneRegistry {
             && pane.visible()
             && let Err(e) = pane.render(f, app, area, git_repo)
         {
-            log::error!("Error rendering pane {:?}: {}", pane_id, e);
+            log::error!("Error rendering pane {pane_id:?}: {e}");
         }
     }
 
@@ -363,7 +366,7 @@ impl Pane for MonitorPane {
             "Monitor ⏳ loading...".to_string()
         } else if let Some(elapsed) = app.get_monitor_elapsed_time() {
             let time_str = app.format_elapsed_time(elapsed);
-            format!("Monitor ⏱️ {} ago", time_str)
+            format!("Monitor ⏱️ {time_str} ago")
         } else {
             "Monitor Output".to_string()
         };
@@ -728,7 +731,7 @@ impl Pane for HelpPane {
         };
 
         help_text.push(Line::from(Span::styled(
-            format!("{} Hotkeys:", pane_title),
+            format!("{pane_title} Hotkeys:"),
             Style::default()
                 .fg(theme.primary_color())
                 .add_modifier(Modifier::BOLD),
@@ -891,6 +894,7 @@ pub struct AdvicePane {
     input: String,
     input_mode: bool,
     conversation_history: Vec<chat_completion::ChatCompletionMessage>,
+    llm_client: Option<LlmClient>,
     llm_tx: mpsc::Sender<Result<String, String>>,
     llm_rx: mpsc::Receiver<Result<String, String>>,
     is_loading: bool,
@@ -901,7 +905,7 @@ pub struct AdvicePane {
 }
 
 impl AdvicePane {
-    pub fn new() -> Self {
+    pub fn new(llm_client: Option<LlmClient>) -> Self {
         let (llm_tx, llm_rx) = mpsc::channel(1);
         Self {
             visible: false,
@@ -910,6 +914,7 @@ impl AdvicePane {
             input: String::new(),
             input_mode: false,
             conversation_history: Vec::new(),
+            llm_client,
             llm_tx,
             llm_rx,
             is_loading: false,
@@ -991,10 +996,10 @@ impl Pane for AdvicePane {
                 .scroll((0, self.input_scroll_offset as u16))
                 .block(input_block);
             f.render_widget(input_paragraph, chunks[1]);
-            f.set_cursor(
+            f.set_cursor_position(ratatui::layout::Position::new(
                 chunks[1].x + (self.input_cursor_position - self.input_scroll_offset) as u16 + 1,
                 chunks[1].y + 1,
-            );
+            ));
         }
 
         Ok(())
@@ -1023,12 +1028,15 @@ impl Pane for AdvicePane {
                         self.is_loading = true;
                         self.input_mode = false;
 
-                        let history = self.conversation_history.clone();
-                        let tx = self.llm_tx.clone();
-                        tokio::spawn(async move {
-                            let res = llm::get_llm_advice(history).await;
-                            let _ = tx.send(res).await;
-                        });
+                        if let Some(llm_client) = self.llm_client.as_ref() {
+                            let history = self.conversation_history.clone();
+                            let tx = self.llm_tx.clone();
+                            let client = llm_client.clone();
+                            tokio::spawn(async move {
+                                let res = client.get_llm_advice(history).await;
+                                let _ = tx.send(res).await;
+                            });
+                        }
                         self.input_cursor_position = 0;
                         return true;
                     }
@@ -1134,13 +1142,25 @@ impl Pane for AdvicePane {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::LlmConfig;
+    use std::env;
+
+    fn create_test_pane_registry() -> PaneRegistry {
+        let mut llm_config = LlmConfig::default();
+        if env::var("OPENAI_API_KEY").is_err() {
+            llm_config.api_key = Some("dummy_key".to_string());
+        }
+        let llm_client = LlmClient::new(llm_config).unwrap();
+        PaneRegistry::new(Theme::Dark, llm_client)
+    }
 
     #[test]
     fn test_pane_registry_creation() {
-        let registry = PaneRegistry::new(Theme::Dark);
+        let registry = create_test_pane_registry();
         assert_eq!(registry.panes.len(), 7); // Default panes + advice
         assert!(registry.get_pane(&PaneId::FileTree).is_some());
         assert!(registry.get_pane(&PaneId::Monitor).is_some());
@@ -1150,7 +1170,7 @@ mod tests {
 
     #[test]
     fn test_pane_visibility() {
-        let registry = PaneRegistry::new(Theme::Dark);
+        let registry = create_test_pane_registry();
 
         let file_tree = registry.get_pane(&PaneId::FileTree).unwrap();
         assert!(file_tree.visible());
