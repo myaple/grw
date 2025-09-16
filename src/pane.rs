@@ -939,10 +939,14 @@ impl AdvicePane {
                         tool_calls: None,
                         tool_call_id: None,
                     });
+                    let content_lines: Vec<_> = self.content.lines().collect();
+                    self.scroll_offset = content_lines.len().saturating_sub(1);
                 }
                 Err(e) => {
                     self.content.push_str("\n\nError: ");
                     self.content.push_str(&e);
+                    let content_lines: Vec<_> = self.content.lines().collect();
+                    self.scroll_offset = content_lines.len().saturating_sub(1);
                 }
             }
         }
@@ -1027,6 +1031,10 @@ impl Pane for AdvicePane {
                         self.content.push_str(&prompt);
                         self.is_loading = true;
                         self.input_mode = false;
+
+                        // Scroll to bottom
+                        let content_lines: Vec<_> = self.content.lines().collect();
+                        self.scroll_offset = content_lines.len().saturating_sub(1);
 
                         if let Some(llm_client) = self.llm_client.as_ref() {
                             let history = self.conversation_history.clone();
