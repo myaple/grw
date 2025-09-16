@@ -4,8 +4,6 @@ use ratatui::{
     Terminal,
     backend::CrosstermBackend,
     crossterm::{
-        event::DisableMouseCapture,
-        event::EnableMouseCapture,
         event::{Event, KeyCode, KeyEvent, KeyModifiers},
         execute,
         terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -108,7 +106,7 @@ async fn main() -> Result<()> {
     let _ = terminal.clear();
 
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(io::stdout(), EnterAlternateScreen)?;
 
     loop {
         // Poll for git updates
@@ -264,16 +262,10 @@ async fn main() -> Result<()> {
         }
 
         if crossterm::event::poll(Duration::from_millis(10))? {
-            match crossterm::event::read()? {
-                Event::Key(key) => {
-                    if handle_key_event(key, &mut app) {
-                        break;
-                    }
+            if let Event::Key(key) = crossterm::event::read()? {
+                if handle_key_event(key, &mut app) {
+                    break;
                 }
-                Event::Mouse(mouse) => {
-                    app.handle_mouse_event(mouse, terminal_rect);
-                }
-                _ => {}
             }
         }
 
@@ -286,7 +278,7 @@ async fn main() -> Result<()> {
     }
 
     disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(io::stdout(), LeaveAlternateScreen)?;
     let _ = terminal.clear();
 
     log::info!("Application shutdown complete");
