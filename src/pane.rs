@@ -1113,6 +1113,7 @@ impl Pane for AdvicePane {
                     KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         log::debug!("Ctrl+r pressed, requesting LLM advice refresh");
                         self.content = "⏳ Loading LLM advice...".to_string();
+                        self.scroll_offset = 0;
                         log::debug!("Set advice pane content to loading message");
                         self.refresh_requested = true;
                         return true;
