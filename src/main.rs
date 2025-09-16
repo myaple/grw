@@ -264,10 +264,16 @@ async fn main() -> Result<()> {
         }
 
         if crossterm::event::poll(Duration::from_millis(10))? {
-            if let Event::Key(key) = crossterm::event::read()? {
-                if handle_key_event(key, &mut app) {
-                    break;
+            match crossterm::event::read()? {
+                Event::Key(key) => {
+                    if handle_key_event(key, &mut app) {
+                        break;
+                    }
                 }
+                Event::Mouse(mouse) => {
+                    app.handle_mouse_event(mouse, terminal_rect);
+                }
+                _ => {}
             }
         }
 

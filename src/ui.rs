@@ -1,8 +1,9 @@
 use crate::git::{FileDiff, GitRepo, TreeNode};
 use crate::llm::LlmClient;
 use crate::pane::{PaneId, PaneRegistry};
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyEvent, MouseEvent, MouseEventKind};
 use ratatui::{
+    prelude::Margin,
     Frame,
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -150,6 +151,7 @@ pub struct App {
     pane_registry: PaneRegistry,
     llm_advice: String,
     last_active_pane: ActivePane,
+    pub hovered_file_tree_index: Option<usize>,
 }
 
 impl App {
@@ -197,6 +199,7 @@ impl App {
             pane_registry,
             llm_advice: String::new(),
             last_active_pane: ActivePane::default(),
+            hovered_file_tree_index: None,
         }
     }
 
@@ -781,18 +784,48 @@ impl App {
                 }
             });
     }
+
+    pub fn handle_mouse_event(&mut self, mouse: MouseEvent, terminal_rect: Rect) {
+        let (file_tree_area, _) = get_layout_chunks(terminal_rect, self);
+
+        if file_tree_area.contains(ratatui::layout::Position::new(mouse.column, mouse.row)) {
+            let list_inner_area = file_tree_area.inner(Margin {
+                vertical: 1,
+                horizontal: 1,
+            });
+
+            if list_inner_area.contains(ratatui::layout::Position::new(mouse.column, mouse.row)) {
+                let relative_y = mouse.row - list_inner_area.y;
+                let hovered_index = relative_y as usize;
+
+                if hovered_index < self.get_tree_nodes().len() {
+                    self.hovered_file_tree_index = Some(hovered_index);
+
+                    if let MouseEventKind::Down(_) = mouse.kind {
+                        if let Some(file_index) = self.file_indices_in_tree.get(hovered_index) {
+                            if *file_index != usize::MAX {
+                                self.current_tree_index = hovered_index;
+                                self.current_file_index = *file_index;
+                                self.scroll_offset = 0;
+                            }
+                        }
+                    }
+                } else {
+                    self.hovered_file_tree_index = None;
+                }
+            } else {
+                self.hovered_file_tree_index = None;
+            }
+        } else {
+            self.hovered_file_tree_index = None;
+        }
+    }
 }
 
-#[allow(clippy::extra_unused_type_parameters)]
-pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
-    let size = f.area();
-
-    // Allow header to wrap to multiple lines (up to 3 lines)
+fn get_layout_chunks(size: Rect, app: &App) -> (Rect, Option<Rect>) {
     let header_constraints = if size.width > 120 {
-        // Wide screens: try to fit on one line
         [Constraint::Length(1), Constraint::Min(0)]
     } else {
-        // Narrow screens: allow up to 3 lines for header
         [Constraint::Max(3), Constraint::Min(0)]
     };
 
@@ -801,26 +834,41 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
         .constraints(header_constraints)
         .split(size);
 
-    // Render status bar using new pane system
-    app.pane_registry
-        .render(f, app, chunks[0], PaneId::StatusBar, git_repo);
-
-    // Handle the information pane (right side)
     if app.is_showing_diff_panel() {
         let bottom_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
             .split(chunks[1]);
-
-        // Render file browser pane (left side)
-        render_file_browser_pane(f, app, bottom_chunks[0], git_repo);
-
-        // Render information pane (right side) using new pane system
-        let diff_height = bottom_chunks[1].height.saturating_sub(2) as usize;
-        render_information_pane(f, app, bottom_chunks[1], diff_height, git_repo);
+        (bottom_chunks[0], Some(bottom_chunks[1]))
     } else {
-        // When diff panel is hidden, file browser takes full width
-        render_file_browser_pane(f, app, chunks[1], git_repo);
+        (chunks[1], None)
+    }
+}
+
+#[allow(clippy::extra_unused_type_parameters)]
+pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
+    let size = f.area();
+    let (file_browser_area, info_area) = get_layout_chunks(size, app);
+
+    let header_constraints = if size.width > 120 {
+        [Constraint::Length(1), Constraint::Min(0)]
+    } else {
+        [Constraint::Max(3), Constraint::Min(0)]
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(header_constraints)
+        .split(size);
+
+    app.pane_registry
+        .render(f, app, chunks[0], PaneId::StatusBar, git_repo);
+
+    render_file_browser_pane(f, app, file_browser_area, git_repo);
+
+    if let Some(info_area) = info_area {
+        let diff_height = info_area.height.saturating_sub(2) as usize;
+        render_information_pane(f, app, info_area, diff_height, git_repo);
     }
 }
 
@@ -972,7 +1020,7 @@ fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect, _git_repo: &Gi
                 spans
             };
 
-            let line_style = if let Some(ref diff) = node.file_diff {
+            let mut line_style = if let Some(ref diff) = node.file_diff {
                 // Check if this file is recently changed by finding its index
                 if let Some(file_idx) = app.files.iter().position(|f| f.path == diff.path) {
                     if file_idx < app.file_change_timestamps.len()
@@ -997,6 +1045,10 @@ fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect, _git_repo: &Gi
                     .fg(theme.directory_color())
                     .add_modifier(Modifier::BOLD)
             };
+
+            if app.hovered_file_tree_index == Some(index) {
+                line_style = line_style.bg(theme.highlight_color());
+            }
 
             let line = Line::from(name_spans).style(line_style);
 
