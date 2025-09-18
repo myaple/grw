@@ -72,6 +72,7 @@ pub struct LlmConfig {
 pub struct Config {
     pub debug: Option<bool>,
     pub no_diff: Option<bool>,
+    pub hide_changed_files_pane: Option<bool>,
     pub monitor_command: Option<String>,
     pub monitor_interval: Option<u64>,
     pub theme: Option<Theme>,
@@ -101,8 +102,9 @@ impl Config {
     pub fn merge_with_args(&self, args: &Args) -> Self {
         let llm_config = self.llm.clone().unwrap_or_default();
         Self {
-            debug: Some(args.debug).or(self.debug),
-            no_diff: Some(args.no_diff).or(self.no_diff),
+            debug: if args.debug { Some(true) } else { self.debug },
+            no_diff: if args.no_diff { Some(true) } else { self.no_diff },
+            hide_changed_files_pane: if args.hide_changed_files_pane { Some(true) } else { self.hide_changed_files_pane },
             monitor_command: args
                 .monitor_command
                 .clone()
@@ -130,6 +132,9 @@ pub struct Args {
 
     #[arg(long, help = "Hide diff panel, show only file tree")]
     pub no_diff: bool,
+
+    #[arg(long, help = "Hide changed files pane, show only diff")]
+    pub hide_changed_files_pane: bool,
 
     #[arg(long, help = "Command to run in monitor pane")]
     pub monitor_command: Option<String>,
@@ -221,6 +226,23 @@ mod tests {
         let merged = config.merge_with_args(&args);
 
         assert_eq!(merged.theme, Some(Theme::Light)); // From config
+    }
+
+    #[test]
+    fn test_merge_with_args_hide_changed_files_pane() {
+        let mut config = Config::default();
+        let args = Args::parse_from(["grw", "--hide-changed-files-pane"]);
+        let merged = config.merge_with_args(&args);
+        assert_eq!(merged.hide_changed_files_pane, Some(true));
+
+        config.hide_changed_files_pane = Some(false);
+        let merged = config.merge_with_args(&args);
+        assert_eq!(merged.hide_changed_files_pane, Some(true)); // CLI overrides config
+
+        config.hide_changed_files_pane = Some(true);
+        let args = Args::parse_from(["grw"]);
+        let merged = config.merge_with_args(&args);
+        assert_eq!(merged.hide_changed_files_pane, Some(true));
     }
 
     #[test]
