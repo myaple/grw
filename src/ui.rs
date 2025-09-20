@@ -136,6 +136,7 @@ pub struct App {
     pub current_diff_height: usize,
     side_by_side_diff: bool,
     show_diff_panel: bool,
+    show_changed_files_pane: bool,
     file_change_timestamps: Vec<std::time::Instant>,
     monitor_output: String,
     monitor_scroll_offset: usize,
@@ -155,6 +156,7 @@ pub struct App {
 impl App {
     pub fn new_with_config(
         show_diff_panel: bool,
+        show_changed_files_pane: bool,
         theme: Theme,
         llm_client: Option<LlmClient>,
     ) -> Self {
@@ -183,6 +185,7 @@ impl App {
             current_diff_height: 20,
             side_by_side_diff: false,
             show_diff_panel,
+            show_changed_files_pane,
             file_change_timestamps: Vec::new(),
             monitor_output: String::new(),
             monitor_scroll_offset: 0,
@@ -516,6 +519,14 @@ impl App {
         self.show_diff_panel
     }
 
+    pub fn toggle_changed_files_pane(&mut self) {
+        self.show_changed_files_pane = !self.show_changed_files_pane;
+    }
+
+    pub fn is_showing_changed_files_pane(&self) -> bool {
+        self.show_changed_files_pane
+    }
+
     pub fn next_file(&mut self) {
         if !self.files.is_empty() {
             // Find the next file in the tree that has a valid file index
@@ -806,21 +817,39 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
         .render(f, app, chunks[0], PaneId::StatusBar, git_repo);
 
     // Handle the information pane (right side)
-    if app.is_showing_diff_panel() {
-        let bottom_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .split(chunks[1]);
+    let file_browser_visible = app.is_showing_changed_files_pane();
+    let info_pane_visible = app.is_showing_diff_panel();
 
-        // Render file browser pane (left side)
-        render_file_browser_pane(f, app, bottom_chunks[0], git_repo);
+    match (file_browser_visible, info_pane_visible) {
+        (true, true) => {
+            // Both panes visible: split screen
+            let bottom_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+                .split(chunks[1]);
 
-        // Render information pane (right side) using new pane system
-        let diff_height = bottom_chunks[1].height.saturating_sub(2) as usize;
-        render_information_pane(f, app, bottom_chunks[1], diff_height, git_repo);
-    } else {
-        // When diff panel is hidden, file browser takes full width
-        render_file_browser_pane(f, app, chunks[1], git_repo);
+            render_file_browser_pane(f, app, bottom_chunks[0], git_repo);
+
+            let diff_height = bottom_chunks[1].height.saturating_sub(2) as usize;
+            render_information_pane(f, app, bottom_chunks[1], diff_height, git_repo);
+        }
+        (true, false) => {
+            // Only file browser visible
+            render_file_browser_pane(f, app, chunks[1], git_repo);
+        }
+        (false, true) => {
+            // Only information pane visible
+            let diff_height = chunks[1].height.saturating_sub(2) as usize;
+            render_information_pane(f, app, chunks[1], diff_height, git_repo);
+        }
+        (false, false) => {
+            // Both hidden, render a blank block
+            let block = Block::default()
+                .title("Nothing to show")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(app.get_theme().border_color()));
+            f.render_widget(block, chunks[1]);
+        }
     }
 }
 
@@ -1026,24 +1055,25 @@ mod tests {
     use crate::config::LlmConfig;
     use std::env;
 
-    fn create_test_app(show_diff_panel: bool, theme: Theme) -> App {
+    fn create_test_app(show_diff_panel: bool, show_changed_files_pane: bool, theme: Theme) -> App {
         let mut llm_config = LlmConfig::default();
         if env::var("OPENAI_API_KEY").is_err() {
             llm_config.api_key = Some("dummy_key".to_string());
         }
         let llm_client = LlmClient::new(llm_config).ok();
-        App::new_with_config(show_diff_panel, theme, llm_client)
+        App::new_with_config(show_diff_panel, show_changed_files_pane, theme, llm_client)
     }
 
     #[test]
     fn test_app_creation() {
-        let app = create_test_app(true, Theme::Dark);
+        let app = create_test_app(true, true, Theme::Dark);
         assert_eq!(app.files.len(), 0);
         assert_eq!(app.current_file_index, 0);
         assert_eq!(app.scroll_offset, 0);
         assert_eq!(app.current_diff_height, 20);
         assert!(!app.is_showing_help());
         assert!(app.show_diff_panel);
+        assert!(app.show_changed_files_pane);
         assert_eq!(app.current_file_browser_pane, FileBrowserPane::FileTree);
         assert_eq!(app.current_information_pane, InformationPane::Diff);
         assert!(!app.monitor_command_configured);
@@ -1055,13 +1085,13 @@ mod tests {
 
     #[test]
     fn test_app_creation_no_diff() {
-        let app = create_test_app(false, Theme::Dark);
+        let app = create_test_app(false, true, Theme::Dark);
         assert!(!app.show_diff_panel);
     }
 
     #[test]
     fn test_scroll_up() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
         app.scroll_offset = 5;
         app.scroll_up();
         assert_eq!(app.scroll_offset, 4);
@@ -1069,7 +1099,7 @@ mod tests {
 
     #[test]
     fn test_scroll_up_at_zero() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
         app.scroll_offset = 0;
         app.scroll_up();
         assert_eq!(app.scroll_offset, 0);
@@ -1077,7 +1107,7 @@ mod tests {
 
     #[test]
     fn test_page_up() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
         app.scroll_offset = 25;
         app.page_up(10);
         assert_eq!(app.scroll_offset, 15);
@@ -1085,7 +1115,7 @@ mod tests {
 
     #[test]
     fn test_page_up_underflow() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
         app.scroll_offset = 5;
         app.page_up(10);
         assert_eq!(app.scroll_offset, 0);
@@ -1093,7 +1123,7 @@ mod tests {
 
     #[test]
     fn test_scroll_to_top() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
         app.scroll_offset = 100;
         app.scroll_to_top();
         assert_eq!(app.scroll_offset, 0);
@@ -1101,7 +1131,7 @@ mod tests {
 
     #[test]
     fn test_toggle_help() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
         assert!(!app.is_showing_help());
         assert_eq!(app.current_information_pane, InformationPane::Diff);
 
@@ -1118,7 +1148,7 @@ mod tests {
 
     #[test]
     fn test_toggle_diff_panel() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
         assert!(app.show_diff_panel);
         app.toggle_diff_panel();
         assert!(!app.show_diff_panel);
@@ -1127,8 +1157,18 @@ mod tests {
     }
 
     #[test]
+    fn test_toggle_changed_files_pane() {
+        let mut app = create_test_app(true, true, Theme::Dark);
+        assert!(app.is_showing_changed_files_pane());
+        app.toggle_changed_files_pane();
+        assert!(!app.is_showing_changed_files_pane());
+        app.toggle_changed_files_pane();
+        assert!(app.is_showing_changed_files_pane());
+    }
+
+    #[test]
     fn test_monitor_output_update() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
         assert_eq!(app.monitor_output, "");
         assert_eq!(app.monitor_scroll_offset, 0);
 
@@ -1142,7 +1182,7 @@ mod tests {
 
     #[test]
     fn test_monitor_scroll() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
 
         // Set a reasonable visible height for testing
         app.monitor_visible_height = 3;
@@ -1176,7 +1216,7 @@ mod tests {
 
     #[test]
     fn test_toggle_monitor_pane() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
 
         // Initially monitor pane should be hidden
         assert!(!app.is_showing_monitor_pane());
@@ -1195,7 +1235,7 @@ mod tests {
 
     #[test]
     fn test_monitor_command_configured() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
 
         // Initially no command configured
         assert!(!app.monitor_command_configured);
@@ -1211,7 +1251,7 @@ mod tests {
 
     #[test]
     fn test_monitor_timing_update() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
 
         // Initially no timing info
         assert!(app.monitor_elapsed_time.is_none());
@@ -1227,7 +1267,7 @@ mod tests {
 
     #[test]
     fn test_format_elapsed_time() {
-        let app = create_test_app(true, Theme::Dark);
+        let app = create_test_app(true, true, Theme::Dark);
 
         // Test seconds
         let secs = std::time::Duration::from_secs(45);
@@ -1244,7 +1284,7 @@ mod tests {
 
     #[test]
     fn test_diff_mode_switching() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
 
         // Initially in single-pane diff mode
         assert_eq!(app.current_information_pane, InformationPane::Diff);
@@ -1278,7 +1318,7 @@ mod tests {
 
     #[test]
     fn test_help_preserves_diff_mode() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
 
         // Set to side-by-side mode
         app.set_side_by_side_diff();
@@ -1313,7 +1353,7 @@ mod tests {
 
     #[test]
     fn test_help_movement_when_diff_panel_hidden() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
 
         // Initially showing diff panel
         assert!(app.is_showing_diff_panel());
@@ -1337,7 +1377,7 @@ mod tests {
     // Test that help works when both file tree and diff panes are visible
     #[test]
     fn test_help_with_both_panes_visible() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
 
         // Initially both file tree and diff panels should be showing
         assert!(app.is_showing_diff_panel());
@@ -1371,7 +1411,7 @@ mod tests {
 
     #[test]
     fn test_theme_toggle() {
-        let mut app = create_test_app(true, Theme::Dark);
+        let mut app = create_test_app(true, true, Theme::Dark);
 
         // Initially dark theme
         assert_eq!(app.get_theme(), Theme::Dark);

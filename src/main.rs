@@ -70,6 +70,7 @@ async fn main() -> Result<()> {
 
     let mut app = App::new_with_config(
         !final_config.no_diff.unwrap_or(false),
+        !final_config.hide_changed_files_pane.unwrap_or(false),
         match final_config.theme.unwrap_or(config::Theme::Dark) {
             config::Theme::Dark => ui::Theme::Dark,
             config::Theme::Light => ui::Theme::Light,
@@ -447,6 +448,10 @@ fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
         }
         KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.toggle_diff_panel();
+            false
+        }
+        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.toggle_changed_files_pane();
             false
         }
         KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::ALT) => {
