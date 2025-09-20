@@ -481,6 +481,7 @@ impl App {
                 .with_pane_mut(&PaneId::Advice, |advice_pane| {
                     advice_pane.set_visible(false);
                 });
+            self.current_information_pane = InformationPane::Diff;
         }
     }
 
@@ -499,6 +500,7 @@ impl App {
                 .with_pane_mut(&PaneId::Advice, |advice_pane| {
                     advice_pane.set_visible(false);
                 });
+            self.current_information_pane = InformationPane::SideBySideDiff;
         }
     }
 

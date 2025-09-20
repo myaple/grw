@@ -1010,6 +1010,9 @@ impl Pane for AdvicePane {
     }
 
     fn handle_event(&mut self, event: &AppEvent) -> bool {
+        if !self.visible {
+            return false;
+        }
         if let AppEvent::Key(key) = event {
             if self.input_mode {
                 match key.code {
