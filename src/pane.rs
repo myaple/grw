@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -902,6 +903,7 @@ pub struct AdvicePane {
     input_scroll_offset: usize,
     initial_data: Option<String>,
     pub refresh_requested: bool,
+    last_rect: RefCell<Rect>,
 }
 
 impl AdvicePane {
@@ -922,6 +924,7 @@ impl AdvicePane {
             input_scroll_offset: 0,
             initial_data: None,
             refresh_requested: false,
+            last_rect: RefCell::new(Rect::default()),
         }
     }
 
@@ -965,6 +968,7 @@ impl Pane for AdvicePane {
         area: Rect,
         _git_repo: &GitRepo,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        *self.last_rect.borrow_mut() = area;
         let theme = app.get_theme();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -1108,6 +1112,20 @@ impl Pane for AdvicePane {
                         self.scroll_offset = self.scroll_offset.saturating_sub(1);
                         return true;
                     }
+                    KeyCode::PageDown => {
+                        let rect = self.last_rect.borrow();
+                        let page_size = rect.height.saturating_sub(2) as usize;
+                        let content_lines: Vec<_> = self.content.lines().collect();
+                        let max_scroll = content_lines.len().saturating_sub(page_size);
+                        self.scroll_offset = std::cmp::min(self.scroll_offset.saturating_add(page_size), max_scroll);
+                        return true;
+                    }
+                    KeyCode::PageUp => {
+                        let rect = self.last_rect.borrow();
+                        let page_size = rect.height.saturating_sub(2) as usize;
+                        self.scroll_offset = self.scroll_offset.saturating_sub(page_size);
+                        return true;
+                    }
                     KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => {
                         let content_lines: Vec<_> = self.content.lines().collect();
                         self.scroll_offset = content_lines.len().saturating_sub(1);
@@ -1198,5 +1216,38 @@ mod tests {
     fn test_pane_ids() {
         assert_eq!(PaneId::FileTree, PaneId::FileTree);
         assert_ne!(PaneId::FileTree, PaneId::Monitor);
+    }
+
+    #[test]
+    fn test_advice_pane_scrolling() {
+        let mut llm_config = LlmConfig::default();
+        if env::var("OPENAI_API_KEY").is_err() {
+            llm_config.api_key = Some("dummy_key".to_string());
+        }
+        let llm_client = LlmClient::new(llm_config).unwrap();
+        let mut advice_pane = AdvicePane::new(Some(llm_client));
+        advice_pane.content = (0..100).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+        let rect = Rect::new(0, 0, 80, 20);
+        *advice_pane.last_rect.borrow_mut() = rect;
+
+        // Page down
+        advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::PageDown)));
+        assert_eq!(advice_pane.scroll_offset, 18);
+
+        // Page down again
+        advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::PageDown)));
+        assert_eq!(advice_pane.scroll_offset, 36);
+
+        // Page up
+        advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::PageUp)));
+        assert_eq!(advice_pane.scroll_offset, 18);
+
+        // Scroll to bottom
+        advice_pane.handle_event(&AppEvent::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT)));
+        assert_eq!(advice_pane.scroll_offset, 99);
+
+        // Page up from bottom
+        advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::PageUp)));
+        assert_eq!(advice_pane.scroll_offset, 81);
     }
 }
