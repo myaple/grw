@@ -174,6 +174,8 @@ pub struct App {
     pane_registry: PaneRegistry,
     llm_advice: String,
     last_active_pane: ActivePane,
+    app_mode: AppMode,
+    selected_commit: Option<CommitInfo>,
 }
 
 impl App {
@@ -223,6 +225,8 @@ impl App {
             pane_registry,
             llm_advice: String::new(),
             last_active_pane: ActivePane::default(),
+            app_mode: AppMode::Normal,
+            selected_commit: None,
         }
     }
 
@@ -816,6 +820,33 @@ impl App {
                     advice_pane.refresh_requested = false;
                 }
             });
+    }
+
+    // Commit picker mode state management methods
+    pub fn enter_commit_picker_mode(&mut self) {
+        self.app_mode = AppMode::CommitPicker;
+    }
+
+    pub fn exit_commit_picker_mode(&mut self) {
+        self.app_mode = AppMode::Normal;
+    }
+
+    pub fn select_commit(&mut self, commit: CommitInfo) {
+        self.selected_commit = Some(commit);
+        self.exit_commit_picker_mode();
+    }
+
+    // Getter methods for commit picker state access
+    pub fn is_in_commit_picker_mode(&self) -> bool {
+        self.app_mode == AppMode::CommitPicker
+    }
+
+    pub fn get_app_mode(&self) -> AppMode {
+        self.app_mode
+    }
+
+    pub fn get_selected_commit(&self) -> Option<&CommitInfo> {
+        self.selected_commit.as_ref()
     }
 }
 

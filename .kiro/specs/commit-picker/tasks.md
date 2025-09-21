@@ -26,7 +26,7 @@
   - Add scroll navigation for the file list using existing diff pane navigation patterns
   - _Requirements: 2.1, 2.2, 2.4_
 
-- [ ] 5. Add commit picker mode state management to App
+- [x] 5. Add commit picker mode state management to App
   - Add `app_mode: AppMode` and `selected_commit: Option<CommitInfo>` fields to App struct
   - Implement `enter_commit_picker_mode()` and `exit_commit_picker_mode()` methods
   - Add `select_commit()` method to handle commit selection and mode transition
