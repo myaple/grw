@@ -33,7 +33,7 @@
   - Add getter methods for commit picker state access
   - _Requirements: 4.1, 4.2, 4.3, 5.2_
 
-- [ ] 6. Integrate Ctrl+P key binding to activate commit picker
+- [x] 6. Integrate Ctrl+P key binding to activate commit picker
   - Add Ctrl+P key handling in main.rs `handle_key_event()` function
   - Implement mode transition logic to switch from normal diff view to commit picker
   - Ensure commit picker only activates when in appropriate diff mode

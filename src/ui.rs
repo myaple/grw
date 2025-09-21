@@ -825,6 +825,16 @@ impl App {
     // Commit picker mode state management methods
     pub fn enter_commit_picker_mode(&mut self) {
         self.app_mode = AppMode::CommitPicker;
+        // Make commit picker pane visible
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                pane.set_visible(true);
+            });
+        // Make commit summary pane visible
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                pane.set_visible(true);
+            });
     }
 
     pub fn exit_commit_picker_mode(&mut self) {
@@ -847,6 +857,15 @@ impl App {
 
     pub fn get_selected_commit(&self) -> Option<&CommitInfo> {
         self.selected_commit.as_ref()
+    }
+
+    pub fn update_commit_picker_commits(&mut self, commits: Vec<CommitInfo>) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                if let Some(commit_picker) = pane.as_commit_picker_pane_mut() {
+                    commit_picker.update_commits(commits);
+                }
+            });
     }
 }
 

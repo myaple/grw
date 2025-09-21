@@ -34,6 +34,12 @@ pub trait Pane {
     fn as_advice_pane_mut(&mut self) -> Option<&mut AdvicePane> {
         None
     }
+    fn as_commit_picker_pane(&self) -> Option<&CommitPickerPane> {
+        None
+    }
+    fn as_commit_picker_pane_mut(&mut self) -> Option<&mut CommitPickerPane> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1089,6 +1095,14 @@ impl Pane for CommitPickerPane {
 
     fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
+    }
+
+    fn as_commit_picker_pane(&self) -> Option<&CommitPickerPane> {
+        Some(self)
+    }
+
+    fn as_commit_picker_pane_mut(&mut self) -> Option<&mut CommitPickerPane> {
+        Some(self)
     }
 }
 

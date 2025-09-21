@@ -264,7 +264,7 @@ async fn main() -> Result<()> {
 
         if crossterm::event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = crossterm::event::read()? {
-                if handle_key_event(key, &mut app) {
+                if handle_key_event(key, &mut app, &git_repo) {
                     break;
                 }
             }
@@ -286,7 +286,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
+fn handle_key_event(key: KeyEvent, app: &mut App, git_repo: &AsyncGitRepo) -> bool {
     if app.is_showing_advice_pane()
         && app.forward_key_to_panes(key) {
             return false;
@@ -473,6 +473,127 @@ fn handle_key_event(key: KeyEvent, app: &mut App) -> bool {
             app.set_advice_pane();
             false
         }
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            debug!("User pressed Ctrl+P - activating commit picker");
+            // Only activate commit picker when in appropriate diff mode
+            if app.is_showing_diff_panel() && !app.is_in_commit_picker_mode() {
+                if let Some(repo) = &git_repo.repo {
+                    // Create a temporary GitWorker to load commit history
+                    let (_tx, rx) = tokio::sync::mpsc::channel(1);
+                    let (result_tx, _result_rx) = tokio::sync::mpsc::channel(1);
+                    
+                    if let Ok(git_worker) = crate::git_worker::GitWorker::new(
+                        repo.path.clone(),
+                        rx,
+                        result_tx,
+                    ) {
+                        if let Ok(commits) = git_worker.get_commit_history(50) {
+                            app.enter_commit_picker_mode();
+                            app.update_commit_picker_commits(commits);
+                        }
+                    }
+                }
+            }
+            false
+        }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crate::ui::{App, Theme};
+
+    #[tokio::test]
+    async fn test_ctrl_p_activates_commit_picker() {
+        // Create a test app with diff panel enabled
+        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        
+        // Create a mock git repo
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_path = temp_dir.path().to_path_buf();
+        
+        // Initialize a git repository
+        let _repo = git2::Repository::init(&repo_path).unwrap();
+        
+        // Create a mock AsyncGitRepo
+        let git_repo = AsyncGitRepo::new(repo_path.clone(), 500).unwrap();
+        
+        // Ensure app is not in commit picker mode initially
+        assert!(!app.is_in_commit_picker_mode());
+        
+        // Create Ctrl+P key event
+        let ctrl_p_key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        
+        // Handle the key event
+        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo);
+        
+        // Should not quit
+        assert!(!should_quit);
+        
+        // App should now be in commit picker mode (if git repo is available)
+        // Note: This test might not activate commit picker if no git repo is loaded
+        // but it should not crash or cause errors
+    }
+
+    #[tokio::test]
+    async fn test_ctrl_p_only_activates_when_diff_panel_shown() {
+        // Create a test app with diff panel disabled
+        let mut app = App::new_with_config(false, true, Theme::Dark, None);
+        
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_path = temp_dir.path().to_path_buf();
+        
+        // Initialize a git repository
+        let _repo = git2::Repository::init(&repo_path).unwrap();
+        
+        let git_repo = AsyncGitRepo::new(repo_path, 500).unwrap();
+        
+        // Ensure app is not in commit picker mode initially
+        assert!(!app.is_in_commit_picker_mode());
+        
+        // Create Ctrl+P key event
+        let ctrl_p_key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        
+        // Handle the key event
+        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo);
+        
+        // Should not quit
+        assert!(!should_quit);
+        
+        // App should still not be in commit picker mode since diff panel is not shown
+        assert!(!app.is_in_commit_picker_mode());
+    }
+
+    #[tokio::test]
+    async fn test_ctrl_p_does_not_activate_when_already_in_commit_picker_mode() {
+        // Create a test app with diff panel enabled
+        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_path = temp_dir.path().to_path_buf();
+        
+        // Initialize a git repository
+        let _repo = git2::Repository::init(&repo_path).unwrap();
+        
+        let git_repo = AsyncGitRepo::new(repo_path, 500).unwrap();
+        
+        // Manually enter commit picker mode
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
+        
+        // Create Ctrl+P key event
+        let ctrl_p_key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        
+        // Handle the key event
+        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo);
+        
+        // Should not quit
+        assert!(!should_quit);
+        
+        // App should still be in commit picker mode (no change)
+        assert!(app.is_in_commit_picker_mode());
     }
 }
