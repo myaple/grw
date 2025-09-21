@@ -804,6 +804,15 @@ impl App {
             });
     }
 
+    pub fn poll_llm_summaries(&mut self) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                if let Some(commit_summary_pane) = pane.as_commit_summary_pane_mut() {
+                    commit_summary_pane.poll_llm_summary();
+                }
+            });
+    }
+
     pub fn is_advice_refresh_requested(&self) -> bool {
         if let Some(pane) = self.pane_registry.get_pane(&PaneId::Advice) {
             if let Some(advice_pane) = pane.as_advice_pane() {

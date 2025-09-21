@@ -165,6 +165,9 @@ async fn main() -> Result<()> {
 
         // Poll for LLM advice responses
         app.poll_llm_advice();
+        
+        // Poll for LLM commit summary responses
+        app.poll_llm_summaries();
 
         // Update llm command if it exists
         if let Some(ref mut llm) = llm_command {

@@ -103,10 +103,10 @@ impl PaneRegistry {
         self.register_pane(PaneId::StatusBar, Box::new(StatusBarPane::new()));
         self.register_pane(
             PaneId::Advice,
-            Box::new(AdvicePane::new(Some(llm_client))),
+            Box::new(AdvicePane::new(Some(llm_client.clone()))),
         );
         self.register_pane(PaneId::CommitPicker, Box::new(CommitPickerPane::new()));
-        self.register_pane(PaneId::CommitSummary, Box::new(CommitSummaryPane::new()));
+        self.register_pane(PaneId::CommitSummary, Box::new(CommitSummaryPane::new_with_llm_client(Some(llm_client))));
     }
 
     pub fn register_pane(&mut self, id: PaneId, pane: Box<dyn Pane>) {
@@ -1443,31 +1443,121 @@ pub struct CommitSummaryPane {
     current_commit: Option<crate::git::CommitInfo>,
     scroll_offset: usize,
     llm_summary: Option<String>,
+    llm_client: Option<LlmClient>,
+    llm_tx: mpsc::Sender<Result<String, String>>,
+    llm_rx: mpsc::Receiver<Result<String, String>>,
+    is_loading_summary: bool,
 }
 
 impl CommitSummaryPane {
     pub fn new() -> Self {
+        let (llm_tx, llm_rx) = mpsc::channel(1);
         Self {
             visible: false,
             current_commit: None,
             scroll_offset: 0,
             llm_summary: None,
+            llm_client: None,
+            llm_tx,
+            llm_rx,
+            is_loading_summary: false,
+        }
+    }
+
+    pub fn new_with_llm_client(llm_client: Option<LlmClient>) -> Self {
+        let (llm_tx, llm_rx) = mpsc::channel(1);
+        Self {
+            visible: false,
+            current_commit: None,
+            scroll_offset: 0,
+            llm_summary: None,
+            llm_client,
+            llm_tx,
+            llm_rx,
+            is_loading_summary: false,
         }
     }
 
     pub fn update_commit(&mut self, commit: Option<crate::git::CommitInfo>) {
+        let commit_changed = match (&self.current_commit, &commit) {
+            (Some(old), Some(new)) => old.sha != new.sha,
+            (None, Some(_)) => true,
+            (Some(_), None) => true,
+            (None, None) => false,
+        };
+
         self.current_commit = commit;
-        // Reset LLM summary when commit changes
-        self.llm_summary = None;
-        self.scroll_offset = 0;
+        
+        if commit_changed {
+            // Reset LLM summary when commit changes and request new summary
+            self.llm_summary = None;
+            self.scroll_offset = 0;
+            self.is_loading_summary = false;
+            self.request_llm_summary();
+        }
     }
 
-    pub fn set_llm_summary(&mut self, summary: String) {
-        self.llm_summary = Some(summary);
+
+
+    fn request_llm_summary(&mut self) {
+        if let (Some(commit), Some(llm_client)) = (&self.current_commit, &self.llm_client) {
+            self.is_loading_summary = true;
+            
+            // Create a prompt for the commit summary
+            let mut prompt = format!(
+                "Please provide a brief, 2-sentence summary of what this commit changes:\n\n"
+            );
+            prompt.push_str(&format!("Commit: {}\n", commit.short_sha));
+            prompt.push_str(&format!("Message: {}\n\n", commit.message));
+            prompt.push_str("Files changed:\n");
+            
+            for file_change in &commit.files_changed {
+                let status_str = match file_change.status {
+                    crate::git::FileChangeStatus::Added => "Added",
+                    crate::git::FileChangeStatus::Modified => "Modified", 
+                    crate::git::FileChangeStatus::Deleted => "Deleted",
+                    crate::git::FileChangeStatus::Renamed => "Renamed",
+                };
+                prompt.push_str(&format!(
+                    "- {} {} (+{} -{} lines)\n",
+                    status_str,
+                    file_change.path.display(),
+                    file_change.additions,
+                    file_change.deletions
+                ));
+            }
+            
+            prompt.push_str("\nFocus on the functional impact and purpose of the changes. Keep it concise and technical.");
+
+            let history = vec![chat_completion::ChatCompletionMessage {
+                role: chat_completion::MessageRole::user,
+                content: chat_completion::Content::Text(prompt),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            }];
+
+            let tx = self.llm_tx.clone();
+            let client = llm_client.clone();
+            tokio::spawn(async move {
+                let res = client.get_llm_advice(history).await;
+                let _ = tx.send(res).await;
+            });
+        }
     }
 
-    pub fn get_current_commit(&self) -> Option<&crate::git::CommitInfo> {
-        self.current_commit.as_ref()
+    pub fn poll_llm_summary(&mut self) {
+        if let Ok(result) = self.llm_rx.try_recv() {
+            self.is_loading_summary = false;
+            match result {
+                Ok(summary) => {
+                    self.llm_summary = Some(summary);
+                }
+                Err(e) => {
+                    self.llm_summary = Some(format!("Error generating summary: {}", e));
+                }
+            }
+        }
     }
 }
 
@@ -1564,8 +1654,12 @@ impl Pane for CommitSummaryPane {
             // Render LLM summary section
             let summary_content = if let Some(summary) = &self.llm_summary {
                 summary.clone()
+            } else if self.is_loading_summary {
+                "⏳ Generating summary...".to_string()
+            } else if self.llm_client.is_none() {
+                "LLM client not available".to_string()
             } else {
-                "Generating summary...".to_string()
+                "No summary available".to_string()
             };
 
             let summary_lines: Vec<Line> = summary_content
@@ -1873,9 +1967,37 @@ mod tests {
     fn test_commit_summary_pane_llm_summary() {
         let mut pane = CommitSummaryPane::new();
         
-        pane.set_llm_summary("This is a test summary".to_string());
+        // Test that initially there's no summary
+        assert!(pane.llm_summary.is_none());
+        assert!(!pane.is_loading_summary);
+        
+        // Test that we can manually set a summary (for testing purposes)
+        pane.llm_summary = Some("This is a test summary".to_string());
         assert!(pane.llm_summary.is_some());
         assert_eq!(pane.llm_summary.as_ref().unwrap(), "This is a test summary");
+    }
+
+    #[test]
+    fn test_commit_summary_pane_with_llm_client() {
+        use crate::config::LlmConfig;
+        
+        // Create a test LLM client
+        let mut llm_config = LlmConfig::default();
+        llm_config.api_key = Some("test_key".to_string());
+        let llm_client = LlmClient::new(llm_config).ok();
+        
+        let pane = CommitSummaryPane::new_with_llm_client(llm_client);
+        
+        // Test that the pane has an LLM client
+        assert!(pane.llm_client.is_some());
+        assert!(pane.llm_summary.is_none());
+        assert!(!pane.is_loading_summary);
+        
+        // Test that a pane without LLM client works too
+        let pane_no_llm = CommitSummaryPane::new_with_llm_client(None);
+        assert!(pane_no_llm.llm_client.is_none());
+        assert!(pane_no_llm.llm_summary.is_none());
+        assert!(!pane_no_llm.is_loading_summary);
     }
 
     #[test]

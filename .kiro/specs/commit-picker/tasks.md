@@ -47,8 +47,8 @@
   - Ensure selected commit's files and diffs are properly loaded and displayed
   - _Requirements: 4.1, 4.2, 4.3, 4.4_
 
-- [ ] 8. Add LLM integration for commit summaries
-  - Extend CommitSummaryPane to request LLM summaries of commit changes
+- [x] 8. Add LLM integration for commit summaries
+  - Extend CommitSummaryPane to request short, 2 sentence LLM summaries of commit changes
   - Integrate with existing LLM client infrastructure from AdvicePane
   - Implement background summary generation that updates the display when complete
   - Add error handling and fallback display when LLM is unavailable
