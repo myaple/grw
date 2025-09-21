@@ -110,20 +110,35 @@ async fn main() -> Result<()> {
     execute!(io::stdout(), EnterAlternateScreen)?;
 
     loop {
-        // Poll for git updates
-        git_repo.update();
-        if let Some(result) = git_repo.try_get_result() {
-            match result {
-                git::GitWorkerResult::Update(repo) => {
-                    let changed_files = repo.get_display_files();
-                    let tree = repo.get_file_tree();
+        // Poll for git updates (but skip if a commit is selected to avoid overriding commit files)
+        if app.get_selected_commit().is_none() {
+            git_repo.update();
+            if let Some(result) = git_repo.try_get_result() {
+                match result {
+                    git::GitWorkerResult::Update(repo) => {
+                        let changed_files = repo.get_display_files();
+                        let tree = repo.get_file_tree();
 
-                    app.update_files(changed_files.clone());
-                    app.update_tree(&tree);
-                    git_repo.repo = Some(repo);
+                        app.update_files(changed_files.clone());
+                        app.update_tree(&tree);
+                        git_repo.repo = Some(repo);
+                    }
+                    git::GitWorkerResult::Error(e) => {
+                        error!("Git worker error: {e}");
+                    }
                 }
-                git::GitWorkerResult::Error(e) => {
-                    error!("Git worker error: {e}");
+            }
+        } else {
+            // Still update the git repo state for status bar, but don't override app files
+            git_repo.update();
+            if let Some(result) = git_repo.try_get_result() {
+                match result {
+                    git::GitWorkerResult::Update(repo) => {
+                        git_repo.repo = Some(repo);
+                    }
+                    git::GitWorkerResult::Error(e) => {
+                        error!("Git worker error: {e}");
+                    }
                 }
             }
         }
@@ -508,6 +523,11 @@ fn handle_key_event(key: KeyEvent, app: &mut App, git_repo: &AsyncGitRepo) -> bo
             app.set_advice_pane();
             false
         }
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            debug!("User pressed Ctrl+W - returning to working directory view");
+            app.clear_selected_commit();
+            false
+        }
         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             debug!("User pressed Ctrl+P - activating commit picker");
             // Only activate commit picker when in appropriate diff mode
@@ -712,5 +732,83 @@ mod tests {
         
         // App should now be in normal mode
         assert!(!app.is_in_commit_picker_mode());
+    }
+
+    #[tokio::test]
+    async fn test_selected_commit_persists_and_can_be_cleared() {
+        // Create a test app
+        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        
+        // Initially no commit should be selected
+        assert!(app.get_selected_commit().is_none());
+        
+        // Create a test commit
+        let test_commit = crate::git::CommitInfo {
+            sha: "abc123def456".to_string(),
+            short_sha: "abc123d".to_string(),
+            message: "Test commit message".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01 12:00:00".to_string(),
+            files_changed: vec![
+                crate::git::CommitFileChange {
+                    path: std::path::PathBuf::from("test_file.txt"),
+                    status: crate::git::FileChangeStatus::Modified,
+                    additions: 5,
+                    deletions: 2,
+                }
+            ],
+        };
+        
+        // Select the commit
+        app.select_commit(test_commit.clone());
+        
+        // Commit should now be selected
+        assert!(app.get_selected_commit().is_some());
+        assert_eq!(app.get_selected_commit().unwrap().sha, "abc123def456");
+        
+        // Clear the selected commit
+        app.clear_selected_commit();
+        
+        // No commit should be selected
+        assert!(app.get_selected_commit().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_ctrl_w_clears_selected_commit() {
+        // Create a test app
+        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_path = temp_dir.path().to_path_buf();
+        
+        // Initialize a git repository
+        let _repo = git2::Repository::init(&repo_path).unwrap();
+        
+        let git_repo = AsyncGitRepo::new(repo_path, 500).unwrap();
+        
+        // Create and select a test commit
+        let test_commit = crate::git::CommitInfo {
+            sha: "abc123def456".to_string(),
+            short_sha: "abc123d".to_string(),
+            message: "Test commit message".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01 12:00:00".to_string(),
+            files_changed: vec![],
+        };
+        
+        app.select_commit(test_commit);
+        assert!(app.get_selected_commit().is_some());
+        
+        // Create Ctrl+W key event
+        let ctrl_w_key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        
+        // Handle the key event
+        let should_quit = handle_key_event(ctrl_w_key, &mut app, &git_repo);
+        
+        // Should not quit
+        assert!(!should_quit);
+        
+        // Selected commit should be cleared
+        assert!(app.get_selected_commit().is_none());
     }
 }

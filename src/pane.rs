@@ -855,16 +855,31 @@ impl Pane for StatusBarPane {
         let (total_files, total_additions, total_deletions) = git_repo.total_stats;
         let view_mode = git_repo.current_view_mode;
 
-        let view_mode_text = match view_mode {
-            crate::git::ViewMode::WorkingTree => "💼 Working Tree",
-            crate::git::ViewMode::Staged => "📋 Staged Files",
-            crate::git::ViewMode::DirtyDirectory => "🗂️ Dirty Directory",
-            crate::git::ViewMode::LastCommit => "📜 Last Commit",
+        let view_mode_text = if let Some(selected_commit) = app.get_selected_commit() {
+            format!("🔍 Selected Commit: {}", selected_commit.short_sha)
+        } else {
+            match view_mode {
+                crate::git::ViewMode::WorkingTree => "💼 Working Tree".to_string(),
+                crate::git::ViewMode::Staged => "📋 Staged Files".to_string(),
+                crate::git::ViewMode::DirtyDirectory => "🗂️ Dirty Directory".to_string(),
+                crate::git::ViewMode::LastCommit => "📜 Last Commit".to_string(),
+            }
         };
 
-        let status_text = format!(
-            "📂 {repo_name} | 🌿 {branch} | {view_mode_text} | 🎯 {commit_sha} > {commit_summary} | 📊 {total_files} files (+{total_additions}/-{total_deletions})"
-        );
+        let status_text = if let Some(selected_commit) = app.get_selected_commit() {
+            format!(
+                "📂 {repo_name} | 🌿 {branch} | {view_mode_text} | 🎯 {} > {} | 📊 {} files (+{}/-{}) | Press Ctrl+W to return to working directory",
+                selected_commit.short_sha,
+                selected_commit.message.lines().next().unwrap_or(""),
+                selected_commit.files_changed.len(),
+                selected_commit.files_changed.iter().map(|f| f.additions).sum::<usize>(),
+                selected_commit.files_changed.iter().map(|f| f.deletions).sum::<usize>()
+            )
+        } else {
+            format!(
+                "📂 {repo_name} | 🌿 {branch} | {view_mode_text} | 🎯 {commit_sha} > {commit_summary} | 📊 {total_files} files (+{total_additions}/-{total_deletions})"
+            )
+        };
 
         let paragraph = Paragraph::new(status_text)
             .style(

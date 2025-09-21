@@ -866,6 +866,10 @@ impl App {
         self.exit_commit_picker_mode();
     }
 
+    pub fn clear_selected_commit(&mut self) {
+        self.selected_commit = None;
+    }
+
     // Getter methods for commit picker state access
     pub fn is_in_commit_picker_mode(&self) -> bool {
         self.app_mode == AppMode::CommitPicker
