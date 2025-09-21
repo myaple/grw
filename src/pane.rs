@@ -1226,9 +1226,16 @@ mod tests {
         }
         let llm_client = LlmClient::new(llm_config).unwrap();
         let mut advice_pane = AdvicePane::new(Some(llm_client));
-        advice_pane.content = (0..100).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+        advice_pane.visible = true; // Make the pane visible so it can handle events
+        advice_pane.content = (0..100).map(|i| format!("Line {i} with some additional text to make it longer and ensure wrapping occurs")).collect::<Vec<_>>().join("\n");
         let rect = Rect::new(0, 0, 80, 20);
         *advice_pane.last_rect.borrow_mut() = rect;
+
+        // Test that content requires scrolling
+        let content_lines: Vec<_> = advice_pane.content.lines().collect();
+        let page_size = 18; // height 20 minus 2 for borders
+        let max_scroll = content_lines.len().saturating_sub(page_size);
+        assert!(max_scroll > 0, "Content should require scrolling");
 
         // Page down
         advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::PageDown)));
