@@ -434,39 +434,95 @@ impl GitWorker {
         let mut commits = Vec::new();
         
         // Check if repository has any commits
-        if self.repo.head().is_err() {
-            debug!("Repository has no commits");
-            return Ok(commits);
+        match self.repo.head() {
+            Err(e) => {
+                debug!("Repository has no commits or HEAD is invalid: {}", e);
+                // Return empty list for repositories with no commits
+                return Ok(commits);
+            }
+            Ok(head) => {
+                // Verify HEAD points to a valid commit
+                if head.peel_to_commit().is_err() {
+                    debug!("HEAD does not point to a valid commit");
+                    return Ok(commits);
+                }
+            }
         }
         
-        let mut revwalk = self.repo.revwalk()?;
+        let mut revwalk = match self.repo.revwalk() {
+            Ok(walk) => walk,
+            Err(e) => {
+                debug!("Failed to create revision walker: {}", e);
+                return Err(e.into());
+            }
+        };
         
         // Start from HEAD and walk backwards
-        revwalk.push_head()?;
-        revwalk.set_sorting(git2::Sort::TIME)?;
+        if let Err(e) = revwalk.push_head() {
+            debug!("Failed to push HEAD to revision walker: {}", e);
+            return Err(e.into());
+        }
+        
+        if let Err(e) = revwalk.set_sorting(git2::Sort::TIME) {
+            debug!("Failed to set revision walker sorting: {}", e);
+            return Err(e.into());
+        }
         
         let mut count = 0;
-        for oid in revwalk {
+        let mut errors_encountered = 0;
+        const MAX_ERRORS: usize = 5; // Allow some errors but not too many
+        
+        for oid_result in revwalk {
             if count >= limit {
                 break;
             }
             
-            let oid = oid?;
-            let commit = self.repo.find_commit(oid)?;
+            let oid = match oid_result {
+                Ok(oid) => oid,
+                Err(e) => {
+                    errors_encountered += 1;
+                    debug!("Error reading commit OID: {}", e);
+                    if errors_encountered >= MAX_ERRORS {
+                        debug!("Too many errors encountered, stopping commit history retrieval");
+                        break;
+                    }
+                    continue;
+                }
+            };
+            
+            let commit = match self.repo.find_commit(oid) {
+                Ok(commit) => commit,
+                Err(e) => {
+                    errors_encountered += 1;
+                    debug!("Error finding commit {}: {}", oid, e);
+                    if errors_encountered >= MAX_ERRORS {
+                        debug!("Too many errors encountered, stopping commit history retrieval");
+                        break;
+                    }
+                    continue;
+                }
+            };
             
             let sha = oid.to_string();
             let short_sha = sha.chars().take(7).collect::<String>();
-            let message = commit.summary().unwrap_or("").to_string();
+            let message = commit.summary().unwrap_or("<no message>").to_string();
             let author = commit.author().name().unwrap_or("Unknown").to_string();
             
-            // Format date as a readable string
+            // Format date as a readable string with error handling
             let timestamp = commit.time();
             let date = chrono::DateTime::from_timestamp(timestamp.seconds(), 0)
                 .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
                 .unwrap_or_else(|| "Unknown date".to_string());
             
-            // Get file changes for this commit (will be populated by get_commit_file_changes)
-            let files_changed = self.get_commit_file_changes(&sha)?;
+            // Get file changes for this commit with error handling
+            let files_changed = match self.get_commit_file_changes(&sha) {
+                Ok(changes) => changes,
+                Err(e) => {
+                    debug!("Error getting file changes for commit {}: {}", sha, e);
+                    // Continue with empty file changes rather than failing completely
+                    Vec::new()
+                }
+            };
             
             commits.push(CommitInfo {
                 sha,
@@ -480,7 +536,12 @@ impl GitWorker {
             count += 1;
         }
         
-        debug!("Retrieved {} commits", commits.len());
+        if errors_encountered > 0 {
+            debug!("Retrieved {} commits with {} errors encountered", commits.len(), errors_encountered);
+        } else {
+            debug!("Retrieved {} commits", commits.len());
+        }
+        
         Ok(commits)
     }
 
@@ -490,47 +551,115 @@ impl GitWorker {
         debug!("Getting file changes for commit: {}", commit_sha);
         
         let mut file_changes = Vec::new();
-        let oid = git2::Oid::from_str(commit_sha)?;
-        let commit = self.repo.find_commit(oid)?;
         
-        // Get the commit's tree
-        let commit_tree = commit.tree()?;
+        // Validate commit SHA format
+        if commit_sha.is_empty() {
+            debug!("Empty commit SHA provided");
+            return Err(color_eyre::eyre::eyre!("Empty commit SHA"));
+        }
         
-        // Get parent tree (if exists) for comparison
+        let oid = match git2::Oid::from_str(commit_sha) {
+            Ok(oid) => oid,
+            Err(e) => {
+                debug!("Invalid commit SHA format '{}': {}", commit_sha, e);
+                return Err(e.into());
+            }
+        };
+        
+        let commit = match self.repo.find_commit(oid) {
+            Ok(commit) => commit,
+            Err(e) => {
+                debug!("Commit {} not found: {}", commit_sha, e);
+                return Err(e.into());
+            }
+        };
+        
+        // Get the commit's tree with error handling
+        let commit_tree = match commit.tree() {
+            Ok(tree) => tree,
+            Err(e) => {
+                debug!("Failed to get tree for commit {}: {}", commit_sha, e);
+                return Err(e.into());
+            }
+        };
+        
+        // Get parent tree (if exists) for comparison with error handling
         let parent_tree = if commit.parent_count() > 0 {
-            Some(commit.parent(0)?.tree()?)
+            match commit.parent(0).and_then(|parent| parent.tree()) {
+                Ok(tree) => Some(tree),
+                Err(e) => {
+                    debug!("Failed to get parent tree for commit {}: {}", commit_sha, e);
+                    // For commits without accessible parents (like initial commit), compare against empty tree
+                    None
+                }
+            }
         } else {
+            // Initial commit - no parent
             None
         };
         
-        // Create diff between parent and current commit
-        let diff = self.repo.diff_tree_to_tree(
+        // Create diff between parent and current commit with error handling
+        let diff = match self.repo.diff_tree_to_tree(
             parent_tree.as_ref(),
             Some(&commit_tree),
             Some(&mut DiffOptions::new())
-        )?;
+        ) {
+            Ok(diff) => diff,
+            Err(e) => {
+                debug!("Failed to create diff for commit {}: {}", commit_sha, e);
+                return Err(e.into());
+            }
+        };
         
         // Process each delta (file change) in the diff
+        let mut errors_encountered = 0;
+        const MAX_FILE_ERRORS: usize = 10; // Allow some file processing errors
+        
         for delta in diff.deltas() {
             let status = match delta.status() {
                 git2::Delta::Added => FileChangeStatus::Added,
                 git2::Delta::Deleted => FileChangeStatus::Deleted,
                 git2::Delta::Modified => FileChangeStatus::Modified,
                 git2::Delta::Renamed => FileChangeStatus::Renamed,
-                _ => FileChangeStatus::Modified, // Default for other types
+                git2::Delta::Copied => FileChangeStatus::Modified, // Treat copied as modified
+                git2::Delta::Ignored => continue, // Skip ignored files
+                git2::Delta::Untracked => continue, // Skip untracked files
+                git2::Delta::Typechange => FileChangeStatus::Modified, // Treat type changes as modified
+                _ => {
+                    debug!("Unknown delta status for file in commit {}: {:?}", commit_sha, delta.status());
+                    FileChangeStatus::Modified // Default for unknown types
+                }
             };
             
-            // Get the file path (prefer new file path for renames)
+            // Get the file path (prefer new file path for renames) with validation
             let file_path = if let Some(new_file_path) = delta.new_file().path() {
                 self.path.join(new_file_path)
             } else if let Some(old_file_path) = delta.old_file().path() {
                 self.path.join(old_file_path)
             } else {
+                debug!("No valid file path found for delta in commit {}", commit_sha);
+                errors_encountered += 1;
+                if errors_encountered >= MAX_FILE_ERRORS {
+                    debug!("Too many file processing errors, stopping");
+                    break;
+                }
                 continue; // Skip if no path available
             };
             
-            // Get line count statistics using git diff-tree
-            let (additions, deletions) = self.get_commit_file_stats(commit_sha, &file_path)?;
+            // Get line count statistics using git diff-tree with error handling
+            let (additions, deletions) = match self.get_commit_file_stats(commit_sha, &file_path) {
+                Ok(stats) => stats,
+                Err(e) => {
+                    debug!("Failed to get file stats for {} in commit {}: {}", file_path.display(), commit_sha, e);
+                    errors_encountered += 1;
+                    if errors_encountered >= MAX_FILE_ERRORS {
+                        debug!("Too many file processing errors, stopping");
+                        break;
+                    }
+                    // Continue with zero stats rather than failing completely
+                    (0, 0)
+                }
+            };
             
             file_changes.push(CommitFileChange {
                 path: file_path,
@@ -540,7 +669,12 @@ impl GitWorker {
             });
         }
         
-        debug!("Found {} file changes for commit {}", file_changes.len(), commit_sha);
+        if errors_encountered > 0 {
+            debug!("Found {} file changes for commit {} with {} errors", file_changes.len(), commit_sha, errors_encountered);
+        } else {
+            debug!("Found {} file changes for commit {}", file_changes.len(), commit_sha);
+        }
+        
         Ok(file_changes)
     }
     
@@ -550,8 +684,17 @@ impl GitWorker {
         let relative_path = file_path.strip_prefix(&self.path)
             .unwrap_or(file_path)
             .to_string_lossy();
-            
-        let output = std::process::Command::new("git")
+        
+        // Validate inputs
+        if commit_sha.is_empty() {
+            return Err(color_eyre::eyre::eyre!("Empty commit SHA provided to get_commit_file_stats"));
+        }
+        
+        if relative_path.is_empty() {
+            return Err(color_eyre::eyre::eyre!("Empty file path provided to get_commit_file_stats"));
+        }
+        
+        let output = match std::process::Command::new("git")
             .args([
                 "diff-tree",
                 "--numstat",
@@ -561,20 +704,54 @@ impl GitWorker {
                 &relative_path
             ])
             .current_dir(&self.path)
-            .output()?;
-            
+            .output()
+        {
+            Ok(output) => output,
+            Err(e) => {
+                debug!("Failed to execute git diff-tree command: {}", e);
+                return Err(e.into());
+            }
+        };
+        
+        // Check if git command was successful
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            debug!("git diff-tree command failed with status {}: {}", output.status, stderr);
+            return Err(color_eyre::eyre::eyre!("git diff-tree failed: {}", stderr));
+        }
+        
         let output_str = String::from_utf8_lossy(&output.stdout);
         
         // Parse numstat output: "additions\tdeletions\tfilename"
         for line in output_str.lines() {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 2 {
-                let additions = parts[0].parse::<usize>().unwrap_or(0);
-                let deletions = parts[1].parse::<usize>().unwrap_or(0);
+                // Handle binary files (marked with "-" in numstat)
+                let additions = if parts[0] == "-" {
+                    0 // Binary files show as "-", treat as 0 additions
+                } else {
+                    parts[0].parse::<usize>().unwrap_or_else(|e| {
+                        debug!("Failed to parse additions '{}': {}", parts[0], e);
+                        0
+                    })
+                };
+                
+                let deletions = if parts[1] == "-" {
+                    0 // Binary files show as "-", treat as 0 deletions
+                } else {
+                    parts[1].parse::<usize>().unwrap_or_else(|e| {
+                        debug!("Failed to parse deletions '{}': {}", parts[1], e);
+                        0
+                    })
+                };
+                
                 return Ok((additions, deletions));
             }
         }
         
+        // If no numstat output found, the file might not exist in this commit
+        // or there might be no changes - return (0, 0)
+        debug!("No numstat output found for file {} in commit {}", relative_path, commit_sha);
         Ok((0, 0))
     }
 }
@@ -814,6 +991,76 @@ mod tests {
         // Test get_commit_history on empty repo
         let commits = git_worker.get_commit_history(10)?;
         assert_eq!(commits.len(), 0);
+        
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_error_handling_invalid_commit_sha() -> Result<()> {
+        let (_temp_dir, repo, repo_path) = create_test_repo()?;
+        
+        // Create a commit first
+        create_commit(&repo, &repo_path, "test.txt", "content", "Test commit")?;
+        
+        let (_tx, rx) = mpsc::channel(1);
+        let (result_tx, _result_rx) = mpsc::channel(1);
+        let git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+        
+        // Test with invalid commit SHA
+        let result = git_worker.get_commit_file_changes("invalid_sha");
+        assert!(result.is_err());
+        
+        // Test with empty commit SHA
+        let result = git_worker.get_commit_file_changes("");
+        assert!(result.is_err());
+        
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_error_handling_corrupted_repository() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let repo_path = temp_dir.path().to_path_buf();
+        
+        // Create a fake .git directory without proper git structure
+        std::fs::create_dir_all(repo_path.join(".git"))?;
+        std::fs::write(repo_path.join(".git/HEAD"), "invalid content")?;
+        
+        // Attempt to create GitWorker with corrupted repository
+        let (_tx, rx) = mpsc::channel(1);
+        let (result_tx, _result_rx) = mpsc::channel(1);
+        
+        // This should fail gracefully
+        let result = GitWorker::new(repo_path, rx, result_tx);
+        assert!(result.is_err());
+        
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_history_with_errors() -> Result<()> {
+        let (_temp_dir, repo, repo_path) = create_test_repo()?;
+        
+        // Create some commits
+        create_commit(&repo, &repo_path, "file1.txt", "content1", "Commit 1")?;
+        create_commit(&repo, &repo_path, "file2.txt", "content2", "Commit 2")?;
+        
+        let (_tx, rx) = mpsc::channel(1);
+        let (result_tx, _result_rx) = mpsc::channel(1);
+        let git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+        
+        // Test that we can still get commits even if some operations fail
+        let commits = git_worker.get_commit_history(10)?;
+        assert!(commits.len() >= 2);
+        
+        // Verify commit data is valid
+        for commit in &commits {
+            assert!(!commit.sha.is_empty());
+            assert!(!commit.short_sha.is_empty());
+            assert_eq!(commit.short_sha.len(), 7);
+            assert!(!commit.author.is_empty());
+            assert!(!commit.date.is_empty());
+        }
         
         Ok(())
     }

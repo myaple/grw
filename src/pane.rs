@@ -916,6 +916,16 @@ pub struct CommitPickerPane {
     scroll_offset: usize,
     last_g_press: Option<std::time::Instant>,
     enter_pressed: bool,
+    loading_state: CommitPickerLoadingState,
+    error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommitPickerLoadingState {
+    NotLoaded,
+    Loading,
+    Loaded,
+    Error,
 }
 
 impl CommitPickerPane {
@@ -927,29 +937,69 @@ impl CommitPickerPane {
             scroll_offset: 0,
             last_g_press: None,
             enter_pressed: false,
+            loading_state: CommitPickerLoadingState::NotLoaded,
+            error_message: None,
         }
+    }
+
+    pub fn set_loading(&mut self) {
+        self.loading_state = CommitPickerLoadingState::Loading;
+        self.error_message = None;
     }
 
     pub fn update_commits(&mut self, commits: Vec<crate::git::CommitInfo>) {
         self.commits = commits;
         if self.current_index >= self.commits.len() {
             self.current_index = 0;
+            self.scroll_offset = 0;
+        }
+        
+        // Update loading state based on results
+        if self.commits.is_empty() {
+            self.loading_state = CommitPickerLoadingState::Loaded;
+            // Don't set error for empty repos, just show appropriate message
+        } else {
+            self.loading_state = CommitPickerLoadingState::Loaded;
+            self.error_message = None;
         }
     }
 
+    pub fn set_error(&mut self, error: String) {
+        self.loading_state = CommitPickerLoadingState::Error;
+        self.error_message = Some(error);
+        self.commits.clear();
+        self.current_index = 0;
+        self.scroll_offset = 0;
+    }
+
+    pub fn is_loading(&self) -> bool {
+        matches!(self.loading_state, CommitPickerLoadingState::Loading)
+    }
+
+    pub fn has_error(&self) -> bool {
+        matches!(self.loading_state, CommitPickerLoadingState::Error)
+    }
+
     pub fn get_current_commit(&self) -> Option<&crate::git::CommitInfo> {
-        self.commits.get(self.current_index)
+        // Only return commit if we're in a valid state
+        if matches!(self.loading_state, CommitPickerLoadingState::Loaded) && !self.commits.is_empty() {
+            self.commits.get(self.current_index)
+        } else {
+            None
+        }
     }
 
     fn navigate_next(&mut self) {
-        if !self.commits.is_empty() {
+        // Only allow navigation if commits are loaded and available
+        if matches!(self.loading_state, CommitPickerLoadingState::Loaded) && !self.commits.is_empty() {
             self.current_index = (self.current_index + 1) % self.commits.len();
             self.update_scroll_offset(20); // Use reasonable default
         }
     }
 
     fn navigate_prev(&mut self) {
-        if !self.commits.is_empty() {
+        // Only allow navigation if commits are loaded and available
+        if matches!(self.loading_state, CommitPickerLoadingState::Loaded) && !self.commits.is_empty() {
             self.current_index = if self.current_index == 0 {
                 self.commits.len() - 1
             } else {
@@ -997,16 +1047,62 @@ impl Pane for CommitPickerPane {
 
         let theme = app.get_theme();
         
-        if self.commits.is_empty() {
-            let paragraph = Paragraph::new("No commits found")
-                .block(
-                    Block::default()
-                        .title(self.title())
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border_color())),
-                );
-            f.render_widget(paragraph, area);
-            return Ok(());
+        // Handle different loading states
+        match self.loading_state {
+            CommitPickerLoadingState::NotLoaded => {
+                let paragraph = Paragraph::new("Press Ctrl+P to load commit history")
+                    .block(
+                        Block::default()
+                            .title(self.title())
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(theme.border_color())),
+                    );
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+            CommitPickerLoadingState::Loading => {
+                let paragraph = Paragraph::new("⏳ Loading commit history...")
+                    .block(
+                        Block::default()
+                            .title(self.title())
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(theme.border_color())),
+                    );
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+            CommitPickerLoadingState::Error => {
+                let error_text = if let Some(error) = &self.error_message {
+                    format!("❌ Error loading commits:\n{}", error)
+                } else {
+                    "❌ Error loading commits".to_string()
+                };
+                
+                let paragraph = Paragraph::new(error_text)
+                    .block(
+                        Block::default()
+                            .title(self.title())
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(theme.error_color())),
+                    )
+                    .style(Style::default().fg(theme.error_color()));
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+            CommitPickerLoadingState::Loaded => {
+                if self.commits.is_empty() {
+                    let paragraph = Paragraph::new("📭 No commits found in this repository\n\nThis might be a new repository with no commits yet.")
+                        .block(
+                            Block::default()
+                                .title(self.title())
+                                .borders(Borders::ALL)
+                                .border_style(Style::default().fg(theme.border_color())),
+                        )
+                        .style(Style::default().fg(theme.secondary_color()));
+                    f.render_widget(paragraph, area);
+                    return Ok(());
+                }
+            }
         }
 
         // Calculate visible range based on scroll offset and area height
@@ -1132,8 +1228,12 @@ impl Pane for CommitPickerPane {
                         true
                     }
                     KeyCode::Enter => {
-                        // Set flag to indicate Enter was pressed for commit selection
-                        self.enter_pressed = true;
+                        // Only allow commit selection if we have valid commits loaded
+                        if matches!(self.loading_state, CommitPickerLoadingState::Loaded) 
+                            && !self.commits.is_empty() 
+                            && self.current_index < self.commits.len() {
+                            self.enter_pressed = true;
+                        }
                         true
                     }
                     _ => false,
@@ -1466,6 +1566,17 @@ pub struct CommitSummaryPane {
     llm_rx: mpsc::Receiver<Result<(String, String), String>>,
     is_loading_summary: bool,
     pending_summary_sha: Option<String>, // Track which commit we're waiting for a summary for
+    summary_error: Option<String>,
+    loading_state: CommitSummaryLoadingState,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommitSummaryLoadingState {
+    NoCommit,
+    LoadingFiles,
+    LoadingSummary,
+    Loaded,
+    Error,
 }
 
 impl CommitSummaryPane {
@@ -1481,6 +1592,8 @@ impl CommitSummaryPane {
             llm_rx,
             is_loading_summary: false,
             pending_summary_sha: None,
+            summary_error: None,
+            loading_state: CommitSummaryLoadingState::NoCommit,
         }
     }
 
@@ -1496,6 +1609,8 @@ impl CommitSummaryPane {
             llm_rx,
             is_loading_summary: false,
             pending_summary_sha: None,
+            summary_error: None,
+            loading_state: CommitSummaryLoadingState::NoCommit,
         }
     }
 
@@ -1510,68 +1625,133 @@ impl CommitSummaryPane {
         self.current_commit = commit;
         
         if commit_changed {
-            // Reset LLM summary when commit changes and request new summary
+            // Reset state when commit changes
             self.llm_summary = None;
             self.scroll_offset = 0;
             self.is_loading_summary = false;
-            self.pending_summary_sha = None; // Clear any pending summary for previous commit
-            self.request_llm_summary();
+            self.pending_summary_sha = None;
+            self.summary_error = None;
+            
+            // Update loading state based on new commit
+            if self.current_commit.is_some() {
+                self.loading_state = CommitSummaryLoadingState::LoadingFiles;
+                self.request_llm_summary();
+            } else {
+                self.loading_state = CommitSummaryLoadingState::NoCommit;
+            }
         }
+    }
+
+    pub fn set_error(&mut self, error: String) {
+        self.loading_state = CommitSummaryLoadingState::Error;
+        self.summary_error = Some(error);
+        self.is_loading_summary = false;
+        self.pending_summary_sha = None;
     }
 
 
 
     fn request_llm_summary(&mut self) {
-        if let (Some(commit), Some(llm_client)) = (&self.current_commit, &self.llm_client) {
-            self.is_loading_summary = true;
-            self.pending_summary_sha = Some(commit.sha.clone()); // Track which commit we're requesting summary for
-            
-            // Create a prompt for the commit summary
-            let mut prompt = format!(
-                "Please provide a brief, 2-sentence summary of what this commit changes:\n\n"
-            );
-            prompt.push_str(&format!("Commit: {}\n", commit.short_sha));
-            prompt.push_str(&format!("Message: {}\n\n", commit.message));
-            prompt.push_str("Files changed:\n");
-            
-            for file_change in &commit.files_changed {
-                let status_str = match file_change.status {
-                    crate::git::FileChangeStatus::Added => "Added",
-                    crate::git::FileChangeStatus::Modified => "Modified", 
-                    crate::git::FileChangeStatus::Deleted => "Deleted",
-                    crate::git::FileChangeStatus::Renamed => "Renamed",
-                };
-                prompt.push_str(&format!(
-                    "- {} {} (+{} -{} lines)\n",
-                    status_str,
-                    file_change.path.display(),
-                    file_change.additions,
-                    file_change.deletions
-                ));
+        if let Some(commit) = &self.current_commit {
+            // Validate commit data before proceeding
+            if commit.sha.is_empty() {
+                self.set_error("Invalid commit: empty SHA".to_string());
+                return;
             }
             
-            prompt.push_str("\nFocus on the functional impact and purpose of the changes. Keep it concise and technical.");
+            if let Some(llm_client) = &self.llm_client {
+                self.is_loading_summary = true;
+                self.loading_state = CommitSummaryLoadingState::LoadingSummary;
+                self.pending_summary_sha = Some(commit.sha.clone());
+                self.summary_error = None;
+                
+                // Create a prompt for the commit summary with validation
+                let mut prompt = format!(
+                    "Please provide a brief, 2-sentence summary of what this commit changes:\n\n"
+                );
+                prompt.push_str(&format!("Commit: {}\n", commit.short_sha));
+                
+                // Sanitize commit message to prevent prompt injection
+                let sanitized_message = commit.message.replace('\n', " ").chars().take(200).collect::<String>();
+                prompt.push_str(&format!("Message: {}\n\n", sanitized_message));
+                
+                if commit.files_changed.is_empty() {
+                    prompt.push_str("No file changes detected (this might be a merge commit or have parsing issues).\n");
+                } else {
+                    prompt.push_str("Files changed:\n");
+                    
+                    // Limit the number of files shown to prevent overly long prompts
+                    let max_files = 20;
+                    let files_to_show = commit.files_changed.iter().take(max_files);
+                    
+                    for file_change in files_to_show {
+                        let status_str = match file_change.status {
+                            crate::git::FileChangeStatus::Added => "Added",
+                            crate::git::FileChangeStatus::Modified => "Modified", 
+                            crate::git::FileChangeStatus::Deleted => "Deleted",
+                            crate::git::FileChangeStatus::Renamed => "Renamed",
+                        };
+                        
+                        // Sanitize file path to prevent issues
+                        let file_path = file_change.path.to_string_lossy();
+                        let sanitized_path = file_path.chars().take(100).collect::<String>();
+                        
+                        prompt.push_str(&format!(
+                            "- {} {} (+{} -{} lines)\n",
+                            status_str,
+                            sanitized_path,
+                            file_change.additions,
+                            file_change.deletions
+                        ));
+                    }
+                    
+                    if commit.files_changed.len() > max_files {
+                        prompt.push_str(&format!("... and {} more files\n", commit.files_changed.len() - max_files));
+                    }
+                }
+                
+                prompt.push_str("\nFocus on the functional impact and purpose of the changes. Keep it concise and technical.");
 
-            let history = vec![chat_completion::ChatCompletionMessage {
-                role: chat_completion::MessageRole::user,
-                content: chat_completion::Content::Text(prompt),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-            }];
+                let history = vec![chat_completion::ChatCompletionMessage {
+                    role: chat_completion::MessageRole::user,
+                    content: chat_completion::Content::Text(prompt),
+                    name: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                }];
 
-            let tx = self.llm_tx.clone();
-            let client = llm_client.clone();
-            let commit_sha = commit.sha.clone(); // Capture the commit SHA for the response
-            tokio::spawn(async move {
-                let res = client.get_llm_advice(history).await;
-                // Include the commit SHA with the response so we can match it later
-                let response = match res {
-                    Ok(summary) => Ok((commit_sha, summary)),
-                    Err(e) => Err(e),
-                };
-                let _ = tx.send(response).await;
-            });
+                let tx = self.llm_tx.clone();
+                let client = llm_client.clone();
+                let commit_sha = commit.sha.clone();
+                
+                tokio::spawn(async move {
+                    let res = client.get_llm_advice(history).await;
+                    let response = match res {
+                        Ok(summary) => {
+                            // Validate and sanitize the summary response
+                            let sanitized_summary = summary.chars().take(1000).collect::<String>();
+                            Ok((commit_sha, sanitized_summary))
+                        },
+                        Err(e) => {
+                            // Provide more specific error messages
+                            let error_msg = if e.contains("timeout") {
+                                "LLM request timed out. Please try again.".to_string()
+                            } else if e.contains("rate limit") {
+                                "Rate limit exceeded. Please wait before requesting another summary.".to_string()
+                            } else if e.contains("authentication") || e.contains("API key") {
+                                "Authentication failed. Please check your API key.".to_string()
+                            } else {
+                                format!("Failed to generate summary: {}", e)
+                            };
+                            Err(error_msg)
+                        }
+                    };
+                    let _ = tx.send(response).await;
+                });
+            } else {
+                // No LLM client available - just mark as loaded without setting summary
+                self.loading_state = CommitSummaryLoadingState::Loaded;
+            }
         }
     }
 
@@ -1582,9 +1762,17 @@ impl CommitSummaryPane {
                     // Only use the summary if it's for the currently selected commit
                     if let Some(current_commit) = &self.current_commit {
                         if current_commit.sha == response_commit_sha {
-                            self.llm_summary = Some(summary);
+                            // Validate the summary before using it
+                            if summary.trim().is_empty() {
+                                self.llm_summary = Some("LLM returned empty summary".to_string());
+                                self.summary_error = Some("Empty response from LLM".to_string());
+                            } else {
+                                self.llm_summary = Some(summary);
+                                self.summary_error = None;
+                            }
                             self.is_loading_summary = false;
                             self.pending_summary_sha = None;
+                            self.loading_state = CommitSummaryLoadingState::Loaded;
                         }
                         // If the response is for a different commit, ignore it (stale response)
                     }
@@ -1593,9 +1781,11 @@ impl CommitSummaryPane {
                     // Only show error if we're still waiting for a summary for the current commit
                     if let (Some(current_commit), Some(pending_sha)) = (&self.current_commit, &self.pending_summary_sha) {
                         if current_commit.sha == *pending_sha {
-                            self.llm_summary = Some(format!("Error generating summary: {}", e));
+                            self.summary_error = Some(e.clone());
+                            self.llm_summary = Some(format!("❌ {}", e));
                             self.is_loading_summary = false;
                             self.pending_summary_sha = None;
+                            self.loading_state = CommitSummaryLoadingState::Loaded;
                         }
                     }
                 }
@@ -1625,7 +1815,66 @@ impl Pane for CommitSummaryPane {
 
         let theme = app.get_theme();
 
+        // Handle different loading states
+        match self.loading_state {
+            CommitSummaryLoadingState::NoCommit => {
+                let paragraph = Paragraph::new("No commit selected")
+                    .block(
+                        Block::default()
+                            .title(self.title())
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(theme.border_color())),
+                    );
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+            CommitSummaryLoadingState::LoadingFiles => {
+                let paragraph = Paragraph::new("⏳ Loading commit details...")
+                    .block(
+                        Block::default()
+                            .title(self.title())
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(theme.border_color())),
+                    );
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+            CommitSummaryLoadingState::Error => {
+                let error_text = if let Some(error) = &self.summary_error {
+                    format!("❌ Error loading commit details:\n{}", error)
+                } else {
+                    "❌ Error loading commit details".to_string()
+                };
+                
+                let paragraph = Paragraph::new(error_text)
+                    .block(
+                        Block::default()
+                            .title(self.title())
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(theme.error_color())),
+                    )
+                    .style(Style::default().fg(theme.error_color()));
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+            _ => {} // Continue with normal rendering for LoadingSummary and Loaded states
+        }
+
         if let Some(commit) = &self.current_commit {
+            // Validate commit data before rendering
+            if commit.sha.is_empty() {
+                let paragraph = Paragraph::new("❌ Invalid commit data")
+                    .block(
+                        Block::default()
+                            .title(self.title())
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(theme.error_color())),
+                    )
+                    .style(Style::default().fg(theme.error_color()));
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+
             // Split the area into two sections: file changes and LLM summary
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -1635,53 +1884,86 @@ impl Pane for CommitSummaryPane {
             // Render file changes section
             let mut file_items = Vec::new();
             
-            for (index, file_change) in commit.files_changed.iter().enumerate() {
-                if index < self.scroll_offset {
-                    continue;
-                }
+            if commit.files_changed.is_empty() {
+                // Show message when no file changes are available
+                file_items.push(ListItem::new(Line::from(vec![
+                    Span::styled(
+                        "ℹ️  No file changes detected",
+                        Style::default().fg(theme.secondary_color())
+                    )
+                ])));
+                file_items.push(ListItem::new(Line::from(vec![
+                    Span::styled(
+                        "   This might be a merge commit or there was an error parsing changes",
+                        Style::default().fg(theme.foreground_color())
+                    )
+                ])));
+            } else {
+                for (index, file_change) in commit.files_changed.iter().enumerate() {
+                    if index < self.scroll_offset {
+                        continue;
+                    }
 
-                let visible_height = chunks[0].height.saturating_sub(2) as usize; // Account for borders
-                if file_items.len() >= visible_height {
-                    break;
-                }
+                    let visible_height = chunks[0].height.saturating_sub(2) as usize; // Account for borders
+                    if file_items.len() >= visible_height {
+                        break;
+                    }
 
-                let mut spans = Vec::new();
+                    let mut spans = Vec::new();
 
-                // Status indicator
-                let status_char = match file_change.status {
-                    crate::git::FileChangeStatus::Added => "📄 ",
-                    crate::git::FileChangeStatus::Modified => "📝 ",
-                    crate::git::FileChangeStatus::Deleted => "🗑️  ",
-                    crate::git::FileChangeStatus::Renamed => "📋 ",
-                };
-                spans.push(Span::raw(status_char));
+                    // Status indicator with validation
+                    let status_char = match file_change.status {
+                        crate::git::FileChangeStatus::Added => "📄 ",
+                        crate::git::FileChangeStatus::Modified => "📝 ",
+                        crate::git::FileChangeStatus::Deleted => "🗑️  ",
+                        crate::git::FileChangeStatus::Renamed => "📋 ",
+                    };
+                    spans.push(Span::raw(status_char));
 
-                // File path
-                spans.push(Span::styled(
-                    file_change.path.to_string_lossy().to_string(),
-                    Style::default().fg(theme.foreground_color()),
-                ));
-
-                // Addition/deletion counts
-                if file_change.additions > 0 {
+                    // File path with length validation
+                    let file_path_str = file_change.path.to_string_lossy();
+                    let display_path = if file_path_str.len() > 80 {
+                        format!("...{}", &file_path_str[file_path_str.len()-77..])
+                    } else {
+                        file_path_str.to_string()
+                    };
+                    
                     spans.push(Span::styled(
-                        format!(" (+{})", file_change.additions),
-                        Style::default()
-                            .fg(theme.added_color())
-                            .add_modifier(Modifier::BOLD),
+                        display_path,
+                        Style::default().fg(theme.foreground_color()),
                     ));
-                }
-                if file_change.deletions > 0 {
-                    spans.push(Span::styled(
-                        format!(" (-{})", file_change.deletions),
-                        Style::default()
-                            .fg(theme.removed_color())
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                }
 
-                let line = Line::from(spans);
-                file_items.push(ListItem::new(line));
+                    // Addition/deletion counts with validation
+                    if file_change.additions > 0 {
+                        let additions_text = if file_change.additions > 9999 {
+                            " (+9999+)".to_string()
+                        } else {
+                            format!(" (+{})", file_change.additions)
+                        };
+                        spans.push(Span::styled(
+                            additions_text,
+                            Style::default()
+                                .fg(theme.added_color())
+                                .add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                    if file_change.deletions > 0 {
+                        let deletions_text = if file_change.deletions > 9999 {
+                            " (-9999+)".to_string()
+                        } else {
+                            format!(" (-{})", file_change.deletions)
+                        };
+                        spans.push(Span::styled(
+                            deletions_text,
+                            Style::default()
+                                .fg(theme.removed_color())
+                                .add_modifier(Modifier::BOLD),
+                        ));
+                    }
+
+                    let line = Line::from(spans);
+                    file_items.push(ListItem::new(line));
+                }
             }
 
             let file_list = List::new(file_items)
@@ -1694,7 +1976,7 @@ impl Pane for CommitSummaryPane {
 
             f.render_widget(file_list, chunks[0]);
 
-            // Render LLM summary section
+            // Render LLM summary section with enhanced error handling
             let summary_content = if let Some(summary) = &self.llm_summary {
                 summary.clone()
             } else if self.is_loading_summary {

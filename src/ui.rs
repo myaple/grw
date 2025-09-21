@@ -852,20 +852,59 @@ impl App {
 
     // Commit picker mode state management methods
     pub fn enter_commit_picker_mode(&mut self) {
+        // Validate that we can enter commit picker mode
+        if self.app_mode == AppMode::CommitPicker {
+            log::debug!("Already in commit picker mode");
+            return;
+        }
+        
+        if !self.show_diff_panel {
+            log::error!("Cannot enter commit picker mode without diff panel visible");
+            return;
+        }
+        
+        log::debug!("Entering commit picker mode");
         self.app_mode = AppMode::CommitPicker;
+        
         // Make commit picker pane visible
         self.pane_registry
             .with_pane_mut(&PaneId::CommitPicker, |pane| {
                 pane.set_visible(true);
             });
+        
         // Make commit summary pane visible
         self.pane_registry
             .with_pane_mut(&PaneId::CommitSummary, |pane| {
                 pane.set_visible(true);
             });
+        
+        // Hide other information panes to avoid conflicts
+        self.pane_registry
+            .with_pane_mut(&PaneId::Diff, |pane| {
+                pane.set_visible(false);
+            });
+        self.pane_registry
+            .with_pane_mut(&PaneId::SideBySideDiff, |pane| {
+                pane.set_visible(false);
+            });
+        self.pane_registry
+            .with_pane_mut(&PaneId::Advice, |pane| {
+                pane.set_visible(false);
+            });
+        self.pane_registry
+            .with_pane_mut(&PaneId::Help, |pane| {
+                pane.set_visible(false);
+            });
     }
 
     pub fn exit_commit_picker_mode(&mut self) {
+        // Validate that we can exit commit picker mode
+        if self.app_mode != AppMode::CommitPicker {
+            log::debug!("Not in commit picker mode, nothing to exit");
+            return;
+        }
+        
+        log::debug!("Exiting commit picker mode");
         self.app_mode = AppMode::Normal;
         
         // Hide commit picker panes
@@ -890,6 +929,18 @@ impl App {
     }
 
     pub fn select_commit(&mut self, commit: CommitInfo) {
+        // Validate commit before selection
+        if commit.sha.is_empty() {
+            log::error!("Attempted to select commit with empty SHA");
+            return;
+        }
+        
+        if commit.short_sha.is_empty() {
+            log::error!("Attempted to select commit with empty short SHA");
+            return;
+        }
+        
+        log::debug!("Selecting commit: {} - {}", commit.short_sha, commit.message);
         self.selected_commit = Some(commit);
         self.exit_commit_picker_mode();
     }
@@ -909,6 +960,24 @@ impl App {
 
     pub fn get_selected_commit(&self) -> Option<&CommitInfo> {
         self.selected_commit.as_ref()
+    }
+
+    pub fn set_commit_picker_loading(&mut self) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                if let Some(commit_picker) = pane.as_commit_picker_pane_mut() {
+                    commit_picker.set_loading();
+                }
+            });
+    }
+
+    pub fn set_commit_picker_error(&mut self, error: String) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                if let Some(commit_picker) = pane.as_commit_picker_pane_mut() {
+                    commit_picker.set_error(error);
+                }
+            });
     }
 
     pub fn update_commit_picker_commits(&mut self, commits: Vec<CommitInfo>) {
@@ -975,6 +1044,18 @@ impl App {
     }
 
     pub fn load_commit_files(&mut self, commit: &CommitInfo) {
+        // Validate commit data before loading
+        if commit.sha.is_empty() {
+            log::error!("Cannot load files for commit with empty SHA");
+            return;
+        }
+        
+        if commit.files_changed.is_empty() {
+            log::debug!("Commit {} has no file changes", commit.short_sha);
+        }
+        
+        log::debug!("Loading {} files for commit {}", commit.files_changed.len(), commit.short_sha);
+        
         // Convert CommitFileChange to FileDiff for display
         let mut commit_files = Vec::new();
         

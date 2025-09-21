@@ -303,13 +303,27 @@ async fn main() -> Result<()> {
         // Handle commit selection from commit picker
         if app.is_in_commit_picker_mode() && app.is_commit_picker_enter_pressed() {
             if let Some(selected_commit) = app.get_current_selected_commit_from_picker() {
-                // Load the selected commit's files
-                app.load_commit_files(&selected_commit);
-                
-                // Select the commit and exit commit picker mode
-                app.select_commit(selected_commit);
-                
-                // Reset the enter pressed flag
+                // Validate the selected commit before proceeding
+                if selected_commit.sha.is_empty() {
+                    error!("Selected commit has empty SHA, cannot proceed");
+                    app.reset_commit_picker_enter_pressed();
+                } else if selected_commit.short_sha.is_empty() {
+                    error!("Selected commit has empty short SHA, cannot proceed");
+                    app.reset_commit_picker_enter_pressed();
+                } else {
+                    debug!("Processing commit selection: {} - {}", selected_commit.short_sha, selected_commit.message);
+                    
+                    // Load the selected commit's files
+                    app.load_commit_files(&selected_commit);
+                    
+                    // Select the commit and exit commit picker mode
+                    app.select_commit(selected_commit);
+                    
+                    // Reset the enter pressed flag
+                    app.reset_commit_picker_enter_pressed();
+                }
+            } else {
+                debug!("No commit selected despite enter being pressed");
                 app.reset_commit_picker_enter_pressed();
             }
         }
@@ -326,14 +340,17 @@ async fn main() -> Result<()> {
 fn handle_key_event(key: KeyEvent, app: &mut App, git_repo: &AsyncGitRepo) -> bool {
     // Handle commit picker mode key events first
     if app.is_in_commit_picker_mode() {
-        // Forward key events to commit picker pane
-        app.forward_key_to_commit_picker(key);
+        // Forward key events to commit picker pane with error handling
+        let picker_handled = app.forward_key_to_commit_picker(key);
         
-        // Also forward to commit summary pane for scrolling
-        app.forward_key_to_commit_summary(key);
+        // Also forward to commit summary pane for scrolling if not handled by picker
+        if !picker_handled {
+            app.forward_key_to_commit_summary(key);
+        }
         
         // Handle Escape to exit commit picker mode
         if matches!(key.code, KeyCode::Esc) {
+            debug!("User pressed Escape in commit picker mode, exiting");
             app.exit_commit_picker_mode();
         }
         
@@ -536,21 +553,62 @@ fn handle_key_event(key: KeyEvent, app: &mut App, git_repo: &AsyncGitRepo) -> bo
             // Only activate commit picker when in appropriate diff mode
             if app.is_showing_diff_panel() && !app.is_in_commit_picker_mode() {
                 if let Some(repo) = &git_repo.repo {
+                    // Enter commit picker mode first and show loading state
+                    app.enter_commit_picker_mode();
+                    app.set_commit_picker_loading();
+                    
                     // Create a temporary GitWorker to load commit history
                     let (_tx, rx) = tokio::sync::mpsc::channel(1);
                     let (result_tx, _result_rx) = tokio::sync::mpsc::channel(1);
                     
-                    if let Ok(git_worker) = crate::git_worker::GitWorker::new(
+                    match crate::git_worker::GitWorker::new(
                         repo.path.clone(),
                         rx,
                         result_tx,
                     ) {
-                        if let Ok(commits) = git_worker.get_commit_history(50) {
-                            app.enter_commit_picker_mode();
-                            app.update_commit_picker_commits(commits);
+                        Ok(git_worker) => {
+                            match git_worker.get_commit_history(50) {
+                                Ok(commits) => {
+                                    debug!("Successfully loaded {} commits", commits.len());
+                                    app.update_commit_picker_commits(commits);
+                                }
+                                Err(e) => {
+                                    error!("Failed to load commit history: {}", e);
+                                    let error_msg = if e.to_string().contains("not a git repository") {
+                                        "This directory is not a Git repository".to_string()
+                                    } else if e.to_string().contains("no commits") || e.to_string().contains("HEAD") {
+                                        "No commits found in this repository".to_string()
+                                    } else if e.to_string().contains("permission") {
+                                        "Permission denied accessing Git repository".to_string()
+                                    } else {
+                                        format!("Git error: {}", e)
+                                    };
+                                    app.set_commit_picker_error(error_msg);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to create GitWorker: {}", e);
+                            let error_msg = if e.to_string().contains("not a git repository") {
+                                "This directory is not a Git repository".to_string()
+                            } else if e.to_string().contains("permission") {
+                                "Permission denied accessing Git repository".to_string()
+                            } else {
+                                format!("Failed to initialize Git operations: {}", e)
+                            };
+                            app.set_commit_picker_error(error_msg);
                         }
                     }
+                } else {
+                    debug!("No git repository available for commit picker");
+                    app.enter_commit_picker_mode();
+                    app.set_commit_picker_error("No Git repository loaded".to_string());
                 }
+            } else if !app.is_showing_diff_panel() {
+                debug!("Commit picker requires diff panel to be visible");
+                // Could show a status message here in the future
+            } else if app.is_in_commit_picker_mode() {
+                debug!("Already in commit picker mode");
             }
             false
         }
