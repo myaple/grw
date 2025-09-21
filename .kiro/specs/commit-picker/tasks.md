@@ -80,3 +80,52 @@
   - Implement eager loading for large commit histories (load first n commits, configurable)
   - Optimize rendering performance for large commit lists using proper scroll offsets
   - _Requirements: 5.3, 5.4_
+
+- [ ] 13. Enhance help system with commit picker shortcuts
+  - Extend existing HelpPane render method to detect commit picker mode
+  - Add commit picker keyboard shortcuts (Ctrl+P, Ctrl+W, g+t, g+T, Enter) to help content
+  - Update help content to show commit picker shortcuts when in commit picker mode
+  - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5_
+
+- [ ] 14. Update documentation with new keyboard shortcuts
+  - Update README.md to include Ctrl+W and Ctrl+P keyboard shortcuts
+  - Ensure all help documentation includes the new shortcuts
+  - Update any other documentation files to maintain consistency
+  - _Requirements: 7.1, 7.2, 7.3, 7.4_
+
+- [ ] 15. Implement LLM summary caching in GitWorker
+  - Add llm_summary_cache HashMap to GitWorker struct
+  - Implement get_cached_summary and cache_summary methods
+  - Integrate summary cache with existing cache size limits and eviction logic
+  - Add cache clearing functionality for summary cache
+  - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
+
+- [ ] 16. Add separate LLM model configuration
+  - Extend LlmConfig struct to support separate advice_model and summary_model fields
+  - Update configuration parsing to handle separate model specifications
+  - Modify LLM client usage to use appropriate model based on use case (advice vs summary)
+  - Implement fallback to default model when specific models are not configured
+  - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5_
+
+- [ ] 17. Implement summary pre-loading system
+  - Create SummaryPreloader struct with configurable pre-load count (default 5)
+  - Implement background summary generation for upcoming commits
+  - Add pre-loading logic that triggers when entering commit picker mode
+  - Implement continuous pre-loading as user navigates through commits
+  - Add error handling for pre-loading failures without blocking UI
+  - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5_
+
+- [ ] 18. Update CommitSummaryPane to use cached summaries
+  - Modify CommitSummaryPane to check GitWorker cache before generating new summaries
+  - Update summary generation to cache results in GitWorker
+  - Implement instant display of cached summaries for improved navigation performance
+  - Add loading states that differentiate between cached and generating summaries
+  - _Requirements: 8.1, 8.2, 8.3_
+
+- [ ] 19. Write comprehensive tests for new caching and help features
+  - Add unit tests for LLM summary caching functionality in GitWorker
+  - Test help system enhancements with commit picker mode detection
+  - Add integration tests for summary pre-loading system
+  - Test separate LLM model configuration and fallback behavior
+  - Add performance tests for cached vs non-cached summary retrieval
+  - _Requirements: 6.1, 8.1, 9.1, 10.1_
