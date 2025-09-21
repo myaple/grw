@@ -19,7 +19,7 @@
   - Register CommitPickerPane with PaneRegistry in ui.rs
   - _Requirements: 1.2, 3.1, 3.2, 3.3_
 
-- [ ] 4. Implement CommitSummaryPane for commit details
+- [x] 4. Implement CommitSummaryPane for commit details
   - Create new `CommitSummaryPane` struct implementing the `Pane` trait
   - Implement rendering logic to show modified files with +/- line counts
   - Add placeholder for LLM summary display (initially show "Generating summary...")

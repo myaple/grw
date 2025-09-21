@@ -46,6 +46,7 @@ pub enum PaneId {
     StatusBar,
     Advice,
     CommitPicker,
+    CommitSummary,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +94,7 @@ impl PaneRegistry {
             Box::new(AdvicePane::new(Some(llm_client))),
         );
         self.register_pane(PaneId::CommitPicker, Box::new(CommitPickerPane::new()));
+        self.register_pane(PaneId::CommitSummary, Box::new(CommitSummaryPane::new()));
     }
 
     pub fn register_pane(&mut self, id: PaneId, pane: Box<dyn Pane>) {
@@ -1385,6 +1387,223 @@ impl Pane for AdvicePane {
     }
 }
 
+// Commit Summary Pane Implementation
+pub struct CommitSummaryPane {
+    visible: bool,
+    current_commit: Option<crate::git::CommitInfo>,
+    scroll_offset: usize,
+    llm_summary: Option<String>,
+}
+
+impl CommitSummaryPane {
+    pub fn new() -> Self {
+        Self {
+            visible: false,
+            current_commit: None,
+            scroll_offset: 0,
+            llm_summary: None,
+        }
+    }
+
+    pub fn update_commit(&mut self, commit: Option<crate::git::CommitInfo>) {
+        self.current_commit = commit;
+        // Reset LLM summary when commit changes
+        self.llm_summary = None;
+        self.scroll_offset = 0;
+    }
+
+    pub fn set_llm_summary(&mut self, summary: String) {
+        self.llm_summary = Some(summary);
+    }
+
+    pub fn get_current_commit(&self) -> Option<&crate::git::CommitInfo> {
+        self.current_commit.as_ref()
+    }
+}
+
+impl Pane for CommitSummaryPane {
+    fn title(&self) -> String {
+        "Commit Details".to_string()
+    }
+
+    fn render(
+        &self,
+        f: &mut Frame,
+        app: &App,
+        area: Rect,
+        _git_repo: &GitRepo,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use ratatui::{
+            layout::{Constraint, Direction, Layout},
+            style::{Modifier, Style},
+            text::{Line, Span},
+            widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+        };
+
+        let theme = app.get_theme();
+
+        if let Some(commit) = &self.current_commit {
+            // Split the area into two sections: file changes and LLM summary
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+                .split(area);
+
+            // Render file changes section
+            let mut file_items = Vec::new();
+            
+            for (index, file_change) in commit.files_changed.iter().enumerate() {
+                if index < self.scroll_offset {
+                    continue;
+                }
+
+                let visible_height = chunks[0].height.saturating_sub(2) as usize; // Account for borders
+                if file_items.len() >= visible_height {
+                    break;
+                }
+
+                let mut spans = Vec::new();
+
+                // Status indicator
+                let status_char = match file_change.status {
+                    crate::git::FileChangeStatus::Added => "📄 ",
+                    crate::git::FileChangeStatus::Modified => "📝 ",
+                    crate::git::FileChangeStatus::Deleted => "🗑️  ",
+                    crate::git::FileChangeStatus::Renamed => "📋 ",
+                };
+                spans.push(Span::raw(status_char));
+
+                // File path
+                spans.push(Span::styled(
+                    file_change.path.to_string_lossy().to_string(),
+                    Style::default().fg(theme.foreground_color()),
+                ));
+
+                // Addition/deletion counts
+                if file_change.additions > 0 {
+                    spans.push(Span::styled(
+                        format!(" (+{})", file_change.additions),
+                        Style::default()
+                            .fg(theme.added_color())
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                if file_change.deletions > 0 {
+                    spans.push(Span::styled(
+                        format!(" (-{})", file_change.deletions),
+                        Style::default()
+                            .fg(theme.removed_color())
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+
+                let line = Line::from(spans);
+                file_items.push(ListItem::new(line));
+            }
+
+            let file_list = List::new(file_items)
+                .block(
+                    Block::default()
+                        .title(format!("Files Changed ({})", commit.files_changed.len()))
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                );
+
+            f.render_widget(file_list, chunks[0]);
+
+            // Render LLM summary section
+            let summary_content = if let Some(summary) = &self.llm_summary {
+                summary.clone()
+            } else {
+                "Generating summary...".to_string()
+            };
+
+            let summary_lines: Vec<Line> = summary_content
+                .lines()
+                .map(|line| Line::from(line.to_string()))
+                .collect();
+
+            let summary_paragraph = Paragraph::new(summary_lines)
+                .block(
+                    Block::default()
+                        .title("LLM Summary")
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                )
+                .wrap(Wrap { trim: false });
+
+            f.render_widget(summary_paragraph, chunks[1]);
+        } else {
+            // No commit selected
+            let paragraph = Paragraph::new("No commit selected")
+                .block(
+                    Block::default()
+                        .title(self.title())
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                );
+            f.render_widget(paragraph, area);
+        }
+
+        Ok(())
+    }
+
+    fn handle_event(&mut self, event: &AppEvent) -> bool {
+        match event {
+            AppEvent::Key(key) => {
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        if let Some(commit) = &self.current_commit {
+                            let max_scroll = commit.files_changed.len().saturating_sub(1);
+                            self.scroll_offset = std::cmp::min(self.scroll_offset.saturating_add(1), max_scroll);
+                        }
+                        true
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                        true
+                    }
+                    KeyCode::PageDown => {
+                        if let Some(commit) = &self.current_commit {
+                            let page_size = 10; // Approximate page size
+                            let max_scroll = commit.files_changed.len().saturating_sub(page_size);
+                            self.scroll_offset = std::cmp::min(self.scroll_offset.saturating_add(page_size), max_scroll);
+                        }
+                        true
+                    }
+                    KeyCode::PageUp => {
+                        let page_size = 10; // Approximate page size
+                        self.scroll_offset = self.scroll_offset.saturating_sub(page_size);
+                        true
+                    }
+                    KeyCode::Char('g') => {
+                        // Go to top
+                        self.scroll_offset = 0;
+                        true
+                    }
+                    KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                        // Go to bottom
+                        if let Some(commit) = &self.current_commit {
+                            self.scroll_offset = commit.files_changed.len().saturating_sub(1);
+                        }
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn visible(&self) -> bool {
+        self.visible
+    }
+
+    fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -1404,12 +1623,13 @@ mod tests {
     #[test]
     fn test_pane_registry_creation() {
         let registry = create_test_pane_registry();
-        assert_eq!(registry.panes.len(), 8); // Default panes + advice + commit picker
+        assert_eq!(registry.panes.len(), 9); // Default panes + advice + commit picker + commit summary
         assert!(registry.get_pane(&PaneId::FileTree).is_some());
         assert!(registry.get_pane(&PaneId::Monitor).is_some());
         assert!(registry.get_pane(&PaneId::Diff).is_some());
         assert!(registry.get_pane(&PaneId::Advice).is_some());
         assert!(registry.get_pane(&PaneId::CommitPicker).is_some());
+        assert!(registry.get_pane(&PaneId::CommitSummary).is_some());
     }
 
     #[test]
@@ -1502,6 +1722,102 @@ mod tests {
         let t_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
         assert!(pane.handle_event(&t_event));
         assert_eq!(pane.current_index, 1); // Should navigate next
+    }
+
+    #[test]
+    fn test_commit_summary_pane_creation() {
+        let pane = CommitSummaryPane::new();
+        assert!(!pane.visible());
+        assert!(pane.current_commit.is_none());
+        assert_eq!(pane.scroll_offset, 0);
+        assert!(pane.llm_summary.is_none());
+    }
+
+    #[test]
+    fn test_commit_summary_pane_update_commit() {
+        let mut pane = CommitSummaryPane::new();
+        
+        let commit = crate::git::CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![
+                crate::git::CommitFileChange {
+                    path: std::path::PathBuf::from("test.rs"),
+                    status: crate::git::FileChangeStatus::Modified,
+                    additions: 5,
+                    deletions: 2,
+                },
+            ],
+        };
+        
+        pane.update_commit(Some(commit.clone()));
+        assert!(pane.current_commit.is_some());
+        assert_eq!(pane.current_commit.as_ref().unwrap().sha, "abc123");
+        assert_eq!(pane.scroll_offset, 0);
+        assert!(pane.llm_summary.is_none());
+    }
+
+    #[test]
+    fn test_commit_summary_pane_scrolling() {
+        let mut pane = CommitSummaryPane::new();
+        
+        let commit = crate::git::CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: (0..20).map(|i| crate::git::CommitFileChange {
+                path: std::path::PathBuf::from(format!("file{}.rs", i)),
+                status: crate::git::FileChangeStatus::Modified,
+                additions: i,
+                deletions: i / 2,
+            }).collect(),
+        };
+        
+        pane.update_commit(Some(commit));
+        
+        // Test j key (scroll down)
+        let j_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&j_event));
+        assert_eq!(pane.scroll_offset, 1);
+        
+        // Test k key (scroll up)
+        let k_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&k_event));
+        assert_eq!(pane.scroll_offset, 0);
+        
+        // Test page down
+        let page_down_event = AppEvent::Key(KeyEvent::from(KeyCode::PageDown));
+        assert!(pane.handle_event(&page_down_event));
+        assert_eq!(pane.scroll_offset, 10);
+        
+        // Test page up
+        let page_up_event = AppEvent::Key(KeyEvent::from(KeyCode::PageUp));
+        assert!(pane.handle_event(&page_up_event));
+        assert_eq!(pane.scroll_offset, 0);
+        
+        // Test go to bottom (Shift+G)
+        let bottom_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
+        assert!(pane.handle_event(&bottom_event));
+        assert_eq!(pane.scroll_offset, 19);
+        
+        // Test go to top (g)
+        let top_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&top_event));
+        assert_eq!(pane.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_commit_summary_pane_llm_summary() {
+        let mut pane = CommitSummaryPane::new();
+        
+        pane.set_llm_summary("This is a test summary".to_string());
+        assert!(pane.llm_summary.is_some());
+        assert_eq!(pane.llm_summary.as_ref().unwrap(), "This is a test summary");
     }
 
     #[test]
