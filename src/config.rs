@@ -77,6 +77,8 @@ pub struct Config {
     pub monitor_interval: Option<u64>,
     pub theme: Option<Theme>,
     pub llm: Option<LlmConfig>,
+    pub commit_history_limit: Option<usize>,
+    pub commit_cache_size: Option<usize>,
 }
 
 impl Config {
@@ -90,6 +92,16 @@ impl Config {
         let content = fs::read_to_string(&config_path)?;
         let config: Config = serde_json::from_str(&content)?;
         Ok(config)
+    }
+
+    /// Get the commit history limit with a sensible default
+    pub fn get_commit_history_limit(&self) -> usize {
+        self.commit_history_limit.unwrap_or(100)
+    }
+
+    /// Get the commit cache size with a sensible default
+    pub fn get_commit_cache_size(&self) -> usize {
+        self.commit_cache_size.unwrap_or(200)
     }
 
     fn get_config_path() -> PathBuf {
@@ -118,6 +130,8 @@ impl Config {
                 base_url: args.llm_base_url.clone().or(llm_config.base_url),
                 prompt: args.llm_prompt.clone().or(llm_config.prompt),
             }),
+            commit_history_limit: args.commit_history_limit.or(self.commit_history_limit),
+            commit_cache_size: args.commit_cache_size.or(self.commit_cache_size),
         }
     }
 }
@@ -159,6 +173,12 @@ pub struct Args {
 
     #[arg(long, help = "Prompt to use for LLM advice")]
     pub llm_prompt: Option<String>,
+
+    #[arg(long, help = "Maximum number of commits to load in commit picker (default: 100)")]
+    pub commit_history_limit: Option<usize>,
+
+    #[arg(long, help = "Maximum number of commits to cache (default: 200)")]
+    pub commit_cache_size: Option<usize>,
 }
 
 #[cfg(test)]
@@ -336,5 +356,67 @@ mod tests {
         assert_eq!(config_no_theme.debug, Some(false));
         assert_eq!(config_no_theme.no_diff, Some(false));
         assert_eq!(config_no_theme.theme, None);
+    }
+
+    #[test]
+    fn test_commit_history_limit_config() {
+        let config = Config {
+            commit_history_limit: Some(150),
+            ..Default::default()
+        };
+        assert_eq!(config.get_commit_history_limit(), 150);
+
+        let config_default = Config::default();
+        assert_eq!(config_default.get_commit_history_limit(), 100); // Default value
+    }
+
+    #[test]
+    fn test_commit_cache_size_config() {
+        let config = Config {
+            commit_cache_size: Some(300),
+            ..Default::default()
+        };
+        assert_eq!(config.get_commit_cache_size(), 300);
+
+        let config_default = Config::default();
+        assert_eq!(config_default.get_commit_cache_size(), 200); // Default value
+    }
+
+    #[test]
+    fn test_merge_with_args_commit_settings() {
+        let config = Config {
+            commit_history_limit: Some(50),
+            commit_cache_size: Some(100),
+            ..Default::default()
+        };
+
+        let args = Args::parse_from([
+            "grw",
+            "--commit-history-limit",
+            "200",
+            "--commit-cache-size",
+            "400",
+        ]);
+
+        let merged = config.merge_with_args(&args);
+
+        assert_eq!(merged.commit_history_limit, Some(200)); // From args
+        assert_eq!(merged.commit_cache_size, Some(400)); // From args
+    }
+
+    #[test]
+    fn test_merge_with_args_commit_settings_from_config() {
+        let config = Config {
+            commit_history_limit: Some(75),
+            commit_cache_size: Some(150),
+            ..Default::default()
+        };
+
+        let args = Args::parse_from(["grw"]); // No commit settings specified
+
+        let merged = config.merge_with_args(&args);
+
+        assert_eq!(merged.commit_history_limit, Some(75)); // From config
+        assert_eq!(merged.commit_cache_size, Some(150)); // From config
     }
 }

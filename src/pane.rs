@@ -918,6 +918,9 @@ pub struct CommitPickerPane {
     enter_pressed: bool,
     loading_state: CommitPickerLoadingState,
     error_message: Option<String>,
+    // Performance optimization fields
+    last_visible_height: usize,
+    render_cache_valid: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -939,6 +942,8 @@ impl CommitPickerPane {
             enter_pressed: false,
             loading_state: CommitPickerLoadingState::NotLoaded,
             error_message: None,
+            last_visible_height: 0,
+            render_cache_valid: false,
         }
     }
 
@@ -962,6 +967,9 @@ impl CommitPickerPane {
             self.loading_state = CommitPickerLoadingState::Loaded;
             self.error_message = None;
         }
+        
+        // Invalidate render cache when commits change
+        self.render_cache_valid = false;
     }
 
     pub fn set_error(&mut self, error: String) {
@@ -1013,8 +1021,16 @@ impl CommitPickerPane {
         // Ensure current selection is visible
         if self.current_index < self.scroll_offset {
             self.scroll_offset = self.current_index;
+            self.render_cache_valid = false;
         } else if self.current_index >= self.scroll_offset + visible_height {
             self.scroll_offset = self.current_index.saturating_sub(visible_height - 1);
+            self.render_cache_valid = false;
+        }
+        
+        // Update last visible height for performance tracking
+        if self.last_visible_height != visible_height {
+            self.last_visible_height = visible_height;
+            self.render_cache_valid = false;
         }
     }
 
@@ -1109,6 +1125,19 @@ impl Pane for CommitPickerPane {
         let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
         let start_index = self.scroll_offset;
         let end_index = (start_index + visible_height).min(self.commits.len());
+        
+        // Early return if we have no commits to render
+        if start_index >= self.commits.len() {
+            let paragraph = Paragraph::new("No commits to display")
+                .block(
+                    Block::default()
+                        .title(self.title())
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                );
+            f.render_widget(paragraph, area);
+            return Ok(());
+        }
 
         let commit_items: Vec<ListItem> = self
             .commits
@@ -1116,11 +1145,11 @@ impl Pane for CommitPickerPane {
             .enumerate()
             .skip(start_index)
             .take(end_index - start_index)
-            .map(|(index, commit)| {
+            .map(|(original_index, commit)| {
                 let mut spans = Vec::new();
 
-                // Add arrow for current selection
-                if index == self.current_index {
+                // Add arrow for current selection (use original index for comparison)
+                if original_index == self.current_index {
                     spans.push(Span::styled(
                         "-> ",
                         Style::default()
@@ -1146,7 +1175,7 @@ impl Pane for CommitPickerPane {
                     Style::default().fg(theme.foreground_color()),
                 ));
 
-                let line_style = if index == self.current_index {
+                let line_style = if original_index == self.current_index {
                     Style::default()
                         .fg(theme.foreground_color())
                         .bg(theme.highlight_color())

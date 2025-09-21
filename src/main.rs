@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
     let mut app = App::new_with_config(
         !final_config.no_diff.unwrap_or(false),
         !final_config.hide_changed_files_pane.unwrap_or(false),
-        match final_config.theme.unwrap_or(config::Theme::Dark) {
+        match final_config.theme.clone().unwrap_or(config::Theme::Dark) {
             config::Theme::Dark => ui::Theme::Dark,
             config::Theme::Light => ui::Theme::Light,
         },
@@ -287,7 +287,7 @@ async fn main() -> Result<()> {
 
         if crossterm::event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = crossterm::event::read()? {
-                if handle_key_event(key, &mut app, &git_repo) {
+                if handle_key_event(key, &mut app, &git_repo, &final_config) {
                     break;
                 }
             }
@@ -337,7 +337,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn handle_key_event(key: KeyEvent, app: &mut App, git_repo: &AsyncGitRepo) -> bool {
+fn handle_key_event(key: KeyEvent, app: &mut App, git_repo: &AsyncGitRepo, config: &Config) -> bool {
     // Handle commit picker mode key events first
     if app.is_in_commit_picker_mode() {
         // Forward key events to commit picker pane with error handling
@@ -566,8 +566,13 @@ fn handle_key_event(key: KeyEvent, app: &mut App, git_repo: &AsyncGitRepo) -> bo
                         rx,
                         result_tx,
                     ) {
-                        Ok(git_worker) => {
-                            match git_worker.get_commit_history(50) {
+                        Ok(mut git_worker) => {
+                            // Configure cache size from config
+                            git_worker.set_cache_size(config.get_commit_cache_size());
+                            
+                            // Use configurable commit history limit
+                            let commit_limit = config.get_commit_history_limit();
+                            match git_worker.get_commit_history(commit_limit) {
                                 Ok(commits) => {
                                     debug!("Successfully loaded {} commits", commits.len());
                                     app.update_commit_picker_commits(commits);
@@ -644,7 +649,7 @@ mod tests {
         let ctrl_p_key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
         
         // Handle the key event
-        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo);
+        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default());
         
         // Should not quit
         assert!(!should_quit);
@@ -674,7 +679,7 @@ mod tests {
         let ctrl_p_key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
         
         // Handle the key event
-        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo);
+        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default());
         
         // Should not quit
         assert!(!should_quit);
@@ -704,7 +709,7 @@ mod tests {
         let ctrl_p_key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
         
         // Handle the key event
-        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo);
+        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default());
         
         // Should not quit
         assert!(!should_quit);
@@ -786,7 +791,7 @@ mod tests {
         let escape_key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         
         // Handle the key event
-        let should_quit = handle_key_event(escape_key, &mut app, &git_repo);
+        let should_quit = handle_key_event(escape_key, &mut app, &git_repo, &Config::default());
         
         // Should not quit
         assert!(!should_quit);
@@ -864,7 +869,7 @@ mod tests {
         let ctrl_w_key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
         
         // Handle the key event
-        let should_quit = handle_key_event(ctrl_w_key, &mut app, &git_repo);
+        let should_quit = handle_key_event(ctrl_w_key, &mut app, &git_repo, &Config::default());
         
         // Should not quit
         assert!(!should_quit);

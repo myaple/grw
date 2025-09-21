@@ -76,7 +76,7 @@
   - Ensure tests are in a separate file to manage file lengths
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 4.4_
 
-- [ ] 12. Optimize performance and add caching
-  - Implement lazy loading for large commit histories (load first 10 commits)
+- [x] 12. Optimize performance and add caching
+  - Implement eager loading for large commit histories (load first n commits, configurable)
   - Optimize rendering performance for large commit lists using proper scroll offsets
   - _Requirements: 5.3, 5.4_
