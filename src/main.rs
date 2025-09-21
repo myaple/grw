@@ -340,18 +340,30 @@ async fn main() -> Result<()> {
 fn handle_key_event(key: KeyEvent, app: &mut App, git_repo: &AsyncGitRepo, config: &Config) -> bool {
     // Handle commit picker mode key events first
     if app.is_in_commit_picker_mode() {
+        // Handle quit keys (q and Ctrl+C) even in commit picker mode
+        match key.code {
+            KeyCode::Char('q') => {
+                log::info!("User requested quit from commit picker mode");
+                return true;
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                log::info!("User requested quit via Ctrl+C from commit picker mode");
+                return true;
+            }
+            KeyCode::Esc => {
+                debug!("User pressed Escape in commit picker mode, exiting");
+                app.exit_commit_picker_mode();
+                return false;
+            }
+            _ => {}
+        }
+        
         // Forward key events to commit picker pane with error handling
         let picker_handled = app.forward_key_to_commit_picker(key);
         
         // Also forward to commit summary pane for scrolling if not handled by picker
         if !picker_handled {
             app.forward_key_to_commit_summary(key);
-        }
-        
-        // Handle Escape to exit commit picker mode
-        if matches!(key.code, KeyCode::Esc) {
-            debug!("User pressed Escape in commit picker mode, exiting");
-            app.exit_commit_picker_mode();
         }
         
         return false; // Don't quit, stay in commit picker mode

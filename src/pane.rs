@@ -1694,66 +1694,87 @@ impl CommitSummaryPane {
                 self.pending_summary_sha = Some(commit.sha.clone());
                 self.summary_error = None;
                 
-                // Create a prompt for the commit summary with validation
-                let mut prompt = format!(
-                    "Please provide a brief, 2-sentence summary of what this commit changes:\n\n"
-                );
-                prompt.push_str(&format!("Commit: {}\n", commit.short_sha));
-                
-                // Sanitize commit message to prevent prompt injection
-                let sanitized_message = commit.message.replace('\n', " ").chars().take(200).collect::<String>();
-                prompt.push_str(&format!("Message: {}\n\n", sanitized_message));
-                
-                if commit.files_changed.is_empty() {
-                    prompt.push_str("No file changes detected (this might be a merge commit or have parsing issues).\n");
-                } else {
-                    prompt.push_str("Files changed:\n");
-                    
-                    // Limit the number of files shown to prevent overly long prompts
-                    let max_files = 20;
-                    let files_to_show = commit.files_changed.iter().take(max_files);
-                    
-                    for file_change in files_to_show {
-                        let status_str = match file_change.status {
-                            crate::git::FileChangeStatus::Added => "Added",
-                            crate::git::FileChangeStatus::Modified => "Modified", 
-                            crate::git::FileChangeStatus::Deleted => "Deleted",
-                            crate::git::FileChangeStatus::Renamed => "Renamed",
-                        };
-                        
-                        // Sanitize file path to prevent issues
-                        let file_path = file_change.path.to_string_lossy();
-                        let sanitized_path = file_path.chars().take(100).collect::<String>();
-                        
-                        prompt.push_str(&format!(
-                            "- {} {} (+{} -{} lines)\n",
-                            status_str,
-                            sanitized_path,
-                            file_change.additions,
-                            file_change.deletions
-                        ));
-                    }
-                    
-                    if commit.files_changed.len() > max_files {
-                        prompt.push_str(&format!("... and {} more files\n", commit.files_changed.len() - max_files));
-                    }
-                }
-                
-                prompt.push_str("\nFocus on the functional impact and purpose of the changes. Keep it concise and technical.");
-
-                let history = vec![chat_completion::ChatCompletionMessage {
-                    role: chat_completion::MessageRole::user,
-                    content: chat_completion::Content::Text(prompt),
-                    name: None,
-                    tool_calls: None,
-                    tool_call_id: None,
-                }];
-
+                // Get the full diff content for this commit
+                let commit_sha = commit.sha.clone();
+                let commit_short_sha = commit.short_sha.clone();
+                let commit_message = commit.message.clone();
                 let tx = self.llm_tx.clone();
                 let client = llm_client.clone();
-                let commit_sha = commit.sha.clone();
                 
                 tokio::spawn(async move {
+                    // Clone commit_sha for use in the blocking task
+                    let commit_sha_for_git = commit_sha.clone();
+                    
+                    // Get the full diff using git show command
+                    let diff_result = tokio::task::spawn_blocking(move || {
+                        std::process::Command::new("git")
+                            .args([
+                                "show",
+                                "--format=",  // Don't show commit message, just the diff
+                                "--no-color",
+                                &commit_sha_for_git,
+                            ])
+                            .output()
+                    }).await;
+                    
+                    let full_diff = match diff_result {
+                        Ok(Ok(output)) if output.status.success() => {
+                            String::from_utf8_lossy(&output.stdout).to_string()
+                        }
+                        Ok(Ok(output)) => {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            let error_msg = format!("Git show failed: {}", stderr);
+                            let _ = tx.send(Err(error_msg)).await;
+                            return;
+                        }
+                        Ok(Err(e)) => {
+                            let error_msg = format!("Failed to execute git show: {}", e);
+                            let _ = tx.send(Err(error_msg)).await;
+                            return;
+                        }
+                        Err(e) => {
+                            let error_msg = format!("Task execution failed: {}", e);
+                            let _ = tx.send(Err(error_msg)).await;
+                            return;
+                        }
+                    };
+                    
+                    // Create a prompt with the full diff content
+                    let mut prompt = format!(
+                        "Please provide a brief, 2-sentence summary of what this commit changes:\n\n"
+                    );
+                    prompt.push_str(&format!("Commit: {}\n", commit_short_sha));
+                    
+                    // Sanitize commit message to prevent prompt injection
+                    let sanitized_message = commit_message.replace('\n', " ").chars().take(200).collect::<String>();
+                    prompt.push_str(&format!("Message: {}\n\n", sanitized_message));
+                    
+                    if full_diff.trim().is_empty() {
+                        prompt.push_str("No diff content available (this might be a merge commit or have parsing issues).\n");
+                    } else {
+                        // Limit diff size to prevent overly long prompts (keep first 8000 chars)
+                        let truncated_diff = if full_diff.len() > 8000 {
+                            let truncated = full_diff.chars().take(8000).collect::<String>();
+                            format!("{}\n\n[... diff truncated for brevity ...]", truncated)
+                        } else {
+                            full_diff
+                        };
+                        
+                        prompt.push_str("Full diff:\n```diff\n");
+                        prompt.push_str(&truncated_diff);
+                        prompt.push_str("\n```\n");
+                    }
+                    
+                    prompt.push_str("\nFocus on the functional impact and purpose of the changes. Keep it concise and technical.");
+
+                    let history = vec![chat_completion::ChatCompletionMessage {
+                        role: chat_completion::MessageRole::user,
+                        content: chat_completion::Content::Text(prompt),
+                        name: None,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    }];
+
                     let res = client.get_llm_advice(history).await;
                     let response = match res {
                         Ok(summary) => {

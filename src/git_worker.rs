@@ -744,6 +744,40 @@ impl GitWorker {
         Ok(file_changes)
     }
 
+    /// Get the full diff content for a specific commit
+    /// Returns the complete diff as a string that can be used for LLM analysis
+    pub fn get_commit_full_diff(&self, commit_sha: &str) -> Result<String> {
+        debug!("Getting full diff for commit: {}", commit_sha);
+        
+        // Validate commit SHA format
+        if commit_sha.is_empty() {
+            debug!("Empty commit SHA provided");
+            return Err(color_eyre::eyre::eyre!("Empty commit SHA"));
+        }
+        
+        // Use git show to get the full diff content
+        let output = std::process::Command::new("git")
+            .args([
+                "show",
+                "--format=",  // Don't show commit message, just the diff
+                "--no-color",
+                commit_sha,
+            ])
+            .current_dir(&self.path)
+            .output()
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to execute git show: {}", e))?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(color_eyre::eyre::eyre!("Git show failed: {}", stderr));
+        }
+        
+        let diff_content = String::from_utf8_lossy(&output.stdout).to_string();
+        debug!("Retrieved {} bytes of diff content for commit {}", diff_content.len(), commit_sha);
+        
+        Ok(diff_content)
+    }
+
     /// Get file modifications for a specific commit
     /// Returns a list of files changed in the commit with their change status and line counts
     /// Uses caching to improve performance for repeated requests
