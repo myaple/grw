@@ -262,6 +262,11 @@ async fn main() -> Result<()> {
             log::debug!("Slow render detected: {render_duration:?}");
         }
 
+        // Update commit summary pane with current selection from commit picker
+        if app.is_in_commit_picker_mode() {
+            app.update_commit_summary_with_current_selection();
+        }
+
         if crossterm::event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = crossterm::event::read()? {
                 if handle_key_event(key, &mut app, &git_repo) {
@@ -276,6 +281,20 @@ async fn main() -> Result<()> {
             }
             app.reset_advice_refresh_request();
         }
+
+        // Handle commit selection from commit picker
+        if app.is_in_commit_picker_mode() && app.is_commit_picker_enter_pressed() {
+            if let Some(selected_commit) = app.get_current_selected_commit_from_picker() {
+                // Load the selected commit's files
+                app.load_commit_files(&selected_commit);
+                
+                // Select the commit and exit commit picker mode
+                app.select_commit(selected_commit);
+                
+                // Reset the enter pressed flag
+                app.reset_commit_picker_enter_pressed();
+            }
+        }
     }
 
     disable_raw_mode()?;
@@ -287,6 +306,22 @@ async fn main() -> Result<()> {
 }
 
 fn handle_key_event(key: KeyEvent, app: &mut App, git_repo: &AsyncGitRepo) -> bool {
+    // Handle commit picker mode key events first
+    if app.is_in_commit_picker_mode() {
+        // Forward key events to commit picker pane
+        app.forward_key_to_commit_picker(key);
+        
+        // Also forward to commit summary pane for scrolling
+        app.forward_key_to_commit_summary(key);
+        
+        // Handle Escape to exit commit picker mode
+        if matches!(key.code, KeyCode::Esc) {
+            app.exit_commit_picker_mode();
+        }
+        
+        return false; // Don't quit, stay in commit picker mode
+    }
+
     if app.is_showing_advice_pane()
         && app.forward_key_to_panes(key) {
             return false;
@@ -595,5 +630,87 @@ mod tests {
         
         // App should still be in commit picker mode (no change)
         assert!(app.is_in_commit_picker_mode());
+    }
+
+    #[tokio::test]
+    async fn test_commit_selection_and_return_to_normal_mode() {
+        // Create a test app with diff panel enabled
+        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        
+        // Enter commit picker mode
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
+        
+        // Create a test commit
+        let test_commit = crate::git::CommitInfo {
+            sha: "abc123def456".to_string(),
+            short_sha: "abc123d".to_string(),
+            message: "Test commit message".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01 12:00:00".to_string(),
+            files_changed: vec![
+                crate::git::CommitFileChange {
+                    path: std::path::PathBuf::from("test_file.txt"),
+                    status: crate::git::FileChangeStatus::Modified,
+                    additions: 5,
+                    deletions: 2,
+                }
+            ],
+        };
+        
+        // Update commit picker with test commits
+        app.update_commit_picker_commits(vec![test_commit.clone()]);
+        
+        // Simulate Enter key press to select commit
+        let enter_key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        app.forward_key_to_commit_picker(enter_key);
+        
+        // Check that enter was pressed
+        assert!(app.is_commit_picker_enter_pressed());
+        
+        // Get the selected commit
+        let selected_commit = app.get_current_selected_commit_from_picker().unwrap();
+        assert_eq!(selected_commit.sha, "abc123def456");
+        
+        // Load commit files and select the commit
+        app.load_commit_files(&selected_commit);
+        app.select_commit(selected_commit);
+        
+        // Should now be in normal mode
+        assert!(!app.is_in_commit_picker_mode());
+        
+        // Reset the enter pressed flag
+        app.reset_commit_picker_enter_pressed();
+        assert!(!app.is_commit_picker_enter_pressed());
+    }
+
+    #[tokio::test]
+    async fn test_escape_exits_commit_picker_mode() {
+        // Create a test app with diff panel enabled
+        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_path = temp_dir.path().to_path_buf();
+        
+        // Initialize a git repository
+        let _repo = git2::Repository::init(&repo_path).unwrap();
+        
+        let git_repo = AsyncGitRepo::new(repo_path, 500).unwrap();
+        
+        // Enter commit picker mode
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
+        
+        // Create Escape key event
+        let escape_key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        
+        // Handle the key event
+        let should_quit = handle_key_event(escape_key, &mut app, &git_repo);
+        
+        // Should not quit
+        assert!(!should_quit);
+        
+        // App should now be in normal mode
+        assert!(!app.is_in_commit_picker_mode());
     }
 }

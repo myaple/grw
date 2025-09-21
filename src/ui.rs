@@ -839,6 +839,26 @@ impl App {
 
     pub fn exit_commit_picker_mode(&mut self) {
         self.app_mode = AppMode::Normal;
+        
+        // Hide commit picker panes
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                pane.set_visible(false);
+            });
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                pane.set_visible(false);
+            });
+        
+        // Restore normal panes visibility based on current settings
+        if self.show_diff_panel {
+            match self.current_information_pane {
+                InformationPane::Diff => self.set_single_pane_diff(),
+                InformationPane::SideBySideDiff => self.set_side_by_side_diff(),
+                InformationPane::Advice => self.set_advice_pane(),
+                _ => self.set_single_pane_diff(),
+            }
+        }
     }
 
     pub fn select_commit(&mut self, commit: CommitInfo) {
@@ -867,6 +887,182 @@ impl App {
                 }
             });
     }
+
+    pub fn is_commit_picker_enter_pressed(&self) -> bool {
+        if let Some(pane) = self.pane_registry.get_pane(&PaneId::CommitPicker) {
+            if let Some(commit_picker) = pane.as_commit_picker_pane() {
+                return commit_picker.is_enter_pressed();
+            }
+        }
+        false
+    }
+
+    pub fn reset_commit_picker_enter_pressed(&mut self) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                if let Some(commit_picker) = pane.as_commit_picker_pane_mut() {
+                    commit_picker.reset_enter_pressed();
+                }
+            });
+    }
+
+    pub fn get_current_selected_commit_from_picker(&self) -> Option<CommitInfo> {
+        if let Some(pane) = self.pane_registry.get_pane(&PaneId::CommitPicker) {
+            if let Some(commit_picker) = pane.as_commit_picker_pane() {
+                return commit_picker.get_current_commit().cloned();
+            }
+        }
+        None
+    }
+
+    pub fn forward_key_to_commit_picker(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                pane.handle_event(&crate::pane::AppEvent::Key(key))
+            })
+            .unwrap_or(false)
+    }
+
+    pub fn forward_key_to_commit_summary(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                pane.handle_event(&crate::pane::AppEvent::Key(key))
+            })
+            .unwrap_or(false)
+    }
+
+    pub fn update_commit_summary_with_current_selection(&mut self) {
+        if let Some(current_commit) = self.get_current_selected_commit_from_picker() {
+            self.pane_registry
+                .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
+                        commit_summary.update_commit(Some(current_commit));
+                    }
+                });
+        }
+    }
+
+    pub fn load_commit_files(&mut self, commit: &CommitInfo) {
+        // Convert CommitFileChange to FileDiff for display
+        let mut commit_files = Vec::new();
+        
+        for file_change in &commit.files_changed {
+            // Create a FileDiff from CommitFileChange
+            // We'll need to get the actual diff content using git commands
+            let diff_content = self.get_commit_diff_content(&commit.sha, &file_change.path);
+            
+            // Convert FileChangeStatus to git2::Status
+            let status = match file_change.status {
+                crate::git::FileChangeStatus::Added => git2::Status::INDEX_NEW,
+                crate::git::FileChangeStatus::Modified => git2::Status::INDEX_MODIFIED,
+                crate::git::FileChangeStatus::Deleted => git2::Status::INDEX_DELETED,
+                crate::git::FileChangeStatus::Renamed => git2::Status::INDEX_RENAMED,
+            };
+            
+            commit_files.push(FileDiff {
+                path: file_change.path.clone(),
+                status,
+                line_strings: diff_content,
+                additions: file_change.additions,
+                deletions: file_change.deletions,
+            });
+        }
+        
+        // Update the app's files with the commit files
+        self.update_files(commit_files);
+        
+        // Create a tree structure for the commit files
+        if let Some(first_file) = self.files.first() {
+            let repo_path = first_file.path.ancestors()
+                .find(|p| p.join(".git").exists())
+                .unwrap_or_else(|| std::path::Path::new("."));
+            
+            let mut root = crate::git::TreeNode {
+                name: ".".to_string(),
+                path: repo_path.to_path_buf(),
+                is_dir: true,
+                children: Vec::new(),
+                file_diff: None,
+            };
+            
+            for file_diff in &self.files {
+                self.add_file_to_commit_tree(&mut root, file_diff, repo_path);
+            }
+            
+            self.update_tree(&root);
+        }
+    }
+
+    fn get_commit_diff_content(&self, commit_sha: &str, file_path: &std::path::Path) -> Vec<String> {
+        // Use git show to get the diff content for the specific file in the commit
+        let output = std::process::Command::new("git")
+            .args([
+                "show",
+                "--format=",
+                "--no-color",
+                commit_sha,
+                "--",
+                &file_path.to_string_lossy(),
+            ])
+            .output();
+            
+        match output {
+            Ok(output) => {
+                let diff_text = String::from_utf8_lossy(&output.stdout);
+                diff_text.lines().map(|line| line.to_string()).collect()
+            }
+            Err(_) => {
+                vec![format!("Error: Could not get diff for {}", file_path.display())]
+            }
+        }
+    }
+
+    fn add_file_to_commit_tree(&self, root: &mut crate::git::TreeNode, file_diff: &FileDiff, repo_path: &std::path::Path) {
+        let relative_path = if let Ok(rel_path) = file_diff.path.strip_prefix(repo_path) {
+            rel_path
+        } else {
+            &file_diff.path
+        };
+
+        let mut current_node = root;
+        let components: Vec<_> = relative_path.components().collect();
+
+        for (i, component) in components.iter().enumerate() {
+            let component_str = component.as_os_str().to_string_lossy().to_string();
+
+            if i == components.len() - 1 {
+                // This is the file itself
+                current_node.children.push(crate::git::TreeNode {
+                    name: component_str.clone(),
+                    path: file_diff.path.clone(),
+                    is_dir: false,
+                    children: Vec::new(),
+                    file_diff: Some(file_diff.clone()),
+                });
+            } else {
+                // This is a directory
+                let child_index = current_node
+                    .children
+                    .iter()
+                    .position(|child| child.is_dir && child.name == component_str);
+
+                if let Some(index) = child_index {
+                    current_node = &mut current_node.children[index];
+                } else {
+                    let new_child = crate::git::TreeNode {
+                        name: component_str.clone(),
+                        path: current_node.path.join(&component_str),
+                        is_dir: true,
+                        children: Vec::new(),
+                        file_diff: None,
+                    };
+                    current_node.children.push(new_child);
+                    let new_len = current_node.children.len();
+                    current_node = &mut current_node.children[new_len - 1];
+                }
+            }
+        }
+    }
 }
 
 #[allow(clippy::extra_unused_type_parameters)]
@@ -891,7 +1087,26 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
     app.pane_registry
         .render(f, app, chunks[0], PaneId::StatusBar, git_repo);
 
-    // Handle the information pane (right side)
+    // Check if we're in commit picker mode
+    if app.is_in_commit_picker_mode() {
+        // Render commit picker layout: left pane = commit list, right pane = commit details
+        let bottom_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(chunks[1]);
+
+        // Render commit picker pane on the left
+        app.pane_registry
+            .render(f, app, bottom_chunks[0], PaneId::CommitPicker, git_repo);
+
+        // Render commit summary pane on the right
+        app.pane_registry
+            .render(f, app, bottom_chunks[1], PaneId::CommitSummary, git_repo);
+        
+        return;
+    }
+
+    // Handle the information pane (right side) for normal mode
     let file_browser_visible = app.is_showing_changed_files_pane();
     let info_pane_visible = app.is_showing_diff_panel();
 

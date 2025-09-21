@@ -40,6 +40,12 @@ pub trait Pane {
     fn as_commit_picker_pane_mut(&mut self) -> Option<&mut CommitPickerPane> {
         None
     }
+    fn as_commit_summary_pane(&self) -> Option<&CommitSummaryPane> {
+        None
+    }
+    fn as_commit_summary_pane_mut(&mut self) -> Option<&mut CommitSummaryPane> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -894,6 +900,7 @@ pub struct CommitPickerPane {
     current_index: usize,
     scroll_offset: usize,
     last_g_press: Option<std::time::Instant>,
+    enter_pressed: bool,
 }
 
 impl CommitPickerPane {
@@ -904,6 +911,7 @@ impl CommitPickerPane {
             current_index: 0,
             scroll_offset: 0,
             last_g_press: None,
+            enter_pressed: false,
         }
     }
 
@@ -932,6 +940,14 @@ impl CommitPickerPane {
                 self.current_index - 1
             };
         }
+    }
+
+    pub fn is_enter_pressed(&self) -> bool {
+        self.enter_pressed
+    }
+
+    pub fn reset_enter_pressed(&mut self) {
+        self.enter_pressed = false;
     }
 }
 
@@ -1080,6 +1096,11 @@ impl Pane for CommitPickerPane {
                             self.navigate_prev();
                             self.last_g_press = None; // Reset after use
                         }
+                        true
+                    }
+                    KeyCode::Enter => {
+                        // Set flag to indicate Enter was pressed for commit selection
+                        self.enter_pressed = true;
                         true
                     }
                     _ => false,
@@ -1615,6 +1636,14 @@ impl Pane for CommitSummaryPane {
 
     fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
+    }
+
+    fn as_commit_summary_pane(&self) -> Option<&CommitSummaryPane> {
+        Some(self)
+    }
+
+    fn as_commit_summary_pane_mut(&mut self) -> Option<&mut CommitSummaryPane> {
+        Some(self)
     }
 }
 

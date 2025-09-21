@@ -40,7 +40,7 @@
   - Add unit tests for key binding activation
   - _Requirements: 1.1, 1.3, 5.1_
 
-- [ ] 7. Implement commit selection and return to normal mode
+- [x] 7. Implement commit selection and return to normal mode
   - Add Enter key handling in CommitPickerPane to select highlighted commit
   - Implement commit selection logic that updates App state with chosen commit
   - Add logic to return to normal file browser + diff view with selected commit data
