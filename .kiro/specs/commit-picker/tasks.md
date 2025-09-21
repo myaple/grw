@@ -68,11 +68,12 @@
   - Add validation for commit selection and mode transitions
   - _Requirements: 5.4, 2.3_
 
-- [ ] 11. Write integration tests for commit picker workflow
+- [x] 11. Write integration tests for commit picker workflow
   - Create tests for complete Ctrl+P -> navigate -> Enter -> return workflow
   - Test commit picker with various repository states (empty, single commit, many commits)
   - Add tests for g+t/g+T navigation and proper commit highlighting
   - Test integration with existing diff navigation after commit selection
+  - Ensure tests are in a separate file to manage file lengths
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 4.4_
 
 - [ ] 12. Optimize performance and add caching
