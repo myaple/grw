@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use openai_api_rs::v1::chat_completion;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -10,7 +11,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 use tokio::sync::mpsc;
-use openai_api_rs::v1::chat_completion;
 
 use crate::git::GitRepo;
 use crate::llm::LlmClient;
@@ -106,7 +106,10 @@ impl PaneRegistry {
             Box::new(AdvicePane::new(Some(llm_client.clone()))),
         );
         self.register_pane(PaneId::CommitPicker, Box::new(CommitPickerPane::new()));
-        self.register_pane(PaneId::CommitSummary, Box::new(CommitSummaryPane::new_with_llm_client(Some(llm_client))));
+        self.register_pane(
+            PaneId::CommitSummary,
+            Box::new(CommitSummaryPane::new_with_llm_client(Some(llm_client))),
+        );
     }
 
     pub fn register_pane(&mut self, id: PaneId, pane: Box<dyn Pane>) {
@@ -872,8 +875,16 @@ impl Pane for StatusBarPane {
                 selected_commit.short_sha,
                 selected_commit.message.lines().next().unwrap_or(""),
                 selected_commit.files_changed.len(),
-                selected_commit.files_changed.iter().map(|f| f.additions).sum::<usize>(),
-                selected_commit.files_changed.iter().map(|f| f.deletions).sum::<usize>()
+                selected_commit
+                    .files_changed
+                    .iter()
+                    .map(|f| f.additions)
+                    .sum::<usize>(),
+                selected_commit
+                    .files_changed
+                    .iter()
+                    .map(|f| f.deletions)
+                    .sum::<usize>()
             )
         } else {
             format!(
@@ -958,7 +969,7 @@ impl CommitPickerPane {
             self.current_index = 0;
             self.scroll_offset = 0;
         }
-        
+
         // Update loading state based on results
         if self.commits.is_empty() {
             self.loading_state = CommitPickerLoadingState::Loaded;
@@ -967,7 +978,7 @@ impl CommitPickerPane {
             self.loading_state = CommitPickerLoadingState::Loaded;
             self.error_message = None;
         }
-        
+
         // Invalidate render cache when commits change
         self.render_cache_valid = false;
     }
@@ -990,7 +1001,9 @@ impl CommitPickerPane {
 
     pub fn get_current_commit(&self) -> Option<&crate::git::CommitInfo> {
         // Only return commit if we're in a valid state
-        if matches!(self.loading_state, CommitPickerLoadingState::Loaded) && !self.commits.is_empty() {
+        if matches!(self.loading_state, CommitPickerLoadingState::Loaded)
+            && !self.commits.is_empty()
+        {
             self.commits.get(self.current_index)
         } else {
             None
@@ -999,7 +1012,9 @@ impl CommitPickerPane {
 
     fn navigate_next(&mut self) {
         // Only allow navigation if commits are loaded and available
-        if matches!(self.loading_state, CommitPickerLoadingState::Loaded) && !self.commits.is_empty() {
+        if matches!(self.loading_state, CommitPickerLoadingState::Loaded)
+            && !self.commits.is_empty()
+        {
             self.current_index = (self.current_index + 1) % self.commits.len();
             self.update_scroll_offset(20); // Use reasonable default
         }
@@ -1007,7 +1022,9 @@ impl CommitPickerPane {
 
     fn navigate_prev(&mut self) {
         // Only allow navigation if commits are loaded and available
-        if matches!(self.loading_state, CommitPickerLoadingState::Loaded) && !self.commits.is_empty() {
+        if matches!(self.loading_state, CommitPickerLoadingState::Loaded)
+            && !self.commits.is_empty()
+        {
             self.current_index = if self.current_index == 0 {
                 self.commits.len() - 1
             } else {
@@ -1026,7 +1043,7 @@ impl CommitPickerPane {
             self.scroll_offset = self.current_index.saturating_sub(visible_height - 1);
             self.render_cache_valid = false;
         }
-        
+
         // Update last visible height for performance tracking
         if self.last_visible_height != visible_height {
             self.last_visible_height = visible_height;
@@ -1062,28 +1079,26 @@ impl Pane for CommitPickerPane {
         };
 
         let theme = app.get_theme();
-        
+
         // Handle different loading states
         match self.loading_state {
             CommitPickerLoadingState::NotLoaded => {
-                let paragraph = Paragraph::new("Press Ctrl+P to load commit history")
-                    .block(
-                        Block::default()
-                            .title(self.title())
-                            .borders(Borders::ALL)
-                            .border_style(Style::default().fg(theme.border_color())),
-                    );
+                let paragraph = Paragraph::new("Press Ctrl+P to load commit history").block(
+                    Block::default()
+                        .title(self.title())
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                );
                 f.render_widget(paragraph, area);
                 return Ok(());
             }
             CommitPickerLoadingState::Loading => {
-                let paragraph = Paragraph::new("⏳ Loading commit history...")
-                    .block(
-                        Block::default()
-                            .title(self.title())
-                            .borders(Borders::ALL)
-                            .border_style(Style::default().fg(theme.border_color())),
-                    );
+                let paragraph = Paragraph::new("⏳ Loading commit history...").block(
+                    Block::default()
+                        .title(self.title())
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                );
                 f.render_widget(paragraph, area);
                 return Ok(());
             }
@@ -1093,7 +1108,7 @@ impl Pane for CommitPickerPane {
                 } else {
                     "❌ Error loading commits".to_string()
                 };
-                
+
                 let paragraph = Paragraph::new(error_text)
                     .block(
                         Block::default()
@@ -1125,16 +1140,15 @@ impl Pane for CommitPickerPane {
         let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
         let start_index = self.scroll_offset;
         let end_index = (start_index + visible_height).min(self.commits.len());
-        
+
         // Early return if we have no commits to render
         if start_index >= self.commits.len() {
-            let paragraph = Paragraph::new("No commits to display")
-                .block(
-                    Block::default()
-                        .title(self.title())
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border_color())),
-                );
+            let paragraph = Paragraph::new("No commits to display").block(
+                Block::default()
+                    .title(self.title())
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color())),
+            );
             f.render_widget(paragraph, area);
             return Ok(());
         }
@@ -1258,9 +1272,10 @@ impl Pane for CommitPickerPane {
                     }
                     KeyCode::Enter => {
                         // Only allow commit selection if we have valid commits loaded
-                        if matches!(self.loading_state, CommitPickerLoadingState::Loaded) 
-                            && !self.commits.is_empty() 
-                            && self.current_index < self.commits.len() {
+                        if matches!(self.loading_state, CommitPickerLoadingState::Loaded)
+                            && !self.commits.is_empty()
+                            && self.current_index < self.commits.len()
+                        {
                             self.enter_pressed = true;
                         }
                         true
@@ -1347,13 +1362,14 @@ impl AdvicePane {
                 Ok(response) => {
                     self.content.push_str("\n\n");
                     self.content.push_str(&response);
-                    self.conversation_history.push(chat_completion::ChatCompletionMessage {
-                        role: chat_completion::MessageRole::assistant,
-                        content: chat_completion::Content::Text(response),
-                        name: None,
-                        tool_calls: None,
-                        tool_call_id: None,
-                    });
+                    self.conversation_history
+                        .push(chat_completion::ChatCompletionMessage {
+                            role: chat_completion::MessageRole::assistant,
+                            content: chat_completion::Content::Text(response),
+                            name: None,
+                            tool_calls: None,
+                            tool_call_id: None,
+                        });
                     let content_lines: Vec<_> = self.content.lines().collect();
                     self.scroll_offset = content_lines.len().saturating_sub(1);
                 }
@@ -1393,7 +1409,11 @@ impl Pane for AdvicePane {
             )
             .split(area);
 
-        let mut text_lines: Vec<Line> = self.content.lines().map(|l| Line::from(l.to_string())).collect();
+        let mut text_lines: Vec<Line> = self
+            .content
+            .lines()
+            .map(|l| Line::from(l.to_string()))
+            .collect();
         if self.is_loading {
             text_lines.push(Line::from("Loading..."));
         }
@@ -1438,13 +1458,14 @@ impl Pane for AdvicePane {
                     }
                     KeyCode::Enter => {
                         let prompt = self.input.drain(..).collect::<String>();
-                        self.conversation_history.push(chat_completion::ChatCompletionMessage {
-                            role: chat_completion::MessageRole::user,
-                            content: chat_completion::Content::Text(prompt.clone()),
-                            name: None,
-                            tool_calls: None,
-                            tool_call_id: None,
-                        });
+                        self.conversation_history
+                            .push(chat_completion::ChatCompletionMessage {
+                                role: chat_completion::MessageRole::user,
+                                content: chat_completion::Content::Text(prompt.clone()),
+                                name: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                            });
 
                         self.content.push_str("\n\n> ");
                         self.content.push_str(&prompt);
@@ -1484,31 +1505,40 @@ impl Pane for AdvicePane {
                         return true;
                     }
                     KeyCode::Right => {
-                        self.input_cursor_position = self.input_cursor_position.saturating_add(1).min(self.input.len());
+                        self.input_cursor_position = self
+                            .input_cursor_position
+                            .saturating_add(1)
+                            .min(self.input.len());
                         return true;
                     }
                     _ => return false,
                 }
             } else {
-                 match key.code {
+                match key.code {
                     KeyCode::Char('/') => {
                         self.input_mode = true;
                         if self.conversation_history.is_empty() {
                             if let Some(data) = &self.initial_data {
-                                self.conversation_history.push(chat_completion::ChatCompletionMessage {
-                                    role: chat_completion::MessageRole::system,
-                                    content: chat_completion::Content::Text(SYSTEM_PROMPT.to_string()),
-                                    name: None,
-                                    tool_calls: None,
-                                    tool_call_id: None,
-                                });
-                                self.conversation_history.push(chat_completion::ChatCompletionMessage {
-                                    role: chat_completion::MessageRole::user,
-                                    content: chat_completion::Content::Text(data.clone()),
-                                    name: None,
-                                    tool_calls: None,
-                                    tool_call_id: None,
-                                });
+                                self.conversation_history.push(
+                                    chat_completion::ChatCompletionMessage {
+                                        role: chat_completion::MessageRole::system,
+                                        content: chat_completion::Content::Text(
+                                            SYSTEM_PROMPT.to_string(),
+                                        ),
+                                        name: None,
+                                        tool_calls: None,
+                                        tool_call_id: None,
+                                    },
+                                );
+                                self.conversation_history.push(
+                                    chat_completion::ChatCompletionMessage {
+                                        role: chat_completion::MessageRole::user,
+                                        content: chat_completion::Content::Text(data.clone()),
+                                        name: None,
+                                        tool_calls: None,
+                                        tool_call_id: None,
+                                    },
+                                );
                             }
                         }
                         return true;
@@ -1529,7 +1559,8 @@ impl Pane for AdvicePane {
                         let page_size = rect.height.saturating_sub(2) as usize;
                         let content_lines: Vec<_> = self.content.lines().collect();
                         let max_scroll = content_lines.len().saturating_sub(page_size);
-                        self.scroll_offset = std::cmp::min(self.scroll_offset.saturating_add(page_size), max_scroll);
+                        self.scroll_offset =
+                            std::cmp::min(self.scroll_offset.saturating_add(page_size), max_scroll);
                         return true;
                     }
                     KeyCode::PageUp => {
@@ -1652,7 +1683,7 @@ impl CommitSummaryPane {
         };
 
         self.current_commit = commit;
-        
+
         if commit_changed {
             // Reset state when commit changes
             self.llm_summary = None;
@@ -1660,7 +1691,7 @@ impl CommitSummaryPane {
             self.is_loading_summary = false;
             self.pending_summary_sha = None;
             self.summary_error = None;
-            
+
             // Update loading state based on new commit
             if self.current_commit.is_some() {
                 self.loading_state = CommitSummaryLoadingState::LoadingFiles;
@@ -1678,8 +1709,6 @@ impl CommitSummaryPane {
         self.pending_summary_sha = None;
     }
 
-
-
     fn request_llm_summary(&mut self) {
         if let Some(commit) = &self.current_commit {
             // Validate commit data before proceeding
@@ -1687,36 +1716,37 @@ impl CommitSummaryPane {
                 self.set_error("Invalid commit: empty SHA".to_string());
                 return;
             }
-            
+
             if let Some(llm_client) = &self.llm_client {
                 self.is_loading_summary = true;
                 self.loading_state = CommitSummaryLoadingState::LoadingSummary;
                 self.pending_summary_sha = Some(commit.sha.clone());
                 self.summary_error = None;
-                
+
                 // Get the full diff content for this commit
                 let commit_sha = commit.sha.clone();
                 let commit_short_sha = commit.short_sha.clone();
                 let commit_message = commit.message.clone();
                 let tx = self.llm_tx.clone();
                 let client = llm_client.clone();
-                
+
                 tokio::spawn(async move {
                     // Clone commit_sha for use in the blocking task
                     let commit_sha_for_git = commit_sha.clone();
-                    
+
                     // Get the full diff using git show command
                     let diff_result = tokio::task::spawn_blocking(move || {
                         std::process::Command::new("git")
                             .args([
                                 "show",
-                                "--format=",  // Don't show commit message, just the diff
+                                "--format=", // Don't show commit message, just the diff
                                 "--no-color",
                                 &commit_sha_for_git,
                             ])
                             .output()
-                    }).await;
-                    
+                    })
+                    .await;
+
                     let full_diff = match diff_result {
                         Ok(Ok(output)) if output.status.success() => {
                             String::from_utf8_lossy(&output.stdout).to_string()
@@ -1738,17 +1768,21 @@ impl CommitSummaryPane {
                             return;
                         }
                     };
-                    
+
                     // Create a prompt with the full diff content
                     let mut prompt = format!(
                         "Please provide a brief, 2-sentence summary of what this commit changes:\n\n"
                     );
                     prompt.push_str(&format!("Commit: {}\n", commit_short_sha));
-                    
+
                     // Sanitize commit message to prevent prompt injection
-                    let sanitized_message = commit_message.replace('\n', " ").chars().take(200).collect::<String>();
+                    let sanitized_message = commit_message
+                        .replace('\n', " ")
+                        .chars()
+                        .take(200)
+                        .collect::<String>();
                     prompt.push_str(&format!("Message: {}\n\n", sanitized_message));
-                    
+
                     if full_diff.trim().is_empty() {
                         prompt.push_str("No diff content available (this might be a merge commit or have parsing issues).\n");
                     } else {
@@ -1759,12 +1793,12 @@ impl CommitSummaryPane {
                         } else {
                             full_diff
                         };
-                        
+
                         prompt.push_str("Full diff:\n```diff\n");
                         prompt.push_str(&truncated_diff);
                         prompt.push_str("\n```\n");
                     }
-                    
+
                     prompt.push_str("\nFocus on the functional impact and purpose of the changes. Keep it concise and technical.");
 
                     let history = vec![chat_completion::ChatCompletionMessage {
@@ -1781,7 +1815,7 @@ impl CommitSummaryPane {
                             // Validate and sanitize the summary response
                             let sanitized_summary = summary.chars().take(1000).collect::<String>();
                             Ok((commit_sha, sanitized_summary))
-                        },
+                        }
                         Err(e) => {
                             // Provide more specific error messages
                             let error_msg = if e.contains("timeout") {
@@ -1829,7 +1863,9 @@ impl CommitSummaryPane {
                 }
                 Err(e) => {
                     // Only show error if we're still waiting for a summary for the current commit
-                    if let (Some(current_commit), Some(pending_sha)) = (&self.current_commit, &self.pending_summary_sha) {
+                    if let (Some(current_commit), Some(pending_sha)) =
+                        (&self.current_commit, &self.pending_summary_sha)
+                    {
                         if current_commit.sha == *pending_sha {
                             self.summary_error = Some(e.clone());
                             self.llm_summary = Some(format!("❌ {}", e));
@@ -1868,24 +1904,22 @@ impl Pane for CommitSummaryPane {
         // Handle different loading states
         match self.loading_state {
             CommitSummaryLoadingState::NoCommit => {
-                let paragraph = Paragraph::new("No commit selected")
-                    .block(
-                        Block::default()
-                            .title(self.title())
-                            .borders(Borders::ALL)
-                            .border_style(Style::default().fg(theme.border_color())),
-                    );
+                let paragraph = Paragraph::new("No commit selected").block(
+                    Block::default()
+                        .title(self.title())
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                );
                 f.render_widget(paragraph, area);
                 return Ok(());
             }
             CommitSummaryLoadingState::LoadingFiles => {
-                let paragraph = Paragraph::new("⏳ Loading commit details...")
-                    .block(
-                        Block::default()
-                            .title(self.title())
-                            .borders(Borders::ALL)
-                            .border_style(Style::default().fg(theme.border_color())),
-                    );
+                let paragraph = Paragraph::new("⏳ Loading commit details...").block(
+                    Block::default()
+                        .title(self.title())
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                );
                 f.render_widget(paragraph, area);
                 return Ok(());
             }
@@ -1895,7 +1929,7 @@ impl Pane for CommitSummaryPane {
                 } else {
                     "❌ Error loading commit details".to_string()
                 };
-                
+
                 let paragraph = Paragraph::new(error_text)
                     .block(
                         Block::default()
@@ -1933,21 +1967,17 @@ impl Pane for CommitSummaryPane {
 
             // Render file changes section
             let mut file_items = Vec::new();
-            
+
             if commit.files_changed.is_empty() {
                 // Show message when no file changes are available
-                file_items.push(ListItem::new(Line::from(vec![
-                    Span::styled(
-                        "ℹ️  No file changes detected",
-                        Style::default().fg(theme.secondary_color())
-                    )
-                ])));
-                file_items.push(ListItem::new(Line::from(vec![
-                    Span::styled(
-                        "   This might be a merge commit or there was an error parsing changes",
-                        Style::default().fg(theme.foreground_color())
-                    )
-                ])));
+                file_items.push(ListItem::new(Line::from(vec![Span::styled(
+                    "ℹ️  No file changes detected",
+                    Style::default().fg(theme.secondary_color()),
+                )])));
+                file_items.push(ListItem::new(Line::from(vec![Span::styled(
+                    "   This might be a merge commit or there was an error parsing changes",
+                    Style::default().fg(theme.foreground_color()),
+                )])));
             } else {
                 for (index, file_change) in commit.files_changed.iter().enumerate() {
                     if index < self.scroll_offset {
@@ -1973,11 +2003,11 @@ impl Pane for CommitSummaryPane {
                     // File path with length validation
                     let file_path_str = file_change.path.to_string_lossy();
                     let display_path = if file_path_str.len() > 80 {
-                        format!("...{}", &file_path_str[file_path_str.len()-77..])
+                        format!("...{}", &file_path_str[file_path_str.len() - 77..])
                     } else {
                         file_path_str.to_string()
                     };
-                    
+
                     spans.push(Span::styled(
                         display_path,
                         Style::default().fg(theme.foreground_color()),
@@ -2016,13 +2046,12 @@ impl Pane for CommitSummaryPane {
                 }
             }
 
-            let file_list = List::new(file_items)
-                .block(
-                    Block::default()
-                        .title(format!("Files Changed ({})", commit.files_changed.len()))
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border_color())),
-                );
+            let file_list = List::new(file_items).block(
+                Block::default()
+                    .title(format!("Files Changed ({})", commit.files_changed.len()))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color())),
+            );
 
             f.render_widget(file_list, chunks[0]);
 
@@ -2054,13 +2083,12 @@ impl Pane for CommitSummaryPane {
             f.render_widget(summary_paragraph, chunks[1]);
         } else {
             // No commit selected
-            let paragraph = Paragraph::new("No commit selected")
-                .block(
-                    Block::default()
-                        .title(self.title())
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border_color())),
-                );
+            let paragraph = Paragraph::new("No commit selected").block(
+                Block::default()
+                    .title(self.title())
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color())),
+            );
             f.render_widget(paragraph, area);
         }
 
@@ -2074,7 +2102,8 @@ impl Pane for CommitSummaryPane {
                     KeyCode::Char('j') | KeyCode::Down => {
                         if let Some(commit) = &self.current_commit {
                             let max_scroll = commit.files_changed.len().saturating_sub(1);
-                            self.scroll_offset = std::cmp::min(self.scroll_offset.saturating_add(1), max_scroll);
+                            self.scroll_offset =
+                                std::cmp::min(self.scroll_offset.saturating_add(1), max_scroll);
                         }
                         true
                     }
@@ -2086,7 +2115,10 @@ impl Pane for CommitSummaryPane {
                         if let Some(commit) = &self.current_commit {
                             let page_size = 10; // Approximate page size
                             let max_scroll = commit.files_changed.len().saturating_sub(page_size);
-                            self.scroll_offset = std::cmp::min(self.scroll_offset.saturating_add(page_size), max_scroll);
+                            self.scroll_offset = std::cmp::min(
+                                self.scroll_offset.saturating_add(page_size),
+                                max_scroll,
+                            );
                         }
                         true
                     }
@@ -2131,7 +2163,6 @@ impl Pane for CommitSummaryPane {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2162,14 +2193,14 @@ mod tests {
     #[test]
     fn test_commit_picker_pane_navigation() {
         let mut pane = CommitPickerPane::new();
-        
+
         // Test with empty commits
         assert_eq!(pane.current_index, 0);
         pane.navigate_next();
         assert_eq!(pane.current_index, 0);
         pane.navigate_prev();
         assert_eq!(pane.current_index, 0);
-        
+
         // Add some test commits
         let commits = vec![
             crate::git::CommitInfo {
@@ -2189,16 +2220,16 @@ mod tests {
                 files_changed: vec![],
             },
         ];
-        
+
         pane.update_commits(commits);
-        
+
         // Test navigation
         assert_eq!(pane.current_index, 0);
         pane.navigate_next();
         assert_eq!(pane.current_index, 1);
         pane.navigate_next();
         assert_eq!(pane.current_index, 0); // Should wrap around
-        
+
         pane.navigate_prev();
         assert_eq!(pane.current_index, 1); // Should wrap around backwards
         pane.navigate_prev();
@@ -2208,7 +2239,7 @@ mod tests {
     #[test]
     fn test_commit_picker_pane_key_handling() {
         let mut pane = CommitPickerPane::new();
-        
+
         // Add test commits
         let commits = vec![
             crate::git::CommitInfo {
@@ -2228,23 +2259,23 @@ mod tests {
                 files_changed: vec![],
             },
         ];
-        
+
         pane.update_commits(commits);
-        
+
         // Test j key (next)
         let j_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         assert!(pane.handle_event(&j_event));
         assert_eq!(pane.current_index, 1);
-        
+
         // Test k key (prev)
         let k_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert!(pane.handle_event(&k_event));
         assert_eq!(pane.current_index, 0);
-        
+
         // Test g+t combination
         let g_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
         assert!(pane.handle_event(&g_event));
-        
+
         // Immediately follow with t
         let t_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
         assert!(pane.handle_event(&t_event));
@@ -2263,23 +2294,21 @@ mod tests {
     #[test]
     fn test_commit_summary_pane_update_commit() {
         let mut pane = CommitSummaryPane::new();
-        
+
         let commit = crate::git::CommitInfo {
             sha: "abc123".to_string(),
             short_sha: "abc123".to_string(),
             message: "Test commit".to_string(),
             author: "Test Author".to_string(),
             date: "2023-01-01".to_string(),
-            files_changed: vec![
-                crate::git::CommitFileChange {
-                    path: std::path::PathBuf::from("test.rs"),
-                    status: crate::git::FileChangeStatus::Modified,
-                    additions: 5,
-                    deletions: 2,
-                },
-            ],
+            files_changed: vec![crate::git::CommitFileChange {
+                path: std::path::PathBuf::from("test.rs"),
+                status: crate::git::FileChangeStatus::Modified,
+                additions: 5,
+                deletions: 2,
+            }],
         };
-        
+
         pane.update_commit(Some(commit.clone()));
         assert!(pane.current_commit.is_some());
         assert_eq!(pane.current_commit.as_ref().unwrap().sha, "abc123");
@@ -2290,48 +2319,50 @@ mod tests {
     #[test]
     fn test_commit_summary_pane_scrolling() {
         let mut pane = CommitSummaryPane::new();
-        
+
         let commit = crate::git::CommitInfo {
             sha: "abc123".to_string(),
             short_sha: "abc123".to_string(),
             message: "Test commit".to_string(),
             author: "Test Author".to_string(),
             date: "2023-01-01".to_string(),
-            files_changed: (0..20).map(|i| crate::git::CommitFileChange {
-                path: std::path::PathBuf::from(format!("file{}.rs", i)),
-                status: crate::git::FileChangeStatus::Modified,
-                additions: i,
-                deletions: i / 2,
-            }).collect(),
+            files_changed: (0..20)
+                .map(|i| crate::git::CommitFileChange {
+                    path: std::path::PathBuf::from(format!("file{}.rs", i)),
+                    status: crate::git::FileChangeStatus::Modified,
+                    additions: i,
+                    deletions: i / 2,
+                })
+                .collect(),
         };
-        
+
         pane.update_commit(Some(commit));
-        
+
         // Test j key (scroll down)
         let j_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         assert!(pane.handle_event(&j_event));
         assert_eq!(pane.scroll_offset, 1);
-        
+
         // Test k key (scroll up)
         let k_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert!(pane.handle_event(&k_event));
         assert_eq!(pane.scroll_offset, 0);
-        
+
         // Test page down
         let page_down_event = AppEvent::Key(KeyEvent::from(KeyCode::PageDown));
         assert!(pane.handle_event(&page_down_event));
         assert_eq!(pane.scroll_offset, 10);
-        
+
         // Test page up
         let page_up_event = AppEvent::Key(KeyEvent::from(KeyCode::PageUp));
         assert!(pane.handle_event(&page_up_event));
         assert_eq!(pane.scroll_offset, 0);
-        
+
         // Test go to bottom (Shift+G)
         let bottom_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
         assert!(pane.handle_event(&bottom_event));
         assert_eq!(pane.scroll_offset, 19);
-        
+
         // Test go to top (g)
         let top_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
         assert!(pane.handle_event(&top_event));
@@ -2341,11 +2372,11 @@ mod tests {
     #[test]
     fn test_commit_summary_pane_llm_summary() {
         let mut pane = CommitSummaryPane::new();
-        
+
         // Test that initially there's no summary
         assert!(pane.llm_summary.is_none());
         assert!(!pane.is_loading_summary);
-        
+
         // Test that we can manually set a summary (for testing purposes)
         pane.llm_summary = Some("This is a test summary".to_string());
         assert!(pane.llm_summary.is_some());
@@ -2355,19 +2386,19 @@ mod tests {
     #[test]
     fn test_commit_summary_pane_with_llm_client() {
         use crate::config::LlmConfig;
-        
+
         // Create a test LLM client
         let mut llm_config = LlmConfig::default();
         llm_config.api_key = Some("test_key".to_string());
         let llm_client = LlmClient::new(llm_config).ok();
-        
+
         let pane = CommitSummaryPane::new_with_llm_client(llm_client);
-        
+
         // Test that the pane has an LLM client
         assert!(pane.llm_client.is_some());
         assert!(pane.llm_summary.is_none());
         assert!(!pane.is_loading_summary);
-        
+
         // Test that a pane without LLM client works too
         let pane_no_llm = CommitSummaryPane::new_with_llm_client(None);
         assert!(pane_no_llm.llm_client.is_none());
@@ -2378,7 +2409,7 @@ mod tests {
     #[test]
     fn test_commit_summary_pane_race_condition_handling() {
         let mut pane = CommitSummaryPane::new();
-        
+
         // Create two different commits
         let commit1 = crate::git::CommitInfo {
             sha: "abc123".to_string(),
@@ -2388,7 +2419,7 @@ mod tests {
             date: "2023-01-01".to_string(),
             files_changed: vec![],
         };
-        
+
         let commit2 = crate::git::CommitInfo {
             sha: "def456".to_string(),
             short_sha: "def456".to_string(),
@@ -2397,38 +2428,44 @@ mod tests {
             date: "2023-01-02".to_string(),
             files_changed: vec![],
         };
-        
+
         // Set first commit
         pane.update_commit(Some(commit1.clone()));
         assert_eq!(pane.current_commit.as_ref().unwrap().sha, "abc123");
         assert!(pane.llm_summary.is_none());
-        
+
         // Switch to second commit (simulating quick navigation)
         pane.update_commit(Some(commit2.clone()));
         assert_eq!(pane.current_commit.as_ref().unwrap().sha, "def456");
         assert!(pane.llm_summary.is_none());
-        
+
         // Simulate receiving a stale response for the first commit
         // This should be ignored since we're now on commit2
         let stale_response = Ok(("abc123".to_string(), "Summary for first commit".to_string()));
         let _ = pane.llm_tx.try_send(stale_response);
-        
+
         // Poll for the response
         pane.poll_llm_summary();
-        
+
         // The summary should still be None because the response was for a different commit
         assert!(pane.llm_summary.is_none());
-        
+
         // Now simulate receiving the correct response for commit2
-        let correct_response = Ok(("def456".to_string(), "Summary for second commit".to_string()));
+        let correct_response = Ok((
+            "def456".to_string(),
+            "Summary for second commit".to_string(),
+        ));
         let _ = pane.llm_tx.try_send(correct_response);
-        
+
         // Poll for the response
         pane.poll_llm_summary();
-        
+
         // Now the summary should be set
         assert!(pane.llm_summary.is_some());
-        assert_eq!(pane.llm_summary.as_ref().unwrap(), "Summary for second commit");
+        assert_eq!(
+            pane.llm_summary.as_ref().unwrap(),
+            "Summary for second commit"
+        );
     }
 
     #[test]
@@ -2483,7 +2520,10 @@ mod tests {
         assert_eq!(advice_pane.scroll_offset, 18);
 
         // Scroll to bottom
-        advice_pane.handle_event(&AppEvent::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT)));
+        advice_pane.handle_event(&AppEvent::Key(KeyEvent::new(
+            KeyCode::Char('G'),
+            KeyModifiers::SHIFT,
+        )));
         assert_eq!(advice_pane.scroll_offset, 99);
 
         // Page up from bottom

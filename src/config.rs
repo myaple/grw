@@ -115,8 +115,16 @@ impl Config {
         let llm_config = self.llm.clone().unwrap_or_default();
         Self {
             debug: if args.debug { Some(true) } else { self.debug },
-            no_diff: if args.no_diff { Some(true) } else { self.no_diff },
-            hide_changed_files_pane: if args.hide_changed_files_pane { Some(true) } else { self.hide_changed_files_pane },
+            no_diff: if args.no_diff {
+                Some(true)
+            } else {
+                self.no_diff
+            },
+            hide_changed_files_pane: if args.hide_changed_files_pane {
+                Some(true)
+            } else {
+                self.hide_changed_files_pane
+            },
             monitor_command: args
                 .monitor_command
                 .clone()
@@ -174,7 +182,10 @@ pub struct Args {
     #[arg(long, help = "Prompt to use for LLM advice")]
     pub llm_prompt: Option<String>,
 
-    #[arg(long, help = "Maximum number of commits to load in commit picker (default: 100)")]
+    #[arg(
+        long,
+        help = "Maximum number of commits to load in commit picker (default: 100)"
+    )]
     pub commit_history_limit: Option<usize>,
 
     #[arg(long, help = "Maximum number of commits to cache (default: 200)")]

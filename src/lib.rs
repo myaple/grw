@@ -11,6 +11,6 @@ pub mod pane;
 pub mod ui;
 
 // Re-export commonly used types for easier testing
-pub use git::{AsyncGitRepo, CommitInfo, CommitFileChange, FileChangeStatus};
-pub use ui::{App, Theme};
+pub use git::{AsyncGitRepo, CommitFileChange, CommitInfo, FileChangeStatus};
 pub use git_worker::GitWorker;
+pub use ui::{App, Theme};

@@ -6,7 +6,7 @@ use openai_api_rs::v1::chat_completion::{self, ChatCompletionRequest};
 use std::env;
 use std::fs;
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{Mutex, mpsc, watch};
 
 const DEFAULT_MODEL: &str = "gpt-5-mini";
 
@@ -118,14 +118,14 @@ impl AsyncLLMCommand {
 
                         let prompt_template = llm_client.config.prompt.clone().unwrap_or_else(|| {
                             "You are acting in the role of a staff engineer providing a code review. \
-    Please provide a brief review of the following code changes. \
-    The review should focus on 'Maintainability' and any obvious safety bugs. \
-    In the maintainability part, include 0-3 actionable suggestions to enhance code maintainability. \
-    Don't be afraid to say that this code is okay at maintainability and not provide suggestions. \
-    When you provide suggestions, give a brief before and after example using the code diffs below \
-    to provide context and examples of what you mean. \
-    Each suggestion should be clear, specific, and implementable. \
-    Keep the response concise and focused on practical improvements.".to_string()
+                Please provide a brief review of the following code changes. \
+                The review should focus on 'Maintainability' and any obvious safety bugs. \
+                In the maintainability part, include 0-3 actionable suggestions to enhance code maintainability. \
+                Don't be afraid to say that this code is okay at maintainability and not provide suggestions. \
+                When you provide suggestions, give a brief before and after example using the code diffs below \
+                to provide context and examples of what you mean. \
+                Each suggestion should be clear, specific, and implementable. \
+                Keep the response concise and focused on practical improvements.".to_string()
                         });
 
                         let prompt = format!(
