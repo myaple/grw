@@ -675,8 +675,27 @@ impl App {
     pub fn forward_key_to_panes(&mut self, key: KeyEvent) -> bool {
         let mut handled = false;
 
-        // Forward to advice pane if it's visible
-        if self.is_showing_advice_pane()
+        // Forward to commit picker panes if in commit picker mode
+        if self.is_in_commit_picker_mode() {
+            // Forward to commit picker pane first
+            if let Some(pane_handled) = self.pane_registry.with_pane_mut(&PaneId::CommitPicker, |pane| {
+                pane.handle_event(&crate::pane::AppEvent::Key(key))
+            }) {
+                handled |= pane_handled;
+            }
+            
+            // Also forward to commit summary pane for scrolling
+            if !handled {
+                if let Some(pane_handled) = self.pane_registry.with_pane_mut(&PaneId::CommitSummary, |pane| {
+                    pane.handle_event(&crate::pane::AppEvent::Key(key))
+                }) {
+                    handled |= pane_handled;
+                }
+            }
+        }
+
+        // Forward to advice pane if it's visible and not in commit picker mode
+        if !handled && self.is_showing_advice_pane()
             && let Some(pane_handled) = self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
                 pane.handle_event(&crate::pane::AppEvent::Key(key))
             })
@@ -1103,9 +1122,21 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
     // Check if we're in commit picker mode
     if app.is_in_commit_picker_mode() {
         // Render commit picker layout: left pane = commit list, right pane = commit details
+        // Use responsive layout based on screen width
+        let (left_constraint, right_constraint) = if size.width > 120 {
+            // Wide screens: give more space to commit details
+            (Constraint::Percentage(40), Constraint::Percentage(60))
+        } else if size.width > 80 {
+            // Medium screens: balanced split
+            (Constraint::Percentage(50), Constraint::Percentage(50))
+        } else {
+            // Narrow screens: give more space to commit list for navigation
+            (Constraint::Percentage(60), Constraint::Percentage(40))
+        };
+
         let bottom_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .constraints([left_constraint, right_constraint])
             .split(chunks[1]);
 
         // Render commit picker pane on the left

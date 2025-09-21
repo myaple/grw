@@ -54,7 +54,7 @@
   - Add error handling and fallback display when LLM is unavailable
   - _Requirements: 2.2, 2.3, 5.4_
 
-- [ ] 9. Implement commit picker layout and pane coordination
+- [x] 9. Implement commit picker layout and pane coordination
   - Update render logic in ui.rs to handle commit picker mode layout
   - Ensure left pane shows CommitPickerPane and right pane shows CommitSummaryPane
   - Add proper pane switching and visibility management for commit picker mode
@@ -76,8 +76,6 @@
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 4.4_
 
 - [ ] 12. Optimize performance and add caching
-  - Implement lazy loading for large commit histories (load first 50-100 commits)
-  - Add caching for commit file changes to avoid repeated git operations
+  - Implement lazy loading for large commit histories (load first 10 commits)
   - Optimize rendering performance for large commit lists using proper scroll offsets
-  - Add background loading indicators for slow git operations
   - _Requirements: 5.3, 5.4_

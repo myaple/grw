@@ -944,6 +944,7 @@ impl CommitPickerPane {
     fn navigate_next(&mut self) {
         if !self.commits.is_empty() {
             self.current_index = (self.current_index + 1) % self.commits.len();
+            self.update_scroll_offset(20); // Use reasonable default
         }
     }
 
@@ -954,6 +955,16 @@ impl CommitPickerPane {
             } else {
                 self.current_index - 1
             };
+            self.update_scroll_offset(20); // Use reasonable default
+        }
+    }
+
+    fn update_scroll_offset(&mut self, visible_height: usize) {
+        // Ensure current selection is visible
+        if self.current_index < self.scroll_offset {
+            self.scroll_offset = self.current_index;
+        } else if self.current_index >= self.scroll_offset + visible_height {
+            self.scroll_offset = self.current_index.saturating_sub(visible_height - 1);
         }
     }
 
@@ -998,10 +1009,17 @@ impl Pane for CommitPickerPane {
             return Ok(());
         }
 
+        // Calculate visible range based on scroll offset and area height
+        let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
+        let start_index = self.scroll_offset;
+        let end_index = (start_index + visible_height).min(self.commits.len());
+
         let commit_items: Vec<ListItem> = self
             .commits
             .iter()
             .enumerate()
+            .skip(start_index)
+            .take(end_index - start_index)
             .map(|(index, commit)| {
                 let mut spans = Vec::new();
 
