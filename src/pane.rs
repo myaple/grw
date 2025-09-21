@@ -1444,9 +1444,10 @@ pub struct CommitSummaryPane {
     scroll_offset: usize,
     llm_summary: Option<String>,
     llm_client: Option<LlmClient>,
-    llm_tx: mpsc::Sender<Result<String, String>>,
-    llm_rx: mpsc::Receiver<Result<String, String>>,
+    llm_tx: mpsc::Sender<Result<(String, String), String>>, // (commit_sha, summary) or error
+    llm_rx: mpsc::Receiver<Result<(String, String), String>>,
     is_loading_summary: bool,
+    pending_summary_sha: Option<String>, // Track which commit we're waiting for a summary for
 }
 
 impl CommitSummaryPane {
@@ -1461,6 +1462,7 @@ impl CommitSummaryPane {
             llm_tx,
             llm_rx,
             is_loading_summary: false,
+            pending_summary_sha: None,
         }
     }
 
@@ -1475,6 +1477,7 @@ impl CommitSummaryPane {
             llm_tx,
             llm_rx,
             is_loading_summary: false,
+            pending_summary_sha: None,
         }
     }
 
@@ -1493,6 +1496,7 @@ impl CommitSummaryPane {
             self.llm_summary = None;
             self.scroll_offset = 0;
             self.is_loading_summary = false;
+            self.pending_summary_sha = None; // Clear any pending summary for previous commit
             self.request_llm_summary();
         }
     }
@@ -1502,6 +1506,7 @@ impl CommitSummaryPane {
     fn request_llm_summary(&mut self) {
         if let (Some(commit), Some(llm_client)) = (&self.current_commit, &self.llm_client) {
             self.is_loading_summary = true;
+            self.pending_summary_sha = Some(commit.sha.clone()); // Track which commit we're requesting summary for
             
             // Create a prompt for the commit summary
             let mut prompt = format!(
@@ -1539,22 +1544,42 @@ impl CommitSummaryPane {
 
             let tx = self.llm_tx.clone();
             let client = llm_client.clone();
+            let commit_sha = commit.sha.clone(); // Capture the commit SHA for the response
             tokio::spawn(async move {
                 let res = client.get_llm_advice(history).await;
-                let _ = tx.send(res).await;
+                // Include the commit SHA with the response so we can match it later
+                let response = match res {
+                    Ok(summary) => Ok((commit_sha, summary)),
+                    Err(e) => Err(e),
+                };
+                let _ = tx.send(response).await;
             });
         }
     }
 
     pub fn poll_llm_summary(&mut self) {
         if let Ok(result) = self.llm_rx.try_recv() {
-            self.is_loading_summary = false;
             match result {
-                Ok(summary) => {
-                    self.llm_summary = Some(summary);
+                Ok((response_commit_sha, summary)) => {
+                    // Only use the summary if it's for the currently selected commit
+                    if let Some(current_commit) = &self.current_commit {
+                        if current_commit.sha == response_commit_sha {
+                            self.llm_summary = Some(summary);
+                            self.is_loading_summary = false;
+                            self.pending_summary_sha = None;
+                        }
+                        // If the response is for a different commit, ignore it (stale response)
+                    }
                 }
                 Err(e) => {
-                    self.llm_summary = Some(format!("Error generating summary: {}", e));
+                    // Only show error if we're still waiting for a summary for the current commit
+                    if let (Some(current_commit), Some(pending_sha)) = (&self.current_commit, &self.pending_summary_sha) {
+                        if current_commit.sha == *pending_sha {
+                            self.llm_summary = Some(format!("Error generating summary: {}", e));
+                            self.is_loading_summary = false;
+                            self.pending_summary_sha = None;
+                        }
+                    }
                 }
             }
         }
@@ -1998,6 +2023,62 @@ mod tests {
         assert!(pane_no_llm.llm_client.is_none());
         assert!(pane_no_llm.llm_summary.is_none());
         assert!(!pane_no_llm.is_loading_summary);
+    }
+
+    #[test]
+    fn test_commit_summary_pane_race_condition_handling() {
+        let mut pane = CommitSummaryPane::new();
+        
+        // Create two different commits
+        let commit1 = crate::git::CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "First commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![],
+        };
+        
+        let commit2 = crate::git::CommitInfo {
+            sha: "def456".to_string(),
+            short_sha: "def456".to_string(),
+            message: "Second commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-02".to_string(),
+            files_changed: vec![],
+        };
+        
+        // Set first commit
+        pane.update_commit(Some(commit1.clone()));
+        assert_eq!(pane.current_commit.as_ref().unwrap().sha, "abc123");
+        assert!(pane.llm_summary.is_none());
+        
+        // Switch to second commit (simulating quick navigation)
+        pane.update_commit(Some(commit2.clone()));
+        assert_eq!(pane.current_commit.as_ref().unwrap().sha, "def456");
+        assert!(pane.llm_summary.is_none());
+        
+        // Simulate receiving a stale response for the first commit
+        // This should be ignored since we're now on commit2
+        let stale_response = Ok(("abc123".to_string(), "Summary for first commit".to_string()));
+        let _ = pane.llm_tx.try_send(stale_response);
+        
+        // Poll for the response
+        pane.poll_llm_summary();
+        
+        // The summary should still be None because the response was for a different commit
+        assert!(pane.llm_summary.is_none());
+        
+        // Now simulate receiving the correct response for commit2
+        let correct_response = Ok(("def456".to_string(), "Summary for second commit".to_string()));
+        let _ = pane.llm_tx.try_send(correct_response);
+        
+        // Poll for the response
+        pane.poll_llm_summary();
+        
+        // Now the summary should be set
+        assert!(pane.llm_summary.is_some());
+        assert_eq!(pane.llm_summary.as_ref().unwrap(), "Summary for second commit");
     }
 
     #[test]
