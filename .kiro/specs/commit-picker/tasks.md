@@ -1,12 +1,12 @@
 # Implementation Plan
 
-- [ ] 1. Create core data structures for commit information
+- [x] 1. Create core data structures for commit information
   - Define `CommitInfo`, `CommitFileChange`, and `FileChangeStatus` structs in git.rs
   - Add `AppMode` enum to ui.rs to track Normal vs CommitPicker modes
   - Create `CommitPickerState` struct to manage commit picker internal state
   - _Requirements: 1.1, 2.1, 4.1_
 
-- [ ] 2. Extend GitWorker with commit history functionality
+- [x] 2. Extend GitWorker with commit history functionality
   - Add `get_commit_history()` method to GitWorker to fetch commit list with SHA and message
   - Add `get_commit_file_changes()` method to get file modifications for a specific commit
   - Add unit tests for commit history retrieval and file change detection

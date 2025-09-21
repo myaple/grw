@@ -1,4 +1,4 @@
-use crate::git::{FileDiff, GitRepo, TreeNode};
+use crate::git::{CommitInfo, FileDiff, GitRepo, TreeNode};
 use crate::llm::LlmClient;
 use crate::pane::{PaneId, PaneRegistry};
 use crossterm::event::KeyEvent;
@@ -10,6 +10,29 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AppMode {
+    Normal,
+    CommitPicker,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommitPickerState {
+    pub commits: Vec<crate::git::CommitInfo>,
+    pub current_index: usize,
+    pub scroll_offset: usize,
+}
+
+impl CommitPickerState {
+    pub fn new() -> Self {
+        Self {
+            commits: Vec::new(),
+            current_index: 0,
+            scroll_offset: 0,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Theme {

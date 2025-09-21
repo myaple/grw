@@ -16,6 +16,32 @@ pub struct FileDiff {
 }
 
 #[derive(Debug, Clone)]
+pub struct CommitInfo {
+    pub sha: String,
+    pub short_sha: String,
+    pub message: String,
+    pub author: String,
+    pub date: String,
+    pub files_changed: Vec<CommitFileChange>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommitFileChange {
+    pub path: PathBuf,
+    pub status: FileChangeStatus,
+    pub additions: usize,
+    pub deletions: usize,
+}
+
+#[derive(Debug, Clone)]
+pub enum FileChangeStatus {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+}
+
+#[derive(Debug, Clone)]
 pub struct TreeNode {
     pub name: String,
     pub path: PathBuf,
