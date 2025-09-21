@@ -12,7 +12,7 @@
   - Add unit tests for commit history retrieval and file change detection
   - _Requirements: 2.1, 2.2, 5.3_
 
-- [ ] 3. Implement CommitPickerPane for displaying commit list
+- [x] 3. Implement CommitPickerPane for displaying commit list
   - Create new `CommitPickerPane` struct implementing the `Pane` trait
   - Implement rendering logic to display commits with short SHA and first line of message
   - Add navigation handling for j/k keys and g+t/g+T combinations

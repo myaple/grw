@@ -45,6 +45,7 @@ pub enum PaneId {
     Help,
     StatusBar,
     Advice,
+    CommitPicker,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +92,7 @@ impl PaneRegistry {
             PaneId::Advice,
             Box::new(AdvicePane::new(Some(llm_client))),
         );
+        self.register_pane(PaneId::CommitPicker, Box::new(CommitPickerPane::new()));
     }
 
     pub fn register_pane(&mut self, id: PaneId, pane: Box<dyn Pane>) {
@@ -877,6 +879,217 @@ impl Pane for StatusBarPane {
     }
 }
 
+// Commit Picker Pane Implementation
+pub struct CommitPickerPane {
+    visible: bool,
+    commits: Vec<crate::git::CommitInfo>,
+    current_index: usize,
+    scroll_offset: usize,
+    last_g_press: Option<std::time::Instant>,
+}
+
+impl CommitPickerPane {
+    pub fn new() -> Self {
+        Self {
+            visible: false,
+            commits: Vec::new(),
+            current_index: 0,
+            scroll_offset: 0,
+            last_g_press: None,
+        }
+    }
+
+    pub fn update_commits(&mut self, commits: Vec<crate::git::CommitInfo>) {
+        self.commits = commits;
+        if self.current_index >= self.commits.len() {
+            self.current_index = 0;
+        }
+    }
+
+    pub fn get_current_commit(&self) -> Option<&crate::git::CommitInfo> {
+        self.commits.get(self.current_index)
+    }
+
+    fn navigate_next(&mut self) {
+        if !self.commits.is_empty() {
+            self.current_index = (self.current_index + 1) % self.commits.len();
+        }
+    }
+
+    fn navigate_prev(&mut self) {
+        if !self.commits.is_empty() {
+            self.current_index = if self.current_index == 0 {
+                self.commits.len() - 1
+            } else {
+                self.current_index - 1
+            };
+        }
+    }
+}
+
+impl Pane for CommitPickerPane {
+    fn title(&self) -> String {
+        "Commit History".to_string()
+    }
+
+    fn render(
+        &self,
+        f: &mut Frame,
+        app: &App,
+        area: Rect,
+        _git_repo: &GitRepo,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use ratatui::{
+            style::{Modifier, Style},
+            text::{Line, Span},
+            widgets::{Block, Borders, List, ListItem, Paragraph},
+        };
+
+        let theme = app.get_theme();
+        
+        if self.commits.is_empty() {
+            let paragraph = Paragraph::new("No commits found")
+                .block(
+                    Block::default()
+                        .title(self.title())
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                );
+            f.render_widget(paragraph, area);
+            return Ok(());
+        }
+
+        let commit_items: Vec<ListItem> = self
+            .commits
+            .iter()
+            .enumerate()
+            .map(|(index, commit)| {
+                let mut spans = Vec::new();
+
+                // Add arrow for current selection
+                if index == self.current_index {
+                    spans.push(Span::styled(
+                        "-> ",
+                        Style::default()
+                            .fg(theme.secondary_color())
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                } else {
+                    spans.push(Span::raw("   "));
+                }
+
+                // Add short SHA
+                spans.push(Span::styled(
+                    format!("{} ", commit.short_sha),
+                    Style::default()
+                        .fg(theme.primary_color())
+                        .add_modifier(Modifier::BOLD),
+                ));
+
+                // Add first line of commit message
+                let first_line = commit.message.lines().next().unwrap_or("").to_string();
+                spans.push(Span::styled(
+                    first_line,
+                    Style::default().fg(theme.foreground_color()),
+                ));
+
+                let line_style = if index == self.current_index {
+                    Style::default()
+                        .fg(theme.foreground_color())
+                        .bg(theme.highlight_color())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.foreground_color())
+                };
+
+                let line = Line::from(spans).style(line_style);
+                ListItem::new(line)
+            })
+            .collect();
+
+        let commit_list = List::new(commit_items)
+            .block(
+                Block::default()
+                    .title(self.title())
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color())),
+            )
+            .highlight_style(
+                Style::default()
+                    .fg(theme.secondary_color())
+                    .add_modifier(Modifier::BOLD),
+            );
+
+        f.render_widget(commit_list, area);
+        Ok(())
+    }
+
+    fn handle_event(&mut self, event: &AppEvent) -> bool {
+        match event {
+            AppEvent::Key(key) => {
+                match key.code {
+                    KeyCode::Char('j') => {
+                        self.navigate_next();
+                        true
+                    }
+                    KeyCode::Char('k') => {
+                        self.navigate_prev();
+                        true
+                    }
+                    KeyCode::Down => {
+                        self.navigate_next();
+                        true
+                    }
+                    KeyCode::Up => {
+                        self.navigate_prev();
+                        true
+                    }
+                    KeyCode::Char('g') => {
+                        self.last_g_press = Some(std::time::Instant::now());
+                        true
+                    }
+                    KeyCode::Char('t') => {
+                        // Check if g was pressed recently for g+t navigation
+                        if let Some(last_time) = self.last_g_press
+                            && std::time::Instant::now()
+                                .duration_since(last_time)
+                                .as_millis()
+                                < 500
+                        {
+                            self.navigate_next();
+                            self.last_g_press = None; // Reset after use
+                        }
+                        true
+                    }
+                    KeyCode::Char('T') => {
+                        // Check if g was pressed recently for g+T navigation
+                        if let Some(last_time) = self.last_g_press
+                            && std::time::Instant::now()
+                                .duration_since(last_time)
+                                .as_millis()
+                                < 500
+                        {
+                            self.navigate_prev();
+                            self.last_g_press = None; // Reset after use
+                        }
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn visible(&self) -> bool {
+        self.visible
+    }
+
+    fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+}
+
 const SYSTEM_PROMPT: &str = "You are acting in the role of a staff engineer providing a code review. \
 Please provide a brief review of the following code changes. \
 The review should focus on 'Maintainability' and any obvious safety bugs. \
@@ -1191,11 +1404,104 @@ mod tests {
     #[test]
     fn test_pane_registry_creation() {
         let registry = create_test_pane_registry();
-        assert_eq!(registry.panes.len(), 7); // Default panes + advice
+        assert_eq!(registry.panes.len(), 8); // Default panes + advice + commit picker
         assert!(registry.get_pane(&PaneId::FileTree).is_some());
         assert!(registry.get_pane(&PaneId::Monitor).is_some());
         assert!(registry.get_pane(&PaneId::Diff).is_some());
         assert!(registry.get_pane(&PaneId::Advice).is_some());
+        assert!(registry.get_pane(&PaneId::CommitPicker).is_some());
+    }
+
+    #[test]
+    fn test_commit_picker_pane_navigation() {
+        let mut pane = CommitPickerPane::new();
+        
+        // Test with empty commits
+        assert_eq!(pane.current_index, 0);
+        pane.navigate_next();
+        assert_eq!(pane.current_index, 0);
+        pane.navigate_prev();
+        assert_eq!(pane.current_index, 0);
+        
+        // Add some test commits
+        let commits = vec![
+            crate::git::CommitInfo {
+                sha: "abc123".to_string(),
+                short_sha: "abc123".to_string(),
+                message: "First commit".to_string(),
+                author: "Test Author".to_string(),
+                date: "2023-01-01".to_string(),
+                files_changed: vec![],
+            },
+            crate::git::CommitInfo {
+                sha: "def456".to_string(),
+                short_sha: "def456".to_string(),
+                message: "Second commit".to_string(),
+                author: "Test Author".to_string(),
+                date: "2023-01-02".to_string(),
+                files_changed: vec![],
+            },
+        ];
+        
+        pane.update_commits(commits);
+        
+        // Test navigation
+        assert_eq!(pane.current_index, 0);
+        pane.navigate_next();
+        assert_eq!(pane.current_index, 1);
+        pane.navigate_next();
+        assert_eq!(pane.current_index, 0); // Should wrap around
+        
+        pane.navigate_prev();
+        assert_eq!(pane.current_index, 1); // Should wrap around backwards
+        pane.navigate_prev();
+        assert_eq!(pane.current_index, 0);
+    }
+
+    #[test]
+    fn test_commit_picker_pane_key_handling() {
+        let mut pane = CommitPickerPane::new();
+        
+        // Add test commits
+        let commits = vec![
+            crate::git::CommitInfo {
+                sha: "abc123".to_string(),
+                short_sha: "abc123".to_string(),
+                message: "First commit".to_string(),
+                author: "Test Author".to_string(),
+                date: "2023-01-01".to_string(),
+                files_changed: vec![],
+            },
+            crate::git::CommitInfo {
+                sha: "def456".to_string(),
+                short_sha: "def456".to_string(),
+                message: "Second commit".to_string(),
+                author: "Test Author".to_string(),
+                date: "2023-01-02".to_string(),
+                files_changed: vec![],
+            },
+        ];
+        
+        pane.update_commits(commits);
+        
+        // Test j key (next)
+        let j_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&j_event));
+        assert_eq!(pane.current_index, 1);
+        
+        // Test k key (prev)
+        let k_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&k_event));
+        assert_eq!(pane.current_index, 0);
+        
+        // Test g+t combination
+        let g_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&g_event));
+        
+        // Immediately follow with t
+        let t_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&t_event));
+        assert_eq!(pane.current_index, 1); // Should navigate next
     }
 
     #[test]
