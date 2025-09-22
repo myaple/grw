@@ -8,9 +8,11 @@ pub mod llm;
 pub mod logging;
 pub mod monitor;
 pub mod pane;
+pub mod shared_state;
 pub mod ui;
 
 // Re-export commonly used types for easier testing
 pub use git::{AsyncGitRepo, CommitFileChange, CommitInfo, FileChangeStatus};
 pub use git_worker::GitWorker;
+pub use shared_state::{SharedStateManager, GitSharedState, LlmSharedState, MonitorSharedState};
 pub use ui::{App, Theme};
