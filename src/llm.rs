@@ -8,7 +8,7 @@ use std::fs;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc, watch};
 
-const DEFAULT_MODEL: &str = "gpt-5-mini";
+
 
 #[derive(Clone)]
 pub struct LlmClient {
@@ -42,12 +42,23 @@ impl LlmClient {
         &self,
         history: Vec<chat_completion::ChatCompletionMessage>,
     ) -> Result<String, String> {
-        let model = self
-            .config
-            .model
-            .clone()
-            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+        let model = self.config.get_advice_model();
+        self.make_llm_request(model, history).await
+    }
 
+    pub async fn get_llm_summary(
+        &self,
+        history: Vec<chat_completion::ChatCompletionMessage>,
+    ) -> Result<String, String> {
+        let model = self.config.get_summary_model();
+        self.make_llm_request(model, history).await
+    }
+
+    async fn make_llm_request(
+        &self,
+        model: String,
+        history: Vec<chat_completion::ChatCompletionMessage>,
+    ) -> Result<String, String> {
         let req = ChatCompletionRequest::new(model, history);
 
         let mut client = self.client.lock().await;

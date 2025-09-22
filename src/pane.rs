@@ -1887,7 +1887,7 @@ impl CommitSummaryPane {
                         tool_call_id: None,
                     }];
 
-                    let res = client.get_llm_advice(history).await;
+                    let res = client.get_llm_summary(history).await;
                     let response = match res {
                         Ok(summary) => {
                             // Validate and sanitize the summary response

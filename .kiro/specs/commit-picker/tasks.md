@@ -100,7 +100,7 @@
   - Add cache clearing functionality for summary cache
   - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
 
-- [ ] 16. Add separate LLM model configuration
+- [x] 16. Add separate LLM model configuration
   - Extend LlmConfig struct to support separate advice_model and summary_model fields
   - Update configuration parsing to handle separate model specifications
   - Modify LLM client usage to use appropriate model based on use case (advice vs summary)
