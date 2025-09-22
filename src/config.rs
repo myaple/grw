@@ -63,9 +63,29 @@ impl FromStr for LlmProvider {
 pub struct LlmConfig {
     pub provider: Option<LlmProvider>,
     pub model: Option<String>,
+    pub advice_model: Option<String>,
+    pub summary_model: Option<String>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub prompt: Option<String>,
+}
+
+impl LlmConfig {
+    /// Get the model to use for advice generation, falling back to default model
+    pub fn get_advice_model(&self) -> String {
+        self.advice_model
+            .clone()
+            .or_else(|| self.model.clone())
+            .unwrap_or_else(|| "gpt-4o-mini".to_string())
+    }
+
+    /// Get the model to use for summary generation, falling back to default model
+    pub fn get_summary_model(&self) -> String {
+        self.summary_model
+            .clone()
+            .or_else(|| self.model.clone())
+            .unwrap_or_else(|| "gpt-4o-mini".to_string())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -77,6 +97,10 @@ pub struct Config {
     pub monitor_interval: Option<u64>,
     pub theme: Option<Theme>,
     pub llm: Option<LlmConfig>,
+    pub commit_history_limit: Option<usize>,
+    pub commit_cache_size: Option<usize>,
+    pub summary_preload_enabled: Option<bool>,
+    pub summary_preload_count: Option<usize>,
 }
 
 impl Config {
@@ -92,6 +116,24 @@ impl Config {
         Ok(config)
     }
 
+    /// Get the commit history limit with a sensible default
+    pub fn get_commit_history_limit(&self) -> usize {
+        self.commit_history_limit.unwrap_or(100)
+    }
+
+    /// Get the commit cache size with a sensible default
+    pub fn get_commit_cache_size(&self) -> usize {
+        self.commit_cache_size.unwrap_or(200)
+    }
+
+    /// Get the summary preload configuration
+    pub fn get_summary_preload_config(&self) -> crate::git::PreloadConfig {
+        crate::git::PreloadConfig {
+            enabled: self.summary_preload_enabled.unwrap_or(true),
+            count: self.summary_preload_count.unwrap_or(5),
+        }
+    }
+
     fn get_config_path() -> PathBuf {
         config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -103,8 +145,16 @@ impl Config {
         let llm_config = self.llm.clone().unwrap_or_default();
         Self {
             debug: if args.debug { Some(true) } else { self.debug },
-            no_diff: if args.no_diff { Some(true) } else { self.no_diff },
-            hide_changed_files_pane: if args.hide_changed_files_pane { Some(true) } else { self.hide_changed_files_pane },
+            no_diff: if args.no_diff {
+                Some(true)
+            } else {
+                self.no_diff
+            },
+            hide_changed_files_pane: if args.hide_changed_files_pane {
+                Some(true)
+            } else {
+                self.hide_changed_files_pane
+            },
             monitor_command: args
                 .monitor_command
                 .clone()
@@ -114,10 +164,16 @@ impl Config {
             llm: Some(LlmConfig {
                 provider: args.llm_provider.clone().or(llm_config.provider),
                 model: args.llm_model.clone().or(llm_config.model),
+                advice_model: args.llm_advice_model.clone().or(llm_config.advice_model),
+                summary_model: args.llm_summary_model.clone().or(llm_config.summary_model),
                 api_key: args.llm_api_key.clone().or(llm_config.api_key),
                 base_url: args.llm_base_url.clone().or(llm_config.base_url),
                 prompt: args.llm_prompt.clone().or(llm_config.prompt),
             }),
+            commit_history_limit: args.commit_history_limit.or(self.commit_history_limit),
+            commit_cache_size: args.commit_cache_size.or(self.commit_cache_size),
+            summary_preload_enabled: args.summary_preload_enabled.or(self.summary_preload_enabled),
+            summary_preload_count: args.summary_preload_count.or(self.summary_preload_count),
         }
     }
 }
@@ -151,6 +207,12 @@ pub struct Args {
     #[arg(long, help = "LLM model to use for advice")]
     pub llm_model: Option<String>,
 
+    #[arg(long, help = "LLM model to use specifically for advice generation")]
+    pub llm_advice_model: Option<String>,
+
+    #[arg(long, help = "LLM model to use specifically for commit summary generation")]
+    pub llm_summary_model: Option<String>,
+
     #[arg(long, help = "API key for the LLM provider")]
     pub llm_api_key: Option<String>,
 
@@ -159,6 +221,21 @@ pub struct Args {
 
     #[arg(long, help = "Prompt to use for LLM advice")]
     pub llm_prompt: Option<String>,
+
+    #[arg(
+        long,
+        help = "Maximum number of commits to load in commit picker (default: 100)"
+    )]
+    pub commit_history_limit: Option<usize>,
+
+    #[arg(long, help = "Maximum number of commits to cache (default: 200)")]
+    pub commit_cache_size: Option<usize>,
+
+    #[arg(long, help = "Enable summary pre-loading (default: true)")]
+    pub summary_preload_enabled: Option<bool>,
+
+    #[arg(long, help = "Number of summaries to pre-load (default: 5)")]
+    pub summary_preload_count: Option<usize>,
 }
 
 #[cfg(test)]
@@ -336,5 +413,146 @@ mod tests {
         assert_eq!(config_no_theme.debug, Some(false));
         assert_eq!(config_no_theme.no_diff, Some(false));
         assert_eq!(config_no_theme.theme, None);
+    }
+
+    #[test]
+    fn test_commit_history_limit_config() {
+        let config = Config {
+            commit_history_limit: Some(150),
+            ..Default::default()
+        };
+        assert_eq!(config.get_commit_history_limit(), 150);
+
+        let config_default = Config::default();
+        assert_eq!(config_default.get_commit_history_limit(), 100); // Default value
+    }
+
+    #[test]
+    fn test_commit_cache_size_config() {
+        let config = Config {
+            commit_cache_size: Some(300),
+            ..Default::default()
+        };
+        assert_eq!(config.get_commit_cache_size(), 300);
+
+        let config_default = Config::default();
+        assert_eq!(config_default.get_commit_cache_size(), 200); // Default value
+    }
+
+    #[test]
+    fn test_merge_with_args_commit_settings() {
+        let config = Config {
+            commit_history_limit: Some(50),
+            commit_cache_size: Some(100),
+            ..Default::default()
+        };
+
+        let args = Args::parse_from([
+            "grw",
+            "--commit-history-limit",
+            "200",
+            "--commit-cache-size",
+            "400",
+        ]);
+
+        let merged = config.merge_with_args(&args);
+
+        assert_eq!(merged.commit_history_limit, Some(200)); // From args
+        assert_eq!(merged.commit_cache_size, Some(400)); // From args
+    }
+
+    #[test]
+    fn test_merge_with_args_commit_settings_from_config() {
+        let config = Config {
+            commit_history_limit: Some(75),
+            commit_cache_size: Some(150),
+            ..Default::default()
+        };
+
+        let args = Args::parse_from(["grw"]); // No commit settings specified
+
+        let merged = config.merge_with_args(&args);
+
+        assert_eq!(merged.commit_history_limit, Some(75)); // From config
+        assert_eq!(merged.commit_cache_size, Some(150)); // From config
+    }
+
+    #[test]
+    fn test_llm_config_model_fallback() {
+        // Test advice model fallback
+        let config = LlmConfig {
+            advice_model: Some("gpt-4".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(config.get_advice_model(), "gpt-4");
+
+        // Test summary model fallback to general model
+        let config = LlmConfig {
+            model: Some("gpt-3.5-turbo".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(config.get_summary_model(), "gpt-3.5-turbo");
+
+        // Test fallback to default when nothing is configured
+        let config = LlmConfig::default();
+        assert_eq!(config.get_advice_model(), "gpt-4o-mini");
+        assert_eq!(config.get_summary_model(), "gpt-4o-mini");
+
+        // Test specific models override general model
+        let config = LlmConfig {
+            model: Some("gpt-3.5-turbo".to_string()),
+            advice_model: Some("gpt-4".to_string()),
+            summary_model: Some("gpt-4o-mini".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(config.get_advice_model(), "gpt-4");
+        assert_eq!(config.get_summary_model(), "gpt-4o-mini");
+    }
+
+    #[test]
+    fn test_merge_with_args_llm_models() {
+        let config = Config {
+            llm: Some(LlmConfig {
+                model: Some("gpt-3.5-turbo".to_string()),
+                advice_model: Some("gpt-4".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let args = Args::parse_from([
+            "grw",
+            "--llm-advice-model",
+            "gpt-4-turbo",
+            "--llm-summary-model",
+            "gpt-4o-mini",
+        ]);
+
+        let merged = config.merge_with_args(&args);
+        let llm_config = merged.llm.unwrap();
+
+        assert_eq!(llm_config.model, Some("gpt-3.5-turbo".to_string())); // From config
+        assert_eq!(llm_config.advice_model, Some("gpt-4-turbo".to_string())); // From args
+        assert_eq!(llm_config.summary_model, Some("gpt-4o-mini".to_string())); // From args
+    }
+
+    #[test]
+    fn test_merge_with_args_llm_models_from_config() {
+        let config = Config {
+            llm: Some(LlmConfig {
+                advice_model: Some("gpt-4".to_string()),
+                summary_model: Some("gpt-4o-mini".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let args = Args::parse_from(["grw"]); // No LLM model args specified
+
+        let merged = config.merge_with_args(&args);
+        let llm_config = merged.llm.unwrap();
+
+        assert_eq!(llm_config.advice_model, Some("gpt-4".to_string())); // From config
+        assert_eq!(llm_config.summary_model, Some("gpt-4o-mini".to_string())); // From config
     }
 }

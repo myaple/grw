@@ -1,4 +1,4 @@
-use crate::git::{FileDiff, GitRepo, TreeNode};
+use crate::git::{CommitInfo, FileDiff, GitRepo, TreeNode, SummaryPreloader, PreloadConfig};
 use crate::llm::LlmClient;
 use crate::pane::{PaneId, PaneRegistry};
 use crossterm::event::KeyEvent;
@@ -10,6 +10,29 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AppMode {
+    Normal,
+    CommitPicker,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommitPickerState {
+    pub commits: Vec<crate::git::CommitInfo>,
+    pub current_index: usize,
+    pub scroll_offset: usize,
+}
+
+impl CommitPickerState {
+    pub fn new() -> Self {
+        Self {
+            commits: Vec::new(),
+            current_index: 0,
+            scroll_offset: 0,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Theme {
@@ -151,6 +174,9 @@ pub struct App {
     pane_registry: PaneRegistry,
     llm_advice: String,
     last_active_pane: ActivePane,
+    app_mode: AppMode,
+    selected_commit: Option<CommitInfo>,
+    summary_preloader: SummaryPreloader,
 }
 
 impl App {
@@ -160,8 +186,8 @@ impl App {
         theme: Theme,
         llm_client: Option<LlmClient>,
     ) -> Self {
-        let pane_registry = if let Some(llm_client) = llm_client {
-            PaneRegistry::new(theme, llm_client)
+        let pane_registry = if let Some(ref llm_client) = llm_client {
+            PaneRegistry::new(theme, llm_client.clone())
         } else {
             // Provide a dummy or default LlmClient for the registry when none is available.
             // This depends on how PaneRegistry and AdvicePane are structured.
@@ -200,6 +226,9 @@ impl App {
             pane_registry,
             llm_advice: String::new(),
             last_active_pane: ActivePane::default(),
+            app_mode: AppMode::Normal,
+            selected_commit: None,
+            summary_preloader: SummaryPreloader::new(llm_client.clone()),
         }
     }
 
@@ -648,8 +677,34 @@ impl App {
     pub fn forward_key_to_panes(&mut self, key: KeyEvent) -> bool {
         let mut handled = false;
 
-        // Forward to advice pane if it's visible
-        if self.is_showing_advice_pane()
+        // Forward to commit picker panes if in commit picker mode
+        if self.is_in_commit_picker_mode() {
+            // Forward to commit picker pane first
+            if let Some(pane_handled) = self
+                .pane_registry
+                .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                    pane.handle_event(&crate::pane::AppEvent::Key(key))
+                })
+            {
+                handled |= pane_handled;
+            }
+
+            // Also forward to commit summary pane for scrolling
+            if !handled {
+                if let Some(pane_handled) = self
+                    .pane_registry
+                    .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                        pane.handle_event(&crate::pane::AppEvent::Key(key))
+                    })
+                {
+                    handled |= pane_handled;
+                }
+            }
+        }
+
+        // Forward to advice pane if it's visible and not in commit picker mode
+        if !handled
+            && self.is_showing_advice_pane()
             && let Some(pane_handled) = self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
                 pane.handle_event(&crate::pane::AppEvent::Key(key))
             })
@@ -769,10 +824,18 @@ impl App {
     }
 
     pub fn poll_llm_advice(&mut self) {
+        self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
+            if let Some(advice_pane) = pane.as_advice_pane_mut() {
+                advice_pane.poll_llm_response();
+            }
+        });
+    }
+
+    pub fn poll_llm_summaries(&mut self) {
         self.pane_registry
-            .with_pane_mut(&PaneId::Advice, |pane| {
-                if let Some(advice_pane) = pane.as_advice_pane_mut() {
-                    advice_pane.poll_llm_response();
+            .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                if let Some(commit_summary_pane) = pane.as_commit_summary_pane_mut() {
+                    commit_summary_pane.poll_llm_summary();
                 }
             });
     }
@@ -787,12 +850,474 @@ impl App {
     }
 
     pub fn reset_advice_refresh_request(&mut self) {
+        self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
+            if let Some(advice_pane) = pane.as_advice_pane_mut() {
+                advice_pane.refresh_requested = false;
+            }
+        });
+    }
+
+    // Commit picker mode state management methods
+    pub fn enter_commit_picker_mode(&mut self) {
+        // Validate that we can enter commit picker mode
+        if self.app_mode == AppMode::CommitPicker {
+            log::debug!("Already in commit picker mode");
+            return;
+        }
+
+        if !self.show_diff_panel {
+            log::error!("Cannot enter commit picker mode without diff panel visible");
+            return;
+        }
+
+        log::debug!("Entering commit picker mode");
+        self.app_mode = AppMode::CommitPicker;
+
+        // Make commit picker pane visible
         self.pane_registry
-            .with_pane_mut(&PaneId::Advice, |pane| {
-                if let Some(advice_pane) = pane.as_advice_pane_mut() {
-                    advice_pane.refresh_requested = false;
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                pane.set_visible(true);
+            });
+
+        // Make commit summary pane visible
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                pane.set_visible(true);
+            });
+
+        // Hide other information panes to avoid conflicts
+        self.pane_registry.with_pane_mut(&PaneId::Diff, |pane| {
+            pane.set_visible(false);
+        });
+        self.pane_registry
+            .with_pane_mut(&PaneId::SideBySideDiff, |pane| {
+                pane.set_visible(false);
+            });
+        self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
+            pane.set_visible(false);
+        });
+        self.pane_registry.with_pane_mut(&PaneId::Help, |pane| {
+            pane.set_visible(false);
+        });
+    }
+
+    pub fn exit_commit_picker_mode(&mut self) {
+        // Validate that we can exit commit picker mode
+        if self.app_mode != AppMode::CommitPicker {
+            log::debug!("Not in commit picker mode, nothing to exit");
+            return;
+        }
+
+        log::debug!("Exiting commit picker mode");
+        self.app_mode = AppMode::Normal;
+
+        // Hide commit picker panes
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                pane.set_visible(false);
+            });
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                pane.set_visible(false);
+            });
+
+        // Restore normal panes visibility based on current settings
+        if self.show_diff_panel {
+            match self.current_information_pane {
+                InformationPane::Diff => self.set_single_pane_diff(),
+                InformationPane::SideBySideDiff => self.set_side_by_side_diff(),
+                InformationPane::Advice => self.set_advice_pane(),
+                _ => self.set_single_pane_diff(),
+            }
+        }
+    }
+
+    pub fn select_commit(&mut self, commit: CommitInfo) {
+        // Validate commit before selection
+        if commit.sha.is_empty() {
+            log::error!("Attempted to select commit with empty SHA");
+            return;
+        }
+
+        if commit.short_sha.is_empty() {
+            log::error!("Attempted to select commit with empty short SHA");
+            return;
+        }
+
+        log::debug!(
+            "Selecting commit: {} - {}",
+            commit.short_sha,
+            commit.message
+        );
+        self.selected_commit = Some(commit);
+        self.exit_commit_picker_mode();
+    }
+
+    pub fn clear_selected_commit(&mut self) {
+        self.selected_commit = None;
+    }
+
+    // Getter methods for commit picker state access
+    pub fn is_in_commit_picker_mode(&self) -> bool {
+        self.app_mode == AppMode::CommitPicker
+    }
+
+    pub fn get_app_mode(&self) -> AppMode {
+        self.app_mode
+    }
+
+    pub fn get_selected_commit(&self) -> Option<&CommitInfo> {
+        self.selected_commit.as_ref()
+    }
+
+    pub fn set_commit_picker_loading(&mut self) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                if let Some(commit_picker) = pane.as_commit_picker_pane_mut() {
+                    commit_picker.set_loading();
                 }
             });
+    }
+
+    pub fn set_commit_picker_error(&mut self, error: String) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                if let Some(commit_picker) = pane.as_commit_picker_pane_mut() {
+                    commit_picker.set_error(error);
+                }
+            });
+    }
+
+    pub fn update_commit_picker_commits(&mut self, commits: Vec<CommitInfo>) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                if let Some(commit_picker) = pane.as_commit_picker_pane_mut() {
+                    commit_picker.update_commits(commits);
+                }
+            });
+    }
+
+    pub fn is_commit_picker_enter_pressed(&self) -> bool {
+        if let Some(pane) = self.pane_registry.get_pane(&PaneId::CommitPicker) {
+            if let Some(commit_picker) = pane.as_commit_picker_pane() {
+                return commit_picker.is_enter_pressed();
+            }
+        }
+        false
+    }
+
+    pub fn reset_commit_picker_enter_pressed(&mut self) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                if let Some(commit_picker) = pane.as_commit_picker_pane_mut() {
+                    commit_picker.reset_enter_pressed();
+                }
+            });
+    }
+
+    pub fn get_current_selected_commit_from_picker(&self) -> Option<CommitInfo> {
+        if let Some(pane) = self.pane_registry.get_pane(&PaneId::CommitPicker) {
+            if let Some(commit_picker) = pane.as_commit_picker_pane() {
+                return commit_picker.get_current_commit().cloned();
+            }
+        }
+        None
+    }
+
+    pub fn forward_key_to_commit_picker(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitPicker, |pane| {
+                pane.handle_event(&crate::pane::AppEvent::Key(key))
+            })
+            .unwrap_or(false)
+    }
+
+    pub fn forward_key_to_commit_summary(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                pane.handle_event(&crate::pane::AppEvent::Key(key))
+            })
+            .unwrap_or(false)
+    }
+
+    pub fn update_commit_summary_with_current_selection(&mut self) {
+        if let Some(current_commit) = self.get_current_selected_commit_from_picker() {
+            let commit_sha = current_commit.sha.clone();
+            
+            // First update the commit in the pane
+            self.pane_registry
+                .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
+                        commit_summary.update_commit(Some(current_commit));
+                    }
+                });
+            
+            // Then check if we have a cached summary and set it if available
+            self.check_and_set_cached_summary(&commit_sha);
+        }
+    }
+
+    /// Check GitWorker cache for summary and set it in CommitSummaryPane if available
+    pub fn check_and_set_cached_summary(&mut self, commit_sha: &str) {
+        if let Some(tx) = self.summary_preloader.get_git_worker_tx() {
+            let commit_sha = commit_sha.to_string();
+            
+            tokio::spawn(async move {
+                if let Err(e) = tx.send(crate::git::GitWorkerCommand::GetCachedSummary(commit_sha)).await {
+                    log::error!("Failed to send GetCachedSummary command: {}", e);
+                }
+            });
+        }
+    }
+
+    /// Handle cached summary result from GitWorker
+    pub fn handle_cached_summary_result(&mut self, cached_summary: Option<String>, commit_sha: &str) {
+        if let Some(summary) = cached_summary {
+            // Set the cached summary in the CommitSummaryPane
+            self.pane_registry
+                .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
+                        commit_summary.set_cached_summary(commit_sha, summary);
+                    }
+                });
+        } else {
+            // No cached summary available, trigger generation if needed
+            self.pane_registry
+                .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
+                        if commit_summary.needs_summary() {
+                            commit_summary.force_generate_summary();
+                        }
+                    }
+                });
+        }
+    }
+
+    /// Cache a newly generated summary in GitWorker
+    pub fn cache_generated_summary(&mut self, commit_sha: String, summary: String) {
+        if let Some(tx) = self.summary_preloader.get_git_worker_tx() {
+            tokio::spawn(async move {
+                if let Err(e) = tx.send(crate::git::GitWorkerCommand::CacheSummary(commit_sha, summary)).await {
+                    log::error!("Failed to send CacheSummary command: {}", e);
+                }
+            });
+        }
+    }
+
+    /// Handle cache callbacks from CommitSummaryPane
+    pub fn handle_commit_summary_cache_callbacks(&mut self) {
+        if let Some(cache_callback) = self.pane_registry
+            .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                pane.as_commit_summary_pane_mut()
+                    .and_then(|commit_summary| commit_summary.take_cache_callback())
+            })
+            .flatten()
+        {
+            let (commit_sha, summary) = cache_callback;
+            self.cache_generated_summary(commit_sha, summary);
+        }
+    }
+
+    /// Poll for LLM summary updates from CommitSummaryPane
+    pub fn poll_commit_summary_updates(&mut self) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
+                    commit_summary.poll_llm_summary();
+                }
+            });
+    }
+
+    pub fn load_commit_files(&mut self, commit: &CommitInfo) {
+        // Validate commit data before loading
+        if commit.sha.is_empty() {
+            log::error!("Cannot load files for commit with empty SHA");
+            return;
+        }
+
+        if commit.files_changed.is_empty() {
+            log::debug!("Commit {} has no file changes", commit.short_sha);
+        }
+
+        log::debug!(
+            "Loading {} files for commit {}",
+            commit.files_changed.len(),
+            commit.short_sha
+        );
+
+        // Convert CommitFileChange to FileDiff for display
+        let mut commit_files = Vec::new();
+
+        for file_change in &commit.files_changed {
+            // Create a FileDiff from CommitFileChange
+            // We'll need to get the actual diff content using git commands
+            let diff_content = self.get_commit_diff_content(&commit.sha, &file_change.path);
+
+            // Convert FileChangeStatus to git2::Status
+            let status = match file_change.status {
+                crate::git::FileChangeStatus::Added => git2::Status::INDEX_NEW,
+                crate::git::FileChangeStatus::Modified => git2::Status::INDEX_MODIFIED,
+                crate::git::FileChangeStatus::Deleted => git2::Status::INDEX_DELETED,
+                crate::git::FileChangeStatus::Renamed => git2::Status::INDEX_RENAMED,
+            };
+
+            commit_files.push(FileDiff {
+                path: file_change.path.clone(),
+                status,
+                line_strings: diff_content,
+                additions: file_change.additions,
+                deletions: file_change.deletions,
+            });
+        }
+
+        // Update the app's files with the commit files
+        self.update_files(commit_files);
+
+        // Create a tree structure for the commit files
+        if let Some(first_file) = self.files.first() {
+            let repo_path = first_file
+                .path
+                .ancestors()
+                .find(|p| p.join(".git").exists())
+                .unwrap_or_else(|| std::path::Path::new("."));
+
+            let mut root = crate::git::TreeNode {
+                name: ".".to_string(),
+                path: repo_path.to_path_buf(),
+                is_dir: true,
+                children: Vec::new(),
+                file_diff: None,
+            };
+
+            for file_diff in &self.files {
+                self.add_file_to_commit_tree(&mut root, file_diff, repo_path);
+            }
+
+            self.update_tree(&root);
+        }
+    }
+
+    fn get_commit_diff_content(
+        &self,
+        commit_sha: &str,
+        file_path: &std::path::Path,
+    ) -> Vec<String> {
+        // Use git show to get the diff content for the specific file in the commit
+        let output = std::process::Command::new("git")
+            .args([
+                "show",
+                "--format=",
+                "--no-color",
+                commit_sha,
+                "--",
+                &file_path.to_string_lossy(),
+            ])
+            .output();
+
+        match output {
+            Ok(output) => {
+                let diff_text = String::from_utf8_lossy(&output.stdout);
+                diff_text.lines().map(|line| line.to_string()).collect()
+            }
+            Err(_) => {
+                vec![format!(
+                    "Error: Could not get diff for {}",
+                    file_path.display()
+                )]
+            }
+        }
+    }
+
+    fn add_file_to_commit_tree(
+        &self,
+        root: &mut crate::git::TreeNode,
+        file_diff: &FileDiff,
+        repo_path: &std::path::Path,
+    ) {
+        let relative_path = if let Ok(rel_path) = file_diff.path.strip_prefix(repo_path) {
+            rel_path
+        } else {
+            &file_diff.path
+        };
+
+        let mut current_node = root;
+        let components: Vec<_> = relative_path.components().collect();
+
+        for (i, component) in components.iter().enumerate() {
+            let component_str = component.as_os_str().to_string_lossy().to_string();
+
+            if i == components.len() - 1 {
+                // This is the file itself
+                current_node.children.push(crate::git::TreeNode {
+                    name: component_str.clone(),
+                    path: file_diff.path.clone(),
+                    is_dir: false,
+                    children: Vec::new(),
+                    file_diff: Some(file_diff.clone()),
+                });
+            } else {
+                // This is a directory
+                let child_index = current_node
+                    .children
+                    .iter()
+                    .position(|child| child.is_dir && child.name == component_str);
+
+                if let Some(index) = child_index {
+                    current_node = &mut current_node.children[index];
+                } else {
+                    let new_child = crate::git::TreeNode {
+                        name: component_str.clone(),
+                        path: current_node.path.join(&component_str),
+                        is_dir: true,
+                        children: Vec::new(),
+                        file_diff: None,
+                    };
+                    current_node.children.push(new_child);
+                    let new_len = current_node.children.len();
+                    current_node = &mut current_node.children[new_len - 1];
+                }
+            }
+        }
+    }
+
+    // Summary preloader methods
+    pub fn set_summary_preloader_git_worker_tx(&mut self, tx: tokio::sync::mpsc::Sender<crate::git::GitWorkerCommand>) {
+        self.summary_preloader.set_git_worker_tx(tx);
+    }
+
+    pub fn preload_summaries(&mut self, commits: &[CommitInfo]) {
+        self.summary_preloader.preload_summaries(commits);
+    }
+
+    pub fn preload_summaries_around_index(&mut self, commits: &[CommitInfo], current_index: usize) {
+        self.summary_preloader.preload_around_index(commits, current_index);
+    }
+
+    pub fn is_summary_loading(&self, commit_sha: &str) -> bool {
+        self.summary_preloader.is_loading(commit_sha)
+    }
+
+    pub fn set_preload_config(&mut self, config: PreloadConfig) {
+        self.summary_preloader.set_config(config);
+    }
+
+    pub fn get_preload_config(&self) -> &PreloadConfig {
+        self.summary_preloader.get_config()
+    }
+
+    pub fn clear_preloader_active_tasks(&mut self) {
+        self.summary_preloader.clear_active_tasks();
+    }
+
+    pub fn get_commit_picker_state(&self) -> Option<(Vec<CommitInfo>, usize)> {
+        if let Some(pane) = self.pane_registry.get_pane(&crate::pane::PaneId::CommitPicker) {
+            if let Some(commit_picker) = pane.as_commit_picker_pane() {
+                let commits = commit_picker.get_commits();
+                let current_index = commit_picker.get_current_index();
+                return Some((commits, current_index));
+            }
+        }
+        None
     }
 }
 
@@ -818,7 +1343,51 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
     app.pane_registry
         .render(f, app, chunks[0], PaneId::StatusBar, git_repo);
 
-    // Handle the information pane (right side)
+    // Check if we're in commit picker mode
+    if app.is_in_commit_picker_mode() {
+        // Check if help is visible and render it as overlay
+        let help_visible = app
+            .pane_registry
+            .get_pane(&PaneId::Help)
+            .is_some_and(|p| p.visible());
+
+        if help_visible {
+            // Render help pane as overlay over the entire area
+            app.pane_registry
+                .render(f, app, chunks[1], PaneId::Help, git_repo);
+            return;
+        }
+
+        // Render commit picker layout: left pane = commit list, right pane = commit details
+        // Use responsive layout based on screen width
+        let (left_constraint, right_constraint) = if size.width > 120 {
+            // Wide screens: give more space to commit details
+            (Constraint::Percentage(40), Constraint::Percentage(60))
+        } else if size.width > 80 {
+            // Medium screens: balanced split
+            (Constraint::Percentage(50), Constraint::Percentage(50))
+        } else {
+            // Narrow screens: give more space to commit list for navigation
+            (Constraint::Percentage(60), Constraint::Percentage(40))
+        };
+
+        let bottom_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([left_constraint, right_constraint])
+            .split(chunks[1]);
+
+        // Render commit picker pane on the left
+        app.pane_registry
+            .render(f, app, bottom_chunks[0], PaneId::CommitPicker, git_repo);
+
+        // Render commit summary pane on the right
+        app.pane_registry
+            .render(f, app, bottom_chunks[1], PaneId::CommitSummary, git_repo);
+
+        return;
+    }
+
+    // Handle the information pane (right side) for normal mode
     let file_browser_visible = app.is_showing_changed_files_pane();
     let info_pane_visible = app.is_showing_diff_panel();
 

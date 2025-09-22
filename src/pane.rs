@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use openai_api_rs::v1::chat_completion;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -10,7 +11,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 use tokio::sync::mpsc;
-use openai_api_rs::v1::chat_completion;
 
 use crate::git::GitRepo;
 use crate::llm::LlmClient;
@@ -34,6 +34,18 @@ pub trait Pane {
     fn as_advice_pane_mut(&mut self) -> Option<&mut AdvicePane> {
         None
     }
+    fn as_commit_picker_pane(&self) -> Option<&CommitPickerPane> {
+        None
+    }
+    fn as_commit_picker_pane_mut(&mut self) -> Option<&mut CommitPickerPane> {
+        None
+    }
+    fn as_commit_summary_pane(&self) -> Option<&CommitSummaryPane> {
+        None
+    }
+    fn as_commit_summary_pane_mut(&mut self) -> Option<&mut CommitSummaryPane> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -45,6 +57,8 @@ pub enum PaneId {
     Help,
     StatusBar,
     Advice,
+    CommitPicker,
+    CommitSummary,
 }
 
 #[derive(Debug, Clone)]
@@ -89,7 +103,12 @@ impl PaneRegistry {
         self.register_pane(PaneId::StatusBar, Box::new(StatusBarPane::new()));
         self.register_pane(
             PaneId::Advice,
-            Box::new(AdvicePane::new(Some(llm_client))),
+            Box::new(AdvicePane::new(Some(llm_client.clone()))),
+        );
+        self.register_pane(PaneId::CommitPicker, Box::new(CommitPickerPane::new()));
+        self.register_pane(
+            PaneId::CommitSummary,
+            Box::new(CommitSummaryPane::new_with_llm_client(Some(llm_client))),
         );
     }
 
@@ -693,42 +712,58 @@ impl Pane for HelpPane {
             Line::from(""),
         ];
 
-        let (pane_title, pane_hotkeys) = match last_active_pane {
-            ActivePane::FileTree => (
-                "File Tree",
+        // Check if we're in commit picker mode and show commit picker shortcuts
+        let (pane_title, pane_hotkeys) = if app.is_in_commit_picker_mode() {
+            (
+                "Commit Picker",
                 vec![
-                    "  Tab / g t     - Next file",
-                    "  Shift+Tab / g T - Previous file",
+                    "  j / k / ↑ / ↓     - Navigate commits",
+                    "  g t               - Next commit",
+                    "  g T               - Previous commit",
+                    "  Enter             - Select commit",
+                    "  Esc               - Exit commit picker",
+                    "  Ctrl+P            - Enter commit picker mode",
+                    "  Ctrl+W            - Return to working directory",
                 ],
-            ),
-            ActivePane::Monitor => (
-                "Monitor",
-                vec![
-                    "  Alt+j / Alt+Down  - Scroll down",
-                    "  Alt+k / Alt+Up    - Scroll up",
-                ],
-            ),
-            ActivePane::Diff | ActivePane::SideBySideDiff => (
-                "Diff View",
-                vec![
-                    "  j / Down / Ctrl+e - Scroll down",
-                    "  k / Up / Ctrl+y   - Scroll up",
-                    "  PageDown          - Page down",
-                    "  PageUp            - Page up",
-                    "  g g               - Go to top",
-                    "  Shift+G           - Go to bottom",
-                ],
-            ),
-            ActivePane::Advice => (
-                "LLM Advice",
-                vec![
-                    "  j / k           - Scroll up/down",
-                    "  /               - Enter input mode",
-                    "  Enter           - Submit question",
-                    "  Esc             - Exit input mode",
-                    "  Ctrl+r          - Refresh LLM advice",
-                ],
-            ),
+            )
+        } else {
+            match last_active_pane {
+                ActivePane::FileTree => (
+                    "File Tree",
+                    vec![
+                        "  Tab / g t     - Next file",
+                        "  Shift+Tab / g T - Previous file",
+                    ],
+                ),
+                ActivePane::Monitor => (
+                    "Monitor",
+                    vec![
+                        "  Alt+j / Alt+Down  - Scroll down",
+                        "  Alt+k / Alt+Up    - Scroll up",
+                    ],
+                ),
+                ActivePane::Diff | ActivePane::SideBySideDiff => (
+                    "Diff View",
+                    vec![
+                        "  j / Down / Ctrl+e - Scroll down",
+                        "  k / Up / Ctrl+y   - Scroll up",
+                        "  PageDown          - Page down",
+                        "  PageUp            - Page up",
+                        "  g g               - Go to top",
+                        "  Shift+G           - Go to bottom",
+                    ],
+                ),
+                ActivePane::Advice => (
+                    "LLM Advice",
+                    vec![
+                        "  j / k           - Scroll up/down",
+                        "  /               - Enter input mode",
+                        "  Enter           - Submit question",
+                        "  Esc             - Exit input mode",
+                        "  Ctrl+r          - Refresh LLM advice",
+                    ],
+                ),
+            }
         };
 
         help_text.push(Line::from(Span::styled(
@@ -755,6 +790,19 @@ impl Pane for HelpPane {
             Line::from("  Ctrl+o        - Toggle monitor pane visibility"),
             Line::from("  Ctrl+t        - Toggle light/dark theme"),
             Line::from("  q / Ctrl+c    - Quit application"),
+        ]);
+
+        // Add commit picker shortcut if not already in commit picker mode
+        if !app.is_in_commit_picker_mode() {
+            help_text.push(Line::from("  Ctrl+P        - Enter commit picker mode"));
+        }
+
+        // Add working directory shortcut if we have a selected commit
+        if app.get_selected_commit().is_some() {
+            help_text.push(Line::from("  Ctrl+W        - Return to working directory"));
+        }
+
+        help_text.extend(vec![
             Line::from(""),
             Line::from(Span::styled(
                 "Pane Modes:",
@@ -809,6 +857,157 @@ impl Pane for HelpPane {
     }
 }
 
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+    use crate::ui::{App, Theme};
+    use crate::git::CommitInfo;
+
+    #[test]
+    fn test_help_detects_commit_picker_mode() {
+        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        
+        // Test normal mode
+        assert!(!app.is_in_commit_picker_mode());
+        
+        // Enter commit picker mode
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
+        
+        // Exit commit picker mode
+        app.exit_commit_picker_mode();
+        assert!(!app.is_in_commit_picker_mode());
+    }
+
+    #[test]
+    fn test_help_detects_selected_commit() {
+        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        
+        // Initially no commit selected
+        assert!(app.get_selected_commit().is_none());
+        
+        // Create a test commit and select it
+        let test_commit = CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![],
+        };
+        app.select_commit(test_commit);
+        
+        // Now should have a selected commit
+        assert!(app.get_selected_commit().is_some());
+        
+        // Clear the selected commit
+        app.clear_selected_commit();
+        assert!(app.get_selected_commit().is_none());
+    }
+
+    #[test]
+    fn test_commit_summary_pane_cached_summary() {
+        let mut pane = CommitSummaryPane::new_with_llm_client(None);
+        
+        // Create a test commit
+        let test_commit = CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![],
+        };
+        
+        // Update with commit
+        pane.update_commit(Some(test_commit));
+        
+        // Initially should need summary
+        assert!(pane.needs_summary());
+        assert!(pane.llm_summary.is_none());
+        
+        // Set a cached summary
+        pane.set_cached_summary("abc123", "This is a cached summary".to_string());
+        
+        // Should no longer need summary and should have the cached one
+        assert!(!pane.needs_summary());
+        assert_eq!(pane.llm_summary, Some("This is a cached summary".to_string()));
+        assert_eq!(pane.loading_state, CommitSummaryLoadingState::Loaded);
+    }
+
+    #[test]
+    fn test_commit_summary_pane_cache_callback() {
+        let mut pane = CommitSummaryPane::new_with_llm_client(None);
+        
+        // Initially no cache callback
+        assert!(pane.take_cache_callback().is_none());
+        
+        // Simulate receiving an LLM response
+        let test_result = Ok(("abc123".to_string(), "Generated summary".to_string()));
+        let _ = pane.llm_tx.try_send(test_result);
+        
+        // Create a test commit to match the response
+        let test_commit = CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![],
+        };
+        pane.update_commit(Some(test_commit));
+        pane.is_loading_summary = true; // Simulate loading state
+        pane.pending_summary_sha = Some("abc123".to_string());
+        
+        // Poll for the summary
+        pane.poll_llm_summary();
+        
+        // Should have a cache callback now
+        let cache_callback = pane.take_cache_callback();
+        assert!(cache_callback.is_some());
+        let (commit_sha, summary) = cache_callback.unwrap();
+        assert_eq!(commit_sha, "abc123");
+        assert_eq!(summary, "Generated summary");
+        
+        // Taking again should return None
+        assert!(pane.take_cache_callback().is_none());
+    }
+
+    #[test]
+    fn test_commit_summary_pane_caches_all_summaries() {
+        let mut pane = CommitSummaryPane::new_with_llm_client(None);
+        
+        // Set current commit to "commit1"
+        let current_commit = CommitInfo {
+            sha: "commit1".to_string(),
+            short_sha: "commit1".to_string(),
+            message: "Current commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![],
+        };
+        pane.update_commit(Some(current_commit));
+        
+        // Simulate receiving an LLM response for a DIFFERENT commit (commit2)
+        let test_result = Ok(("commit2".to_string(), "Summary for commit2".to_string()));
+        let _ = pane.llm_tx.try_send(test_result);
+        
+        // Poll for the summary
+        pane.poll_llm_summary();
+        
+        // Should have a cache callback even though it's for a different commit
+        let cache_callback = pane.take_cache_callback();
+        assert!(cache_callback.is_some());
+        let (commit_sha, summary) = cache_callback.unwrap();
+        assert_eq!(commit_sha, "commit2");
+        assert_eq!(summary, "Summary for commit2");
+        
+        // The UI should NOT be updated since it's for a different commit
+        assert!(pane.llm_summary.is_none());
+        assert_eq!(pane.loading_state, CommitSummaryLoadingState::LoadingFiles);
+    }
+}
+
 // Status Bar Pane Implementation
 pub struct StatusBarPane {
     visible: bool,
@@ -839,16 +1038,39 @@ impl Pane for StatusBarPane {
         let (total_files, total_additions, total_deletions) = git_repo.total_stats;
         let view_mode = git_repo.current_view_mode;
 
-        let view_mode_text = match view_mode {
-            crate::git::ViewMode::WorkingTree => "💼 Working Tree",
-            crate::git::ViewMode::Staged => "📋 Staged Files",
-            crate::git::ViewMode::DirtyDirectory => "🗂️ Dirty Directory",
-            crate::git::ViewMode::LastCommit => "📜 Last Commit",
+        let view_mode_text = if let Some(selected_commit) = app.get_selected_commit() {
+            format!("🔍 Selected Commit: {}", selected_commit.short_sha)
+        } else {
+            match view_mode {
+                crate::git::ViewMode::WorkingTree => "💼 Working Tree".to_string(),
+                crate::git::ViewMode::Staged => "📋 Staged Files".to_string(),
+                crate::git::ViewMode::DirtyDirectory => "🗂️ Dirty Directory".to_string(),
+                crate::git::ViewMode::LastCommit => "📜 Last Commit".to_string(),
+            }
         };
 
-        let status_text = format!(
-            "📂 {repo_name} | 🌿 {branch} | {view_mode_text} | 🎯 {commit_sha} > {commit_summary} | 📊 {total_files} files (+{total_additions}/-{total_deletions})"
-        );
+        let status_text = if let Some(selected_commit) = app.get_selected_commit() {
+            format!(
+                "📂 {repo_name} | 🌿 {branch} | {view_mode_text} | 🎯 {} > {} | 📊 {} files (+{}/-{}) | Press Ctrl+W to return to working directory",
+                selected_commit.short_sha,
+                selected_commit.message.lines().next().unwrap_or(""),
+                selected_commit.files_changed.len(),
+                selected_commit
+                    .files_changed
+                    .iter()
+                    .map(|f| f.additions)
+                    .sum::<usize>(),
+                selected_commit
+                    .files_changed
+                    .iter()
+                    .map(|f| f.deletions)
+                    .sum::<usize>()
+            )
+        } else {
+            format!(
+                "📂 {repo_name} | 🌿 {branch} | {view_mode_text} | 🎯 {commit_sha} > {commit_summary} | 📊 {total_files} files (+{total_additions}/-{total_deletions})"
+            )
+        };
 
         let paragraph = Paragraph::new(status_text)
             .style(
@@ -874,6 +1096,399 @@ impl Pane for StatusBarPane {
 
     fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
+    }
+}
+
+// Commit Picker Pane Implementation
+pub struct CommitPickerPane {
+    visible: bool,
+    commits: Vec<crate::git::CommitInfo>,
+    current_index: usize,
+    scroll_offset: usize,
+    last_g_press: Option<std::time::Instant>,
+    enter_pressed: bool,
+    loading_state: CommitPickerLoadingState,
+    error_message: Option<String>,
+    // Performance optimization fields
+    last_visible_height: usize,
+    render_cache_valid: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommitPickerLoadingState {
+    NotLoaded,
+    Loading,
+    Loaded,
+    Error,
+}
+
+impl CommitPickerPane {
+    pub fn new() -> Self {
+        Self {
+            visible: false,
+            commits: Vec::new(),
+            current_index: 0,
+            scroll_offset: 0,
+            last_g_press: None,
+            enter_pressed: false,
+            loading_state: CommitPickerLoadingState::NotLoaded,
+            error_message: None,
+            last_visible_height: 0,
+            render_cache_valid: false,
+        }
+    }
+
+    pub fn set_loading(&mut self) {
+        self.loading_state = CommitPickerLoadingState::Loading;
+        self.error_message = None;
+    }
+
+    pub fn update_commits(&mut self, commits: Vec<crate::git::CommitInfo>) {
+        self.commits = commits;
+        if self.current_index >= self.commits.len() {
+            self.current_index = 0;
+            self.scroll_offset = 0;
+        }
+
+        // Update loading state based on results
+        if self.commits.is_empty() {
+            self.loading_state = CommitPickerLoadingState::Loaded;
+            // Don't set error for empty repos, just show appropriate message
+        } else {
+            self.loading_state = CommitPickerLoadingState::Loaded;
+            self.error_message = None;
+        }
+
+        // Invalidate render cache when commits change
+        self.render_cache_valid = false;
+    }
+
+    pub fn set_error(&mut self, error: String) {
+        self.loading_state = CommitPickerLoadingState::Error;
+        self.error_message = Some(error);
+        self.commits.clear();
+        self.current_index = 0;
+        self.scroll_offset = 0;
+    }
+
+    pub fn is_loading(&self) -> bool {
+        matches!(self.loading_state, CommitPickerLoadingState::Loading)
+    }
+
+    pub fn has_error(&self) -> bool {
+        matches!(self.loading_state, CommitPickerLoadingState::Error)
+    }
+
+    pub fn get_current_commit(&self) -> Option<&crate::git::CommitInfo> {
+        // Only return commit if we're in a valid state
+        if matches!(self.loading_state, CommitPickerLoadingState::Loaded)
+            && !self.commits.is_empty()
+        {
+            self.commits.get(self.current_index)
+        } else {
+            None
+        }
+    }
+
+    fn navigate_next(&mut self) {
+        // Only allow navigation if commits are loaded and available
+        if matches!(self.loading_state, CommitPickerLoadingState::Loaded)
+            && !self.commits.is_empty()
+        {
+            self.current_index = (self.current_index + 1) % self.commits.len();
+            self.update_scroll_offset(20); // Use reasonable default
+        }
+    }
+
+    fn navigate_prev(&mut self) {
+        // Only allow navigation if commits are loaded and available
+        if matches!(self.loading_state, CommitPickerLoadingState::Loaded)
+            && !self.commits.is_empty()
+        {
+            self.current_index = if self.current_index == 0 {
+                self.commits.len() - 1
+            } else {
+                self.current_index - 1
+            };
+            self.update_scroll_offset(20); // Use reasonable default
+        }
+    }
+
+    fn update_scroll_offset(&mut self, visible_height: usize) {
+        // Ensure current selection is visible
+        if self.current_index < self.scroll_offset {
+            self.scroll_offset = self.current_index;
+            self.render_cache_valid = false;
+        } else if self.current_index >= self.scroll_offset + visible_height {
+            self.scroll_offset = self.current_index.saturating_sub(visible_height - 1);
+            self.render_cache_valid = false;
+        }
+
+        // Update last visible height for performance tracking
+        if self.last_visible_height != visible_height {
+            self.last_visible_height = visible_height;
+            self.render_cache_valid = false;
+        }
+    }
+
+    pub fn is_enter_pressed(&self) -> bool {
+        self.enter_pressed
+    }
+
+    pub fn reset_enter_pressed(&mut self) {
+        self.enter_pressed = false;
+    }
+
+    pub fn get_commits(&self) -> Vec<crate::git::CommitInfo> {
+        self.commits.clone()
+    }
+
+    pub fn get_current_index(&self) -> usize {
+        self.current_index
+    }
+}
+
+impl Pane for CommitPickerPane {
+    fn title(&self) -> String {
+        "Commit History".to_string()
+    }
+
+    fn render(
+        &self,
+        f: &mut Frame,
+        app: &App,
+        area: Rect,
+        _git_repo: &GitRepo,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use ratatui::{
+            style::{Modifier, Style},
+            text::{Line, Span},
+            widgets::{Block, Borders, List, ListItem, Paragraph},
+        };
+
+        let theme = app.get_theme();
+
+        // Handle different loading states
+        match self.loading_state {
+            CommitPickerLoadingState::NotLoaded => {
+                let paragraph = Paragraph::new("Press Ctrl+P to load commit history").block(
+                    Block::default()
+                        .title(self.title())
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                );
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+            CommitPickerLoadingState::Loading => {
+                let paragraph = Paragraph::new("⏳ Loading commit history...").block(
+                    Block::default()
+                        .title(self.title())
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                );
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+            CommitPickerLoadingState::Error => {
+                let error_text = if let Some(error) = &self.error_message {
+                    format!("❌ Error loading commits:\n{}", error)
+                } else {
+                    "❌ Error loading commits".to_string()
+                };
+
+                let paragraph = Paragraph::new(error_text)
+                    .block(
+                        Block::default()
+                            .title(self.title())
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(theme.error_color())),
+                    )
+                    .style(Style::default().fg(theme.error_color()));
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+            CommitPickerLoadingState::Loaded => {
+                if self.commits.is_empty() {
+                    let paragraph = Paragraph::new("📭 No commits found in this repository\n\nThis might be a new repository with no commits yet.")
+                        .block(
+                            Block::default()
+                                .title(self.title())
+                                .borders(Borders::ALL)
+                                .border_style(Style::default().fg(theme.border_color())),
+                        )
+                        .style(Style::default().fg(theme.secondary_color()));
+                    f.render_widget(paragraph, area);
+                    return Ok(());
+                }
+            }
+        }
+
+        // Calculate visible range based on scroll offset and area height
+        let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
+        let start_index = self.scroll_offset;
+        let end_index = (start_index + visible_height).min(self.commits.len());
+
+        // Early return if we have no commits to render
+        if start_index >= self.commits.len() {
+            let paragraph = Paragraph::new("No commits to display").block(
+                Block::default()
+                    .title(self.title())
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color())),
+            );
+            f.render_widget(paragraph, area);
+            return Ok(());
+        }
+
+        let commit_items: Vec<ListItem> = self
+            .commits
+            .iter()
+            .enumerate()
+            .skip(start_index)
+            .take(end_index - start_index)
+            .map(|(original_index, commit)| {
+                let mut spans = Vec::new();
+
+                // Add arrow for current selection (use original index for comparison)
+                if original_index == self.current_index {
+                    spans.push(Span::styled(
+                        "-> ",
+                        Style::default()
+                            .fg(theme.secondary_color())
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                } else {
+                    spans.push(Span::raw("   "));
+                }
+
+                // Add short SHA
+                spans.push(Span::styled(
+                    format!("{} ", commit.short_sha),
+                    Style::default()
+                        .fg(theme.primary_color())
+                        .add_modifier(Modifier::BOLD),
+                ));
+
+                // Add first line of commit message
+                let first_line = commit.message.lines().next().unwrap_or("").to_string();
+                spans.push(Span::styled(
+                    first_line,
+                    Style::default().fg(theme.foreground_color()),
+                ));
+
+                let line_style = if original_index == self.current_index {
+                    Style::default()
+                        .fg(theme.foreground_color())
+                        .bg(theme.highlight_color())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.foreground_color())
+                };
+
+                let line = Line::from(spans).style(line_style);
+                ListItem::new(line)
+            })
+            .collect();
+
+        let commit_list = List::new(commit_items)
+            .block(
+                Block::default()
+                    .title(self.title())
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color())),
+            )
+            .highlight_style(
+                Style::default()
+                    .fg(theme.secondary_color())
+                    .add_modifier(Modifier::BOLD),
+            );
+
+        f.render_widget(commit_list, area);
+        Ok(())
+    }
+
+    fn handle_event(&mut self, event: &AppEvent) -> bool {
+        match event {
+            AppEvent::Key(key) => {
+                match key.code {
+                    KeyCode::Char('j') => {
+                        self.navigate_next();
+                        true
+                    }
+                    KeyCode::Char('k') => {
+                        self.navigate_prev();
+                        true
+                    }
+                    KeyCode::Down => {
+                        self.navigate_next();
+                        true
+                    }
+                    KeyCode::Up => {
+                        self.navigate_prev();
+                        true
+                    }
+                    KeyCode::Char('g') => {
+                        self.last_g_press = Some(std::time::Instant::now());
+                        true
+                    }
+                    KeyCode::Char('t') => {
+                        // Check if g was pressed recently for g+t navigation
+                        if let Some(last_time) = self.last_g_press
+                            && std::time::Instant::now()
+                                .duration_since(last_time)
+                                .as_millis()
+                                < 500
+                        {
+                            self.navigate_next();
+                            self.last_g_press = None; // Reset after use
+                        }
+                        true
+                    }
+                    KeyCode::Char('T') => {
+                        // Check if g was pressed recently for g+T navigation
+                        if let Some(last_time) = self.last_g_press
+                            && std::time::Instant::now()
+                                .duration_since(last_time)
+                                .as_millis()
+                                < 500
+                        {
+                            self.navigate_prev();
+                            self.last_g_press = None; // Reset after use
+                        }
+                        true
+                    }
+                    KeyCode::Enter => {
+                        // Only allow commit selection if we have valid commits loaded
+                        if matches!(self.loading_state, CommitPickerLoadingState::Loaded)
+                            && !self.commits.is_empty()
+                            && self.current_index < self.commits.len()
+                        {
+                            self.enter_pressed = true;
+                        }
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn visible(&self) -> bool {
+        self.visible
+    }
+
+    fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
+    fn as_commit_picker_pane(&self) -> Option<&CommitPickerPane> {
+        Some(self)
+    }
+
+    fn as_commit_picker_pane_mut(&mut self) -> Option<&mut CommitPickerPane> {
+        Some(self)
     }
 }
 
@@ -935,13 +1550,14 @@ impl AdvicePane {
                 Ok(response) => {
                     self.content.push_str("\n\n");
                     self.content.push_str(&response);
-                    self.conversation_history.push(chat_completion::ChatCompletionMessage {
-                        role: chat_completion::MessageRole::assistant,
-                        content: chat_completion::Content::Text(response),
-                        name: None,
-                        tool_calls: None,
-                        tool_call_id: None,
-                    });
+                    self.conversation_history
+                        .push(chat_completion::ChatCompletionMessage {
+                            role: chat_completion::MessageRole::assistant,
+                            content: chat_completion::Content::Text(response),
+                            name: None,
+                            tool_calls: None,
+                            tool_call_id: None,
+                        });
                     let content_lines: Vec<_> = self.content.lines().collect();
                     self.scroll_offset = content_lines.len().saturating_sub(1);
                 }
@@ -981,7 +1597,11 @@ impl Pane for AdvicePane {
             )
             .split(area);
 
-        let mut text_lines: Vec<Line> = self.content.lines().map(|l| Line::from(l.to_string())).collect();
+        let mut text_lines: Vec<Line> = self
+            .content
+            .lines()
+            .map(|l| Line::from(l.to_string()))
+            .collect();
         if self.is_loading {
             text_lines.push(Line::from("Loading..."));
         }
@@ -1026,13 +1646,14 @@ impl Pane for AdvicePane {
                     }
                     KeyCode::Enter => {
                         let prompt = self.input.drain(..).collect::<String>();
-                        self.conversation_history.push(chat_completion::ChatCompletionMessage {
-                            role: chat_completion::MessageRole::user,
-                            content: chat_completion::Content::Text(prompt.clone()),
-                            name: None,
-                            tool_calls: None,
-                            tool_call_id: None,
-                        });
+                        self.conversation_history
+                            .push(chat_completion::ChatCompletionMessage {
+                                role: chat_completion::MessageRole::user,
+                                content: chat_completion::Content::Text(prompt.clone()),
+                                name: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                            });
 
                         self.content.push_str("\n\n> ");
                         self.content.push_str(&prompt);
@@ -1072,31 +1693,40 @@ impl Pane for AdvicePane {
                         return true;
                     }
                     KeyCode::Right => {
-                        self.input_cursor_position = self.input_cursor_position.saturating_add(1).min(self.input.len());
+                        self.input_cursor_position = self
+                            .input_cursor_position
+                            .saturating_add(1)
+                            .min(self.input.len());
                         return true;
                     }
                     _ => return false,
                 }
             } else {
-                 match key.code {
+                match key.code {
                     KeyCode::Char('/') => {
                         self.input_mode = true;
                         if self.conversation_history.is_empty() {
                             if let Some(data) = &self.initial_data {
-                                self.conversation_history.push(chat_completion::ChatCompletionMessage {
-                                    role: chat_completion::MessageRole::system,
-                                    content: chat_completion::Content::Text(SYSTEM_PROMPT.to_string()),
-                                    name: None,
-                                    tool_calls: None,
-                                    tool_call_id: None,
-                                });
-                                self.conversation_history.push(chat_completion::ChatCompletionMessage {
-                                    role: chat_completion::MessageRole::user,
-                                    content: chat_completion::Content::Text(data.clone()),
-                                    name: None,
-                                    tool_calls: None,
-                                    tool_call_id: None,
-                                });
+                                self.conversation_history.push(
+                                    chat_completion::ChatCompletionMessage {
+                                        role: chat_completion::MessageRole::system,
+                                        content: chat_completion::Content::Text(
+                                            SYSTEM_PROMPT.to_string(),
+                                        ),
+                                        name: None,
+                                        tool_calls: None,
+                                        tool_call_id: None,
+                                    },
+                                );
+                                self.conversation_history.push(
+                                    chat_completion::ChatCompletionMessage {
+                                        role: chat_completion::MessageRole::user,
+                                        content: chat_completion::Content::Text(data.clone()),
+                                        name: None,
+                                        tool_calls: None,
+                                        tool_call_id: None,
+                                    },
+                                );
                             }
                         }
                         return true;
@@ -1117,7 +1747,8 @@ impl Pane for AdvicePane {
                         let page_size = rect.height.saturating_sub(2) as usize;
                         let content_lines: Vec<_> = self.content.lines().collect();
                         let max_scroll = content_lines.len().saturating_sub(page_size);
-                        self.scroll_offset = std::cmp::min(self.scroll_offset.saturating_add(page_size), max_scroll);
+                        self.scroll_offset =
+                            std::cmp::min(self.scroll_offset.saturating_add(page_size), max_scroll);
                         return true;
                     }
                     KeyCode::PageUp => {
@@ -1172,6 +1803,607 @@ impl Pane for AdvicePane {
     }
 }
 
+// Commit Summary Pane Implementation
+pub struct CommitSummaryPane {
+    visible: bool,
+    current_commit: Option<crate::git::CommitInfo>,
+    scroll_offset: usize,
+    llm_summary: Option<String>,
+    llm_client: Option<LlmClient>,
+    llm_tx: mpsc::Sender<Result<(String, String), String>>, // (commit_sha, summary) or error
+    llm_rx: mpsc::Receiver<Result<(String, String), String>>,
+    is_loading_summary: bool,
+    pending_summary_sha: Option<String>, // Track which commit we're waiting for a summary for
+    summary_error: Option<String>,
+    loading_state: CommitSummaryLoadingState,
+    cache_callback: Option<(String, String)>, // (commit_sha, summary) to cache
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommitSummaryLoadingState {
+    NoCommit,
+    LoadingFiles,
+    LoadingSummary,
+    Loaded,
+    Error,
+}
+
+impl CommitSummaryPane {
+    pub fn new() -> Self {
+        let (llm_tx, llm_rx) = mpsc::channel(1);
+        Self {
+            visible: false,
+            current_commit: None,
+            scroll_offset: 0,
+            llm_summary: None,
+            llm_client: None,
+            llm_tx,
+            llm_rx,
+            is_loading_summary: false,
+            pending_summary_sha: None,
+            summary_error: None,
+            loading_state: CommitSummaryLoadingState::NoCommit,
+            cache_callback: None,
+        }
+    }
+
+    pub fn new_with_llm_client(llm_client: Option<LlmClient>) -> Self {
+        let (llm_tx, llm_rx) = mpsc::channel(1);
+        Self {
+            visible: false,
+            current_commit: None,
+            scroll_offset: 0,
+            llm_summary: None,
+            llm_client,
+            llm_tx,
+            llm_rx,
+            is_loading_summary: false,
+            pending_summary_sha: None,
+            summary_error: None,
+            loading_state: CommitSummaryLoadingState::NoCommit,
+            cache_callback: None,
+        }
+    }
+
+    pub fn update_commit(&mut self, commit: Option<crate::git::CommitInfo>) {
+        let commit_changed = match (&self.current_commit, &commit) {
+            (Some(old), Some(new)) => old.sha != new.sha,
+            (None, Some(_)) => true,
+            (Some(_), None) => true,
+            (None, None) => false,
+        };
+
+        self.current_commit = commit;
+
+        if commit_changed {
+            // Reset state when commit changes
+            self.llm_summary = None;
+            self.scroll_offset = 0;
+            self.is_loading_summary = false;
+            self.pending_summary_sha = None;
+            self.summary_error = None;
+            self.cache_callback = None;
+
+            // Update loading state based on new commit
+            if self.current_commit.is_some() {
+                self.loading_state = CommitSummaryLoadingState::LoadingFiles;
+                // Don't request LLM summary immediately - let the App check cache first
+            } else {
+                self.loading_state = CommitSummaryLoadingState::NoCommit;
+            }
+        }
+    }
+
+    pub fn set_error(&mut self, error: String) {
+        self.loading_state = CommitSummaryLoadingState::Error;
+        self.summary_error = Some(error);
+        self.is_loading_summary = false;
+        self.pending_summary_sha = None;
+    }
+
+    fn request_llm_summary(&mut self) {
+        if let Some(commit) = &self.current_commit {
+            // Validate commit data before proceeding
+            if commit.sha.is_empty() {
+                self.set_error("Invalid commit: empty SHA".to_string());
+                return;
+            }
+
+            // First check if we have a cached summary
+            // This will be handled by the App through GitWorker communication
+            // For now, we'll proceed with the existing LLM generation logic
+            // The App will need to check cache first and only call this if not cached
+
+            if let Some(llm_client) = &self.llm_client {
+                self.is_loading_summary = true;
+                self.loading_state = CommitSummaryLoadingState::LoadingSummary;
+                self.pending_summary_sha = Some(commit.sha.clone());
+                self.summary_error = None;
+
+                // Get the full diff content for this commit
+                let commit_sha = commit.sha.clone();
+                let commit_short_sha = commit.short_sha.clone();
+                let commit_message = commit.message.clone();
+                let tx = self.llm_tx.clone();
+                let client = llm_client.clone();
+
+                tokio::spawn(async move {
+                    // Clone commit_sha for use in the blocking task
+                    let commit_sha_for_git = commit_sha.clone();
+
+                    // Get the full diff using git show command
+                    let diff_result = tokio::task::spawn_blocking(move || {
+                        std::process::Command::new("git")
+                            .args([
+                                "show",
+                                "--format=", // Don't show commit message, just the diff
+                                "--no-color",
+                                &commit_sha_for_git,
+                            ])
+                            .output()
+                    })
+                    .await;
+
+                    let full_diff = match diff_result {
+                        Ok(Ok(output)) if output.status.success() => {
+                            String::from_utf8_lossy(&output.stdout).to_string()
+                        }
+                        Ok(Ok(output)) => {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            let error_msg = format!("Git show failed: {}", stderr);
+                            let _ = tx.send(Err(error_msg)).await;
+                            return;
+                        }
+                        Ok(Err(e)) => {
+                            let error_msg = format!("Failed to execute git show: {}", e);
+                            let _ = tx.send(Err(error_msg)).await;
+                            return;
+                        }
+                        Err(e) => {
+                            let error_msg = format!("Task execution failed: {}", e);
+                            let _ = tx.send(Err(error_msg)).await;
+                            return;
+                        }
+                    };
+
+                    // Create a prompt with the full diff content
+                    let mut prompt = format!(
+                        "Please provide a brief, 2-sentence summary of what this commit changes:\n\n"
+                    );
+                    prompt.push_str(&format!("Commit: {}\n", commit_short_sha));
+
+                    // Sanitize commit message to prevent prompt injection
+                    let sanitized_message = commit_message
+                        .replace('\n', " ")
+                        .chars()
+                        .take(200)
+                        .collect::<String>();
+                    prompt.push_str(&format!("Message: {}\n\n", sanitized_message));
+
+                    if full_diff.trim().is_empty() {
+                        prompt.push_str("No diff content available (this might be a merge commit or have parsing issues).\n");
+                    } else {
+                        // Limit diff size to prevent overly long prompts (keep first 8000 chars)
+                        let truncated_diff = if full_diff.len() > 8000 {
+                            let truncated = full_diff.chars().take(8000).collect::<String>();
+                            format!("{}\n\n[... diff truncated for brevity ...]", truncated)
+                        } else {
+                            full_diff
+                        };
+
+                        prompt.push_str("Full diff:\n```diff\n");
+                        prompt.push_str(&truncated_diff);
+                        prompt.push_str("\n```\n");
+                    }
+
+                    prompt.push_str("\nFocus on the functional impact and purpose of the changes. Keep it concise and technical.");
+
+                    let history = vec![chat_completion::ChatCompletionMessage {
+                        role: chat_completion::MessageRole::user,
+                        content: chat_completion::Content::Text(prompt),
+                        name: None,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    }];
+
+                    let res = client.get_llm_summary(history).await;
+                    let response = match res {
+                        Ok(summary) => {
+                            // Validate and sanitize the summary response
+                            let sanitized_summary = summary.chars().take(1000).collect::<String>();
+                            Ok((commit_sha, sanitized_summary))
+                        }
+                        Err(e) => {
+                            // Provide more specific error messages
+                            let error_msg = if e.contains("timeout") {
+                                "LLM request timed out. Please try again.".to_string()
+                            } else if e.contains("rate limit") {
+                                "Rate limit exceeded. Please wait before requesting another summary.".to_string()
+                            } else if e.contains("authentication") || e.contains("API key") {
+                                "Authentication failed. Please check your API key.".to_string()
+                            } else {
+                                format!("Failed to generate summary: {}", e)
+                            };
+                            Err(error_msg)
+                        }
+                    };
+                    let _ = tx.send(response).await;
+                });
+            } else {
+                // No LLM client available - just mark as loaded without setting summary
+                self.loading_state = CommitSummaryLoadingState::Loaded;
+            }
+        }
+    }
+
+    pub fn poll_llm_summary(&mut self) {
+        if let Ok(result) = self.llm_rx.try_recv() {
+            match result {
+                Ok((response_commit_sha, summary)) => {
+                    // Always cache the generated summary, regardless of which commit is currently selected
+                    if !summary.trim().is_empty() {
+                        self.cache_callback = Some((response_commit_sha.clone(), summary.clone()));
+                    }
+                    
+                    // Only update the UI if it's for the currently selected commit
+                    if let Some(current_commit) = &self.current_commit {
+                        if current_commit.sha == response_commit_sha {
+                            // Validate the summary before using it
+                            if summary.trim().is_empty() {
+                                self.llm_summary = Some("LLM returned empty summary".to_string());
+                                self.summary_error = Some("Empty response from LLM".to_string());
+                            } else {
+                                self.llm_summary = Some(summary);
+                                self.summary_error = None;
+                            }
+                            self.is_loading_summary = false;
+                            self.pending_summary_sha = None;
+                            self.loading_state = CommitSummaryLoadingState::Loaded;
+                        }
+                        // If the response is for a different commit, we still cache it but don't update UI
+                    }
+                }
+                Err(e) => {
+                    // Only show error if we're still waiting for a summary for the current commit
+                    if let (Some(current_commit), Some(pending_sha)) =
+                        (&self.current_commit, &self.pending_summary_sha)
+                    {
+                        if current_commit.sha == *pending_sha {
+                            self.summary_error = Some(e.clone());
+                            self.llm_summary = Some(format!("❌ {}", e));
+                            self.is_loading_summary = false;
+                            self.pending_summary_sha = None;
+                            self.loading_state = CommitSummaryLoadingState::Loaded;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Set a cached summary directly without generating a new one
+    pub fn set_cached_summary(&mut self, commit_sha: &str, summary: String) {
+        if let Some(current_commit) = &self.current_commit {
+            if current_commit.sha == commit_sha {
+                self.llm_summary = Some(summary);
+                self.summary_error = None;
+                self.is_loading_summary = false;
+                self.pending_summary_sha = None;
+                self.loading_state = CommitSummaryLoadingState::Loaded;
+            }
+        }
+    }
+
+    /// Check if we need to request a summary for the current commit
+    pub fn needs_summary(&self) -> bool {
+        if let Some(_current_commit) = &self.current_commit {
+            // Need summary if we don't have one and we're not currently loading
+            self.llm_summary.is_none() && !self.is_loading_summary
+        } else {
+            false
+        }
+    }
+
+    /// Get the current commit SHA if available
+    pub fn get_current_commit_sha(&self) -> Option<String> {
+        self.current_commit.as_ref().map(|c| c.sha.clone())
+    }
+
+    /// Force generation of a new summary (bypassing cache)
+    pub fn force_generate_summary(&mut self) {
+        self.llm_summary = None;
+        self.summary_error = None;
+        self.request_llm_summary();
+    }
+
+    /// Get and clear any pending cache callback
+    pub fn take_cache_callback(&mut self) -> Option<(String, String)> {
+        self.cache_callback.take()
+    }
+}
+
+impl Pane for CommitSummaryPane {
+    fn title(&self) -> String {
+        "Commit Details".to_string()
+    }
+
+    fn render(
+        &self,
+        f: &mut Frame,
+        app: &App,
+        area: Rect,
+        _git_repo: &GitRepo,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use ratatui::{
+            layout::{Constraint, Direction, Layout},
+            style::{Modifier, Style},
+            text::{Line, Span},
+            widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+        };
+
+        let theme = app.get_theme();
+
+        // Handle different loading states
+        match self.loading_state {
+            CommitSummaryLoadingState::NoCommit => {
+                let paragraph = Paragraph::new("No commit selected").block(
+                    Block::default()
+                        .title(self.title())
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                );
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+            CommitSummaryLoadingState::LoadingFiles => {
+                let paragraph = Paragraph::new("⏳ Loading commit details...").block(
+                    Block::default()
+                        .title(self.title())
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                );
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+            CommitSummaryLoadingState::Error => {
+                let error_text = if let Some(error) = &self.summary_error {
+                    format!("❌ Error loading commit details:\n{}", error)
+                } else {
+                    "❌ Error loading commit details".to_string()
+                };
+
+                let paragraph = Paragraph::new(error_text)
+                    .block(
+                        Block::default()
+                            .title(self.title())
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(theme.error_color())),
+                    )
+                    .style(Style::default().fg(theme.error_color()));
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+            _ => {} // Continue with normal rendering for LoadingSummary and Loaded states
+        }
+
+        if let Some(commit) = &self.current_commit {
+            // Validate commit data before rendering
+            if commit.sha.is_empty() {
+                let paragraph = Paragraph::new("❌ Invalid commit data")
+                    .block(
+                        Block::default()
+                            .title(self.title())
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(theme.error_color())),
+                    )
+                    .style(Style::default().fg(theme.error_color()));
+                f.render_widget(paragraph, area);
+                return Ok(());
+            }
+
+            // Split the area into two sections: file changes and LLM summary
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+                .split(area);
+
+            // Render file changes section
+            let mut file_items = Vec::new();
+
+            if commit.files_changed.is_empty() {
+                // Show message when no file changes are available
+                file_items.push(ListItem::new(Line::from(vec![Span::styled(
+                    "ℹ️  No file changes detected",
+                    Style::default().fg(theme.secondary_color()),
+                )])));
+                file_items.push(ListItem::new(Line::from(vec![Span::styled(
+                    "   This might be a merge commit or there was an error parsing changes",
+                    Style::default().fg(theme.foreground_color()),
+                )])));
+            } else {
+                for (index, file_change) in commit.files_changed.iter().enumerate() {
+                    if index < self.scroll_offset {
+                        continue;
+                    }
+
+                    let visible_height = chunks[0].height.saturating_sub(2) as usize; // Account for borders
+                    if file_items.len() >= visible_height {
+                        break;
+                    }
+
+                    let mut spans = Vec::new();
+
+                    // Status indicator with validation
+                    let status_char = match file_change.status {
+                        crate::git::FileChangeStatus::Added => "📄 ",
+                        crate::git::FileChangeStatus::Modified => "📝 ",
+                        crate::git::FileChangeStatus::Deleted => "🗑️  ",
+                        crate::git::FileChangeStatus::Renamed => "📋 ",
+                    };
+                    spans.push(Span::raw(status_char));
+
+                    // File path with length validation
+                    let file_path_str = file_change.path.to_string_lossy();
+                    let display_path = if file_path_str.len() > 80 {
+                        format!("...{}", &file_path_str[file_path_str.len() - 77..])
+                    } else {
+                        file_path_str.to_string()
+                    };
+
+                    spans.push(Span::styled(
+                        display_path,
+                        Style::default().fg(theme.foreground_color()),
+                    ));
+
+                    // Addition/deletion counts with validation
+                    if file_change.additions > 0 {
+                        let additions_text = if file_change.additions > 9999 {
+                            " (+9999+)".to_string()
+                        } else {
+                            format!(" (+{})", file_change.additions)
+                        };
+                        spans.push(Span::styled(
+                            additions_text,
+                            Style::default()
+                                .fg(theme.added_color())
+                                .add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                    if file_change.deletions > 0 {
+                        let deletions_text = if file_change.deletions > 9999 {
+                            " (-9999+)".to_string()
+                        } else {
+                            format!(" (-{})", file_change.deletions)
+                        };
+                        spans.push(Span::styled(
+                            deletions_text,
+                            Style::default()
+                                .fg(theme.removed_color())
+                                .add_modifier(Modifier::BOLD),
+                        ));
+                    }
+
+                    let line = Line::from(spans);
+                    file_items.push(ListItem::new(line));
+                }
+            }
+
+            let file_list = List::new(file_items).block(
+                Block::default()
+                    .title(format!("Files Changed ({})", commit.files_changed.len()))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color())),
+            );
+
+            f.render_widget(file_list, chunks[0]);
+
+            // Render LLM summary section with enhanced error handling and loading states
+            let summary_content = if let Some(summary) = &self.llm_summary {
+                summary.clone()
+            } else if self.is_loading_summary {
+                "⏳ Generating summary...".to_string()
+            } else if self.llm_client.is_none() {
+                "LLM client not available".to_string()
+            } else {
+                "📋 Checking cache...".to_string()
+            };
+
+            let summary_lines: Vec<Line> = summary_content
+                .lines()
+                .map(|line| Line::from(line.to_string()))
+                .collect();
+
+            let summary_paragraph = Paragraph::new(summary_lines)
+                .block(
+                    Block::default()
+                        .title("LLM Summary")
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.border_color())),
+                )
+                .wrap(Wrap { trim: false });
+
+            f.render_widget(summary_paragraph, chunks[1]);
+        } else {
+            // No commit selected
+            let paragraph = Paragraph::new("No commit selected").block(
+                Block::default()
+                    .title(self.title())
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color())),
+            );
+            f.render_widget(paragraph, area);
+        }
+
+        Ok(())
+    }
+
+    fn handle_event(&mut self, event: &AppEvent) -> bool {
+        match event {
+            AppEvent::Key(key) => {
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        if let Some(commit) = &self.current_commit {
+                            let max_scroll = commit.files_changed.len().saturating_sub(1);
+                            self.scroll_offset =
+                                std::cmp::min(self.scroll_offset.saturating_add(1), max_scroll);
+                        }
+                        true
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                        true
+                    }
+                    KeyCode::PageDown => {
+                        if let Some(commit) = &self.current_commit {
+                            let page_size = 10; // Approximate page size
+                            let max_scroll = commit.files_changed.len().saturating_sub(page_size);
+                            self.scroll_offset = std::cmp::min(
+                                self.scroll_offset.saturating_add(page_size),
+                                max_scroll,
+                            );
+                        }
+                        true
+                    }
+                    KeyCode::PageUp => {
+                        let page_size = 10; // Approximate page size
+                        self.scroll_offset = self.scroll_offset.saturating_sub(page_size);
+                        true
+                    }
+                    KeyCode::Char('g') => {
+                        // Go to top
+                        self.scroll_offset = 0;
+                        true
+                    }
+                    KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                        // Go to bottom
+                        if let Some(commit) = &self.current_commit {
+                            self.scroll_offset = commit.files_changed.len().saturating_sub(1);
+                        }
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn visible(&self) -> bool {
+        self.visible
+    }
+
+    fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
+    fn as_commit_summary_pane(&self) -> Option<&CommitSummaryPane> {
+        Some(self)
+    }
+
+    fn as_commit_summary_pane_mut(&mut self) -> Option<&mut CommitSummaryPane> {
+        Some(self)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1191,11 +2423,291 @@ mod tests {
     #[test]
     fn test_pane_registry_creation() {
         let registry = create_test_pane_registry();
-        assert_eq!(registry.panes.len(), 7); // Default panes + advice
+        assert_eq!(registry.panes.len(), 9); // Default panes + advice + commit picker + commit summary
         assert!(registry.get_pane(&PaneId::FileTree).is_some());
         assert!(registry.get_pane(&PaneId::Monitor).is_some());
         assert!(registry.get_pane(&PaneId::Diff).is_some());
         assert!(registry.get_pane(&PaneId::Advice).is_some());
+        assert!(registry.get_pane(&PaneId::CommitPicker).is_some());
+        assert!(registry.get_pane(&PaneId::CommitSummary).is_some());
+    }
+
+    #[test]
+    fn test_commit_picker_pane_navigation() {
+        let mut pane = CommitPickerPane::new();
+
+        // Test with empty commits
+        assert_eq!(pane.current_index, 0);
+        pane.navigate_next();
+        assert_eq!(pane.current_index, 0);
+        pane.navigate_prev();
+        assert_eq!(pane.current_index, 0);
+
+        // Add some test commits
+        let commits = vec![
+            crate::git::CommitInfo {
+                sha: "abc123".to_string(),
+                short_sha: "abc123".to_string(),
+                message: "First commit".to_string(),
+                author: "Test Author".to_string(),
+                date: "2023-01-01".to_string(),
+                files_changed: vec![],
+            },
+            crate::git::CommitInfo {
+                sha: "def456".to_string(),
+                short_sha: "def456".to_string(),
+                message: "Second commit".to_string(),
+                author: "Test Author".to_string(),
+                date: "2023-01-02".to_string(),
+                files_changed: vec![],
+            },
+        ];
+
+        pane.update_commits(commits);
+
+        // Test navigation
+        assert_eq!(pane.current_index, 0);
+        pane.navigate_next();
+        assert_eq!(pane.current_index, 1);
+        pane.navigate_next();
+        assert_eq!(pane.current_index, 0); // Should wrap around
+
+        pane.navigate_prev();
+        assert_eq!(pane.current_index, 1); // Should wrap around backwards
+        pane.navigate_prev();
+        assert_eq!(pane.current_index, 0);
+    }
+
+    #[test]
+    fn test_commit_picker_pane_key_handling() {
+        let mut pane = CommitPickerPane::new();
+
+        // Add test commits
+        let commits = vec![
+            crate::git::CommitInfo {
+                sha: "abc123".to_string(),
+                short_sha: "abc123".to_string(),
+                message: "First commit".to_string(),
+                author: "Test Author".to_string(),
+                date: "2023-01-01".to_string(),
+                files_changed: vec![],
+            },
+            crate::git::CommitInfo {
+                sha: "def456".to_string(),
+                short_sha: "def456".to_string(),
+                message: "Second commit".to_string(),
+                author: "Test Author".to_string(),
+                date: "2023-01-02".to_string(),
+                files_changed: vec![],
+            },
+        ];
+
+        pane.update_commits(commits);
+
+        // Test j key (next)
+        let j_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&j_event));
+        assert_eq!(pane.current_index, 1);
+
+        // Test k key (prev)
+        let k_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&k_event));
+        assert_eq!(pane.current_index, 0);
+
+        // Test g+t combination
+        let g_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&g_event));
+
+        // Immediately follow with t
+        let t_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&t_event));
+        assert_eq!(pane.current_index, 1); // Should navigate next
+    }
+
+    #[test]
+    fn test_commit_summary_pane_creation() {
+        let pane = CommitSummaryPane::new();
+        assert!(!pane.visible());
+        assert!(pane.current_commit.is_none());
+        assert_eq!(pane.scroll_offset, 0);
+        assert!(pane.llm_summary.is_none());
+    }
+
+    #[test]
+    fn test_commit_summary_pane_update_commit() {
+        let mut pane = CommitSummaryPane::new();
+
+        let commit = crate::git::CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![crate::git::CommitFileChange {
+                path: std::path::PathBuf::from("test.rs"),
+                status: crate::git::FileChangeStatus::Modified,
+                additions: 5,
+                deletions: 2,
+            }],
+        };
+
+        pane.update_commit(Some(commit.clone()));
+        assert!(pane.current_commit.is_some());
+        assert_eq!(pane.current_commit.as_ref().unwrap().sha, "abc123");
+        assert_eq!(pane.scroll_offset, 0);
+        assert!(pane.llm_summary.is_none());
+    }
+
+    #[test]
+    fn test_commit_summary_pane_scrolling() {
+        let mut pane = CommitSummaryPane::new();
+
+        let commit = crate::git::CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: (0..20)
+                .map(|i| crate::git::CommitFileChange {
+                    path: std::path::PathBuf::from(format!("file{}.rs", i)),
+                    status: crate::git::FileChangeStatus::Modified,
+                    additions: i,
+                    deletions: i / 2,
+                })
+                .collect(),
+        };
+
+        pane.update_commit(Some(commit));
+
+        // Test j key (scroll down)
+        let j_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&j_event));
+        assert_eq!(pane.scroll_offset, 1);
+
+        // Test k key (scroll up)
+        let k_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&k_event));
+        assert_eq!(pane.scroll_offset, 0);
+
+        // Test page down
+        let page_down_event = AppEvent::Key(KeyEvent::from(KeyCode::PageDown));
+        assert!(pane.handle_event(&page_down_event));
+        assert_eq!(pane.scroll_offset, 10);
+
+        // Test page up
+        let page_up_event = AppEvent::Key(KeyEvent::from(KeyCode::PageUp));
+        assert!(pane.handle_event(&page_up_event));
+        assert_eq!(pane.scroll_offset, 0);
+
+        // Test go to bottom (Shift+G)
+        let bottom_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
+        assert!(pane.handle_event(&bottom_event));
+        assert_eq!(pane.scroll_offset, 19);
+
+        // Test go to top (g)
+        let top_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&top_event));
+        assert_eq!(pane.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_commit_summary_pane_llm_summary() {
+        let mut pane = CommitSummaryPane::new();
+
+        // Test that initially there's no summary
+        assert!(pane.llm_summary.is_none());
+        assert!(!pane.is_loading_summary);
+
+        // Test that we can manually set a summary (for testing purposes)
+        pane.llm_summary = Some("This is a test summary".to_string());
+        assert!(pane.llm_summary.is_some());
+        assert_eq!(pane.llm_summary.as_ref().unwrap(), "This is a test summary");
+    }
+
+    #[test]
+    fn test_commit_summary_pane_with_llm_client() {
+        use crate::config::LlmConfig;
+
+        // Create a test LLM client
+        let mut llm_config = LlmConfig::default();
+        llm_config.api_key = Some("test_key".to_string());
+        let llm_client = LlmClient::new(llm_config).ok();
+
+        let pane = CommitSummaryPane::new_with_llm_client(llm_client);
+
+        // Test that the pane has an LLM client
+        assert!(pane.llm_client.is_some());
+        assert!(pane.llm_summary.is_none());
+        assert!(!pane.is_loading_summary);
+
+        // Test that a pane without LLM client works too
+        let pane_no_llm = CommitSummaryPane::new_with_llm_client(None);
+        assert!(pane_no_llm.llm_client.is_none());
+        assert!(pane_no_llm.llm_summary.is_none());
+        assert!(!pane_no_llm.is_loading_summary);
+    }
+
+    #[test]
+    fn test_commit_summary_pane_race_condition_handling() {
+        let mut pane = CommitSummaryPane::new();
+
+        // Create two different commits
+        let commit1 = crate::git::CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "First commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![],
+        };
+
+        let commit2 = crate::git::CommitInfo {
+            sha: "def456".to_string(),
+            short_sha: "def456".to_string(),
+            message: "Second commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-02".to_string(),
+            files_changed: vec![],
+        };
+
+        // Set first commit
+        pane.update_commit(Some(commit1.clone()));
+        assert_eq!(pane.current_commit.as_ref().unwrap().sha, "abc123");
+        assert!(pane.llm_summary.is_none());
+
+        // Switch to second commit (simulating quick navigation)
+        pane.update_commit(Some(commit2.clone()));
+        assert_eq!(pane.current_commit.as_ref().unwrap().sha, "def456");
+        assert!(pane.llm_summary.is_none());
+
+        // Simulate receiving a stale response for the first commit
+        // This should be ignored since we're now on commit2
+        let stale_response = Ok(("abc123".to_string(), "Summary for first commit".to_string()));
+        let _ = pane.llm_tx.try_send(stale_response);
+
+        // Poll for the response
+        pane.poll_llm_summary();
+
+        // The summary should still be None because the response was for a different commit
+        assert!(pane.llm_summary.is_none());
+
+        // Now simulate receiving the correct response for commit2
+        let correct_response = Ok((
+            "def456".to_string(),
+            "Summary for second commit".to_string(),
+        ));
+        let _ = pane.llm_tx.try_send(correct_response);
+
+        // Poll for the response
+        pane.poll_llm_summary();
+
+        // Now the summary should be set
+        assert!(pane.llm_summary.is_some());
+        assert_eq!(
+            pane.llm_summary.as_ref().unwrap(),
+            "Summary for second commit"
+        );
     }
 
     #[test]
@@ -1250,7 +2762,10 @@ mod tests {
         assert_eq!(advice_pane.scroll_offset, 18);
 
         // Scroll to bottom
-        advice_pane.handle_event(&AppEvent::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT)));
+        advice_pane.handle_event(&AppEvent::Key(KeyEvent::new(
+            KeyCode::Char('G'),
+            KeyModifiers::SHIFT,
+        )));
         assert_eq!(advice_pane.scroll_offset, 99);
 
         // Page up from bottom
