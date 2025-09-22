@@ -904,6 +904,108 @@ mod help_tests {
         app.clear_selected_commit();
         assert!(app.get_selected_commit().is_none());
     }
+
+    #[test]
+    fn test_commit_summary_pane_cached_summary() {
+        let mut pane = CommitSummaryPane::new_with_llm_client(None);
+        
+        // Create a test commit
+        let test_commit = CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![],
+        };
+        
+        // Update with commit
+        pane.update_commit(Some(test_commit));
+        
+        // Initially should need summary
+        assert!(pane.needs_summary());
+        assert!(pane.llm_summary.is_none());
+        
+        // Set a cached summary
+        pane.set_cached_summary("abc123", "This is a cached summary".to_string());
+        
+        // Should no longer need summary and should have the cached one
+        assert!(!pane.needs_summary());
+        assert_eq!(pane.llm_summary, Some("This is a cached summary".to_string()));
+        assert_eq!(pane.loading_state, CommitSummaryLoadingState::Loaded);
+    }
+
+    #[test]
+    fn test_commit_summary_pane_cache_callback() {
+        let mut pane = CommitSummaryPane::new_with_llm_client(None);
+        
+        // Initially no cache callback
+        assert!(pane.take_cache_callback().is_none());
+        
+        // Simulate receiving an LLM response
+        let test_result = Ok(("abc123".to_string(), "Generated summary".to_string()));
+        let _ = pane.llm_tx.try_send(test_result);
+        
+        // Create a test commit to match the response
+        let test_commit = CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![],
+        };
+        pane.update_commit(Some(test_commit));
+        pane.is_loading_summary = true; // Simulate loading state
+        pane.pending_summary_sha = Some("abc123".to_string());
+        
+        // Poll for the summary
+        pane.poll_llm_summary();
+        
+        // Should have a cache callback now
+        let cache_callback = pane.take_cache_callback();
+        assert!(cache_callback.is_some());
+        let (commit_sha, summary) = cache_callback.unwrap();
+        assert_eq!(commit_sha, "abc123");
+        assert_eq!(summary, "Generated summary");
+        
+        // Taking again should return None
+        assert!(pane.take_cache_callback().is_none());
+    }
+
+    #[test]
+    fn test_commit_summary_pane_caches_all_summaries() {
+        let mut pane = CommitSummaryPane::new_with_llm_client(None);
+        
+        // Set current commit to "commit1"
+        let current_commit = CommitInfo {
+            sha: "commit1".to_string(),
+            short_sha: "commit1".to_string(),
+            message: "Current commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![],
+        };
+        pane.update_commit(Some(current_commit));
+        
+        // Simulate receiving an LLM response for a DIFFERENT commit (commit2)
+        let test_result = Ok(("commit2".to_string(), "Summary for commit2".to_string()));
+        let _ = pane.llm_tx.try_send(test_result);
+        
+        // Poll for the summary
+        pane.poll_llm_summary();
+        
+        // Should have a cache callback even though it's for a different commit
+        let cache_callback = pane.take_cache_callback();
+        assert!(cache_callback.is_some());
+        let (commit_sha, summary) = cache_callback.unwrap();
+        assert_eq!(commit_sha, "commit2");
+        assert_eq!(summary, "Summary for commit2");
+        
+        // The UI should NOT be updated since it's for a different commit
+        assert!(pane.llm_summary.is_none());
+        assert_eq!(pane.loading_state, CommitSummaryLoadingState::LoadingFiles);
+    }
 }
 
 // Status Bar Pane Implementation
@@ -1714,6 +1816,7 @@ pub struct CommitSummaryPane {
     pending_summary_sha: Option<String>, // Track which commit we're waiting for a summary for
     summary_error: Option<String>,
     loading_state: CommitSummaryLoadingState,
+    cache_callback: Option<(String, String)>, // (commit_sha, summary) to cache
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1740,6 +1843,7 @@ impl CommitSummaryPane {
             pending_summary_sha: None,
             summary_error: None,
             loading_state: CommitSummaryLoadingState::NoCommit,
+            cache_callback: None,
         }
     }
 
@@ -1757,6 +1861,7 @@ impl CommitSummaryPane {
             pending_summary_sha: None,
             summary_error: None,
             loading_state: CommitSummaryLoadingState::NoCommit,
+            cache_callback: None,
         }
     }
 
@@ -1777,11 +1882,12 @@ impl CommitSummaryPane {
             self.is_loading_summary = false;
             self.pending_summary_sha = None;
             self.summary_error = None;
+            self.cache_callback = None;
 
             // Update loading state based on new commit
             if self.current_commit.is_some() {
                 self.loading_state = CommitSummaryLoadingState::LoadingFiles;
-                self.request_llm_summary();
+                // Don't request LLM summary immediately - let the App check cache first
             } else {
                 self.loading_state = CommitSummaryLoadingState::NoCommit;
             }
@@ -1802,6 +1908,11 @@ impl CommitSummaryPane {
                 self.set_error("Invalid commit: empty SHA".to_string());
                 return;
             }
+
+            // First check if we have a cached summary
+            // This will be handled by the App through GitWorker communication
+            // For now, we'll proceed with the existing LLM generation logic
+            // The App will need to check cache first and only call this if not cached
 
             if let Some(llm_client) = &self.llm_client {
                 self.is_loading_summary = true;
@@ -1929,7 +2040,12 @@ impl CommitSummaryPane {
         if let Ok(result) = self.llm_rx.try_recv() {
             match result {
                 Ok((response_commit_sha, summary)) => {
-                    // Only use the summary if it's for the currently selected commit
+                    // Always cache the generated summary, regardless of which commit is currently selected
+                    if !summary.trim().is_empty() {
+                        self.cache_callback = Some((response_commit_sha.clone(), summary.clone()));
+                    }
+                    
+                    // Only update the UI if it's for the currently selected commit
                     if let Some(current_commit) = &self.current_commit {
                         if current_commit.sha == response_commit_sha {
                             // Validate the summary before using it
@@ -1944,7 +2060,7 @@ impl CommitSummaryPane {
                             self.pending_summary_sha = None;
                             self.loading_state = CommitSummaryLoadingState::Loaded;
                         }
-                        // If the response is for a different commit, ignore it (stale response)
+                        // If the response is for a different commit, we still cache it but don't update UI
                     }
                 }
                 Err(e) => {
@@ -1963,6 +2079,46 @@ impl CommitSummaryPane {
                 }
             }
         }
+    }
+
+    /// Set a cached summary directly without generating a new one
+    pub fn set_cached_summary(&mut self, commit_sha: &str, summary: String) {
+        if let Some(current_commit) = &self.current_commit {
+            if current_commit.sha == commit_sha {
+                self.llm_summary = Some(summary);
+                self.summary_error = None;
+                self.is_loading_summary = false;
+                self.pending_summary_sha = None;
+                self.loading_state = CommitSummaryLoadingState::Loaded;
+            }
+        }
+    }
+
+    /// Check if we need to request a summary for the current commit
+    pub fn needs_summary(&self) -> bool {
+        if let Some(_current_commit) = &self.current_commit {
+            // Need summary if we don't have one and we're not currently loading
+            self.llm_summary.is_none() && !self.is_loading_summary
+        } else {
+            false
+        }
+    }
+
+    /// Get the current commit SHA if available
+    pub fn get_current_commit_sha(&self) -> Option<String> {
+        self.current_commit.as_ref().map(|c| c.sha.clone())
+    }
+
+    /// Force generation of a new summary (bypassing cache)
+    pub fn force_generate_summary(&mut self) {
+        self.llm_summary = None;
+        self.summary_error = None;
+        self.request_llm_summary();
+    }
+
+    /// Get and clear any pending cache callback
+    pub fn take_cache_callback(&mut self) -> Option<(String, String)> {
+        self.cache_callback.take()
     }
 }
 
@@ -2141,7 +2297,7 @@ impl Pane for CommitSummaryPane {
 
             f.render_widget(file_list, chunks[0]);
 
-            // Render LLM summary section with enhanced error handling
+            // Render LLM summary section with enhanced error handling and loading states
             let summary_content = if let Some(summary) = &self.llm_summary {
                 summary.clone()
             } else if self.is_loading_summary {
@@ -2149,7 +2305,7 @@ impl Pane for CommitSummaryPane {
             } else if self.llm_client.is_none() {
                 "LLM client not available".to_string()
             } else {
-                "No summary available".to_string()
+                "📋 Checking cache...".to_string()
             };
 
             let summary_lines: Vec<Line> = summary_content

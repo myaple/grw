@@ -302,6 +302,10 @@ impl SummaryPreloader {
         self.git_worker_tx = Some(tx);
     }
 
+    pub fn get_git_worker_tx(&self) -> Option<mpsc::Sender<GitWorkerCommand>> {
+        self.git_worker_tx.clone()
+    }
+
     /// Pre-load summaries for a configurable number of commits starting from the beginning
     pub fn preload_summaries(&mut self, commits: &[CommitInfo]) {
         if !self.config.enabled || self.llm_client.is_none() {

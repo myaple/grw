@@ -138,13 +138,15 @@ async fn main() -> Result<()> {
                         // This is handled in the commit picker activation, not here
                         debug!("Received commit history result in main loop (ignored)");
                     }
-                    git::GitWorkerResult::CachedSummary(_) => {
-                        // This is handled by the SummaryPreloader, not here
-                        debug!("Received cached summary result in main loop (ignored)");
+                    git::GitWorkerResult::CachedSummary(cached_summary) => {
+                        // Handle cached summary result for CommitSummaryPane
+                        if let Some(current_commit) = app.get_current_selected_commit_from_picker() {
+                            app.handle_cached_summary_result(cached_summary, &current_commit.sha);
+                        }
                     }
                     git::GitWorkerResult::SummaryCached => {
-                        // This is handled by the SummaryPreloader, not here
-                        debug!("Received summary cached confirmation in main loop (ignored)");
+                        // Summary has been cached in GitWorker
+                        debug!("Summary cached confirmation received");
                     }
                 }
             }
@@ -163,13 +165,15 @@ async fn main() -> Result<()> {
                         // This is handled in the commit picker activation, not here
                         debug!("Received commit history result in main loop (ignored)");
                     }
-                    git::GitWorkerResult::CachedSummary(_) => {
-                        // This is handled by the SummaryPreloader, not here
-                        debug!("Received cached summary result in main loop (ignored)");
+                    git::GitWorkerResult::CachedSummary(cached_summary) => {
+                        // Handle cached summary result for CommitSummaryPane
+                        if let Some(current_commit) = app.get_current_selected_commit_from_picker() {
+                            app.handle_cached_summary_result(cached_summary, &current_commit.sha);
+                        }
                     }
                     git::GitWorkerResult::SummaryCached => {
-                        // This is handled by the SummaryPreloader, not here
-                        debug!("Received summary cached confirmation in main loop (ignored)");
+                        // Summary has been cached in GitWorker
+                        debug!("Summary cached confirmation received");
                     }
                 }
             }
@@ -323,6 +327,12 @@ async fn main() -> Result<()> {
                 }
             }
         }
+
+        // Handle cache callbacks from CommitSummaryPane
+        app.handle_commit_summary_cache_callbacks();
+
+        // Poll for LLM summary updates
+        app.poll_commit_summary_updates();
 
         if crossterm::event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = crossterm::event::read()? {

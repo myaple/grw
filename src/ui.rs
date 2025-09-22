@@ -1042,13 +1042,90 @@ impl App {
 
     pub fn update_commit_summary_with_current_selection(&mut self) {
         if let Some(current_commit) = self.get_current_selected_commit_from_picker() {
+            let commit_sha = current_commit.sha.clone();
+            
+            // First update the commit in the pane
             self.pane_registry
                 .with_pane_mut(&PaneId::CommitSummary, |pane| {
                     if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
                         commit_summary.update_commit(Some(current_commit));
                     }
                 });
+            
+            // Then check if we have a cached summary and set it if available
+            self.check_and_set_cached_summary(&commit_sha);
         }
+    }
+
+    /// Check GitWorker cache for summary and set it in CommitSummaryPane if available
+    pub fn check_and_set_cached_summary(&mut self, commit_sha: &str) {
+        if let Some(tx) = self.summary_preloader.get_git_worker_tx() {
+            let commit_sha = commit_sha.to_string();
+            
+            tokio::spawn(async move {
+                if let Err(e) = tx.send(crate::git::GitWorkerCommand::GetCachedSummary(commit_sha)).await {
+                    log::error!("Failed to send GetCachedSummary command: {}", e);
+                }
+            });
+        }
+    }
+
+    /// Handle cached summary result from GitWorker
+    pub fn handle_cached_summary_result(&mut self, cached_summary: Option<String>, commit_sha: &str) {
+        if let Some(summary) = cached_summary {
+            // Set the cached summary in the CommitSummaryPane
+            self.pane_registry
+                .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
+                        commit_summary.set_cached_summary(commit_sha, summary);
+                    }
+                });
+        } else {
+            // No cached summary available, trigger generation if needed
+            self.pane_registry
+                .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
+                        if commit_summary.needs_summary() {
+                            commit_summary.force_generate_summary();
+                        }
+                    }
+                });
+        }
+    }
+
+    /// Cache a newly generated summary in GitWorker
+    pub fn cache_generated_summary(&mut self, commit_sha: String, summary: String) {
+        if let Some(tx) = self.summary_preloader.get_git_worker_tx() {
+            tokio::spawn(async move {
+                if let Err(e) = tx.send(crate::git::GitWorkerCommand::CacheSummary(commit_sha, summary)).await {
+                    log::error!("Failed to send CacheSummary command: {}", e);
+                }
+            });
+        }
+    }
+
+    /// Handle cache callbacks from CommitSummaryPane
+    pub fn handle_commit_summary_cache_callbacks(&mut self) {
+        if let Some(cache_callback) = self.pane_registry
+            .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                pane.as_commit_summary_pane_mut()
+                    .and_then(|commit_summary| commit_summary.take_cache_callback())
+            })
+            .flatten()
+        {
+            let (commit_sha, summary) = cache_callback;
+            self.cache_generated_summary(commit_sha, summary);
+        }
+    }
+
+    /// Poll for LLM summary updates from CommitSummaryPane
+    pub fn poll_commit_summary_updates(&mut self) {
+        self.pane_registry
+            .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
+                    commit_summary.poll_llm_summary();
+                }
+            });
     }
 
     pub fn load_commit_files(&mut self, commit: &CommitInfo) {
