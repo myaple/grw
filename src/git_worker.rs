@@ -23,6 +23,7 @@ pub struct GitWorker {
     // Caching for performance optimization
     commit_cache: HashMap<String, CommitInfo>,
     commit_file_changes_cache: HashMap<String, Vec<CommitFileChange>>,
+    llm_summary_cache: HashMap<String, String>,
     cache_max_size: usize,
 }
 
@@ -53,6 +54,7 @@ impl GitWorker {
             tx,
             commit_cache: HashMap::new(),
             commit_file_changes_cache: HashMap::new(),
+            llm_summary_cache: HashMap::new(),
             cache_max_size: 200, // Default cache size
         })
     }
@@ -67,12 +69,16 @@ impl GitWorker {
         if self.commit_file_changes_cache.len() > max_size {
             self.commit_file_changes_cache.clear();
         }
+        if self.llm_summary_cache.len() > max_size {
+            self.llm_summary_cache.clear();
+        }
     }
 
     /// Clear all cached commit data
     pub fn clear_cache(&mut self) {
         self.commit_cache.clear();
         self.commit_file_changes_cache.clear();
+        self.llm_summary_cache.clear();
     }
 
     /// Evict oldest entries from cache if it exceeds max size
@@ -101,6 +107,42 @@ impl GitWorker {
                 self.commit_file_changes_cache.remove(&key);
             }
         }
+
+        if self.llm_summary_cache.len() > self.cache_max_size {
+            let keys_to_remove: Vec<String> = self
+                .llm_summary_cache
+                .keys()
+                .take(self.llm_summary_cache.len() / 2)
+                .cloned()
+                .collect();
+            for key in keys_to_remove {
+                self.llm_summary_cache.remove(&key);
+            }
+        }
+    }
+
+    /// Get cached LLM summary for a commit
+    /// Returns None if the commit summary is not cached
+    pub fn get_cached_summary(&self, commit_sha: &str) -> Option<String> {
+        debug!("Checking cache for LLM summary of commit: {}", commit_sha);
+        self.llm_summary_cache.get(commit_sha).cloned()
+    }
+
+    /// Cache an LLM summary for a commit
+    /// Stores the summary in the cache and applies eviction if needed
+    pub fn cache_summary(&mut self, commit_sha: String, summary: String) {
+        debug!("Caching LLM summary for commit: {}", commit_sha);
+        self.llm_summary_cache.insert(commit_sha, summary);
+        
+        // Apply eviction policy if cache is getting too large
+        self.evict_cache_if_needed();
+    }
+
+    /// Clear only the LLM summary cache
+    /// Useful for clearing summaries without affecting other cached data
+    pub fn clear_summary_cache(&mut self) {
+        debug!("Clearing LLM summary cache");
+        self.llm_summary_cache.clear();
     }
 
     pub async fn run(&mut self) {
@@ -1458,6 +1500,7 @@ mod tests {
         git_worker.clear_cache();
         assert!(git_worker.commit_cache.is_empty());
         assert!(git_worker.commit_file_changes_cache.is_empty());
+        assert!(git_worker.llm_summary_cache.is_empty());
 
         Ok(())
     }
@@ -1486,6 +1529,167 @@ mod tests {
             assert!(!commit.author.is_empty());
             assert!(!commit.date.is_empty());
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_llm_summary_caching() -> Result<()> {
+        let (_temp_dir, repo, repo_path) = create_test_repo()?;
+
+        // Create some commits
+        let commit1_id = create_commit(&repo, &repo_path, "file1.txt", "content1", "First commit")?;
+        let commit2_id = create_commit(&repo, &repo_path, "file2.txt", "content2", "Second commit")?;
+
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        let (result_tx, _result_rx) = tokio::sync::mpsc::channel(1);
+
+        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+
+        let commit1_sha = commit1_id.to_string();
+        let commit2_sha = commit2_id.to_string();
+
+        // Initially, no summaries should be cached
+        assert!(git_worker.get_cached_summary(&commit1_sha).is_none());
+        assert!(git_worker.get_cached_summary(&commit2_sha).is_none());
+
+        // Cache some summaries
+        let summary1 = "This commit adds the first file with initial content.".to_string();
+        let summary2 = "This commit adds a second file to the repository.".to_string();
+
+        git_worker.cache_summary(commit1_sha.clone(), summary1.clone());
+        git_worker.cache_summary(commit2_sha.clone(), summary2.clone());
+
+        // Verify summaries are cached
+        assert_eq!(git_worker.get_cached_summary(&commit1_sha), Some(summary1.clone()));
+        assert_eq!(git_worker.get_cached_summary(&commit2_sha), Some(summary2.clone()));
+
+        // Test cache clearing
+        git_worker.clear_summary_cache();
+        assert!(git_worker.get_cached_summary(&commit1_sha).is_none());
+        assert!(git_worker.get_cached_summary(&commit2_sha).is_none());
+
+        // Verify other caches are not affected
+        let commits = git_worker.get_commit_history(10)?;
+        assert!(!commits.is_empty()); // Should still have commit data
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_llm_summary_cache_eviction() -> Result<()> {
+        let (_temp_dir, repo, repo_path) = create_test_repo()?;
+
+        // Create multiple commits
+        let mut commit_ids = Vec::new();
+        for i in 1..=5 {
+            let commit_id = create_commit(
+                &repo,
+                &repo_path,
+                &format!("file{}.txt", i),
+                "content",
+                &format!("Commit {}", i),
+            )?;
+            commit_ids.push(commit_id);
+        }
+
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        let (result_tx, _result_rx) = tokio::sync::mpsc::channel(1);
+
+        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+
+        // Set a small cache size to test eviction
+        git_worker.set_cache_size(2);
+
+        // Cache summaries for all commits
+        for (i, commit_id) in commit_ids.iter().enumerate() {
+            let summary = format!("Summary for commit {}", i + 1);
+            git_worker.cache_summary(commit_id.to_string(), summary);
+        }
+
+        // Due to eviction, we should have at most 2 cached summaries
+        let cached_count = commit_ids
+            .iter()
+            .filter(|id| git_worker.get_cached_summary(&id.to_string()).is_some())
+            .count();
+        
+        assert!(cached_count <= 2, "Cache should be limited by eviction policy");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_llm_summary_cache_integration_with_existing_caches() -> Result<()> {
+        let (_temp_dir, repo, repo_path) = create_test_repo()?;
+
+        // Create commits
+        let commit1_id = create_commit(&repo, &repo_path, "file1.txt", "content1", "First commit")?;
+        let commit2_id = create_commit(&repo, &repo_path, "file2.txt", "content2", "Second commit")?;
+
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        let (result_tx, _result_rx) = tokio::sync::mpsc::channel(1);
+
+        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+
+        let commit1_sha = commit1_id.to_string();
+        let commit2_sha = commit2_id.to_string();
+
+        // Populate all caches
+        let _commits = git_worker.get_commit_history(10)?; // Populates commit_cache
+        let _changes1 = git_worker.get_commit_file_changes(&commit1_sha)?; // Populates file_changes_cache
+        git_worker.cache_summary(commit1_sha.clone(), "Summary 1".to_string()); // Populates summary_cache
+
+        // Verify all caches have data
+        assert!(!git_worker.commit_cache.is_empty());
+        assert!(!git_worker.commit_file_changes_cache.is_empty());
+        assert!(!git_worker.llm_summary_cache.is_empty());
+
+        // Test selective clearing of summary cache
+        git_worker.clear_summary_cache();
+        assert!(git_worker.llm_summary_cache.is_empty());
+        assert!(!git_worker.commit_cache.is_empty()); // Other caches should remain
+        assert!(!git_worker.commit_file_changes_cache.is_empty());
+
+        // Test clearing all caches
+        git_worker.cache_summary(commit2_sha.clone(), "Summary 2".to_string());
+        assert!(!git_worker.llm_summary_cache.is_empty());
+
+        git_worker.clear_cache();
+        assert!(git_worker.commit_cache.is_empty());
+        assert!(git_worker.commit_file_changes_cache.is_empty());
+        assert!(git_worker.llm_summary_cache.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_llm_summary_cache_with_invalid_commit_sha() -> Result<()> {
+        let (_temp_dir, _repo, repo_path) = create_test_repo()?;
+
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        let (result_tx, _result_rx) = tokio::sync::mpsc::channel(1);
+
+        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+
+        // Test with invalid commit SHA
+        let invalid_sha = "invalid_commit_sha";
+        assert!(git_worker.get_cached_summary(invalid_sha).is_none());
+
+        // Cache a summary for invalid SHA (should work - cache doesn't validate)
+        git_worker.cache_summary(invalid_sha.to_string(), "Invalid summary".to_string());
+        assert_eq!(
+            git_worker.get_cached_summary(invalid_sha),
+            Some("Invalid summary".to_string())
+        );
+
+        // Test with empty SHA
+        let empty_sha = "";
+        assert!(git_worker.get_cached_summary(empty_sha).is_none());
+        git_worker.cache_summary(empty_sha.to_string(), "Empty summary".to_string());
+        assert_eq!(
+            git_worker.get_cached_summary(empty_sha),
+            Some("Empty summary".to_string())
+        );
 
         Ok(())
     }
