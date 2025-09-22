@@ -24,6 +24,8 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 - `Ctrl+h` - Toggle diff panel visibility
 - `Ctrl+o` - Toggle monitor pane visibility
 - `Ctrl+t` - Toggle light/dark theme
+- `Ctrl+P` - Enter commit picker mode
+- `Ctrl+W` - Return to working directory
 - `q` / `Ctrl+c` - Quit application
 
 ### Pane Modes
@@ -53,6 +55,13 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 - `Enter` - Submit the question to the LLM
 - `Esc` - Exit input mode
 - `Ctrl+r` - Refresh LLM advice
+
+### Commit Picker
+- `j` / `k` / `↑` / `↓` - Navigate commits
+- `g t` - Next commit
+- `g T` - Previous commit
+- `Enter` - Select commit
+- `Esc` - Exit commit picker
 
 ## Installation
 

@@ -87,7 +87,7 @@
   - Update help content to show commit picker shortcuts when in commit picker mode
   - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5_
 
-- [ ] 14. Update documentation with new keyboard shortcuts
+- [x] 14. Update documentation with new keyboard shortcuts
   - Update README.md to include Ctrl+W and Ctrl+P keyboard shortcuts
   - Ensure all help documentation includes the new shortcuts
   - Update any other documentation files to maintain consistency
