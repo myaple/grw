@@ -358,6 +358,11 @@ fn handle_key_event(
                 log::info!("User requested quit via Ctrl+C from commit picker mode");
                 return true;
             }
+            KeyCode::Char('?') => {
+                debug!("User pressed '?' in commit picker mode, toggling help");
+                app.toggle_help();
+                return false;
+            }
             KeyCode::Esc => {
                 debug!("User pressed Escape in commit picker mode, exiting");
                 app.exit_commit_picker_mode();
@@ -814,6 +819,95 @@ mod tests {
 
         // App should now be in normal mode
         assert!(!app.is_in_commit_picker_mode());
+    }
+
+    #[tokio::test]
+    async fn test_question_mark_toggles_help_in_commit_picker_mode() {
+        // Create a test app with diff panel enabled
+        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_path = temp_dir.path().to_path_buf();
+
+        // Initialize a git repository
+        let _repo = git2::Repository::init(&repo_path).unwrap();
+
+        let git_repo = AsyncGitRepo::new(repo_path, 500).unwrap();
+
+        // Enter commit picker mode
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
+
+        // Verify help is initially not visible
+        assert!(!app.is_showing_help());
+
+        // Create '?' key event
+        let question_key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+
+        // Handle the key event
+        let should_quit = handle_key_event(question_key, &mut app, &git_repo, &Config::default());
+
+        // Should not quit
+        assert!(!should_quit);
+
+        // Should still be in commit picker mode
+        assert!(app.is_in_commit_picker_mode());
+
+        // Help should now be visible
+        assert!(app.is_showing_help());
+
+        // Press '?' again to toggle help off
+        let should_quit2 = handle_key_event(question_key, &mut app, &git_repo, &Config::default());
+        assert!(!should_quit2);
+
+        // Help should now be hidden again
+        assert!(!app.is_showing_help());
+
+        // Should still be in commit picker mode
+        assert!(app.is_in_commit_picker_mode());
+    }
+
+    #[tokio::test]
+    async fn test_help_overlay_renders_in_commit_picker_mode() {
+        use ratatui::{backend::TestBackend, Terminal};
+        use crate::ui;
+
+        // Create a test app with diff panel enabled
+        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_path = temp_dir.path().to_path_buf();
+
+        // Initialize a git repository
+        let _repo = git2::Repository::init(&repo_path).unwrap();
+
+        let git_repo = AsyncGitRepo::new(repo_path, 500).unwrap();
+
+        // Enter commit picker mode
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
+
+        // Show help
+        app.toggle_help();
+        assert!(app.is_showing_help());
+
+        // Create a test terminal and render
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Test that rendering works without panicking when help is shown in commit picker mode
+        let render_result = terminal.draw(|f| {
+            if let Some(repo) = &git_repo.repo {
+                ui::render::<TestBackend>(f, &app, repo);
+            }
+        });
+
+        // Should render successfully
+        assert!(render_result.is_ok());
+
+        // Help should still be visible
+        assert!(app.is_showing_help());
+        assert!(app.is_in_commit_picker_mode());
     }
 
     #[tokio::test]

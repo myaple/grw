@@ -81,7 +81,7 @@
   - Optimize rendering performance for large commit lists using proper scroll offsets
   - _Requirements: 5.3, 5.4_
 
-- [ ] 13. Enhance help system with commit picker shortcuts
+- [x] 13. Enhance help system with commit picker shortcuts
   - Extend existing HelpPane render method to detect commit picker mode
   - Add commit picker keyboard shortcuts (Ctrl+P, Ctrl+W, g+t, g+T, Enter) to help content
   - Update help content to show commit picker shortcuts when in commit picker mode

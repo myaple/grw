@@ -1226,6 +1226,19 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
 
     // Check if we're in commit picker mode
     if app.is_in_commit_picker_mode() {
+        // Check if help is visible and render it as overlay
+        let help_visible = app
+            .pane_registry
+            .get_pane(&PaneId::Help)
+            .is_some_and(|p| p.visible());
+
+        if help_visible {
+            // Render help pane as overlay over the entire area
+            app.pane_registry
+                .render(f, app, chunks[1], PaneId::Help, git_repo);
+            return;
+        }
+
         // Render commit picker layout: left pane = commit list, right pane = commit details
         // Use responsive layout based on screen width
         let (left_constraint, right_constraint) = if size.width > 120 {

@@ -712,42 +712,58 @@ impl Pane for HelpPane {
             Line::from(""),
         ];
 
-        let (pane_title, pane_hotkeys) = match last_active_pane {
-            ActivePane::FileTree => (
-                "File Tree",
+        // Check if we're in commit picker mode and show commit picker shortcuts
+        let (pane_title, pane_hotkeys) = if app.is_in_commit_picker_mode() {
+            (
+                "Commit Picker",
                 vec![
-                    "  Tab / g t     - Next file",
-                    "  Shift+Tab / g T - Previous file",
+                    "  j / k / ↑ / ↓     - Navigate commits",
+                    "  g t               - Next commit",
+                    "  g T               - Previous commit",
+                    "  Enter             - Select commit",
+                    "  Esc               - Exit commit picker",
+                    "  Ctrl+P            - Enter commit picker mode",
+                    "  Ctrl+W            - Return to working directory",
                 ],
-            ),
-            ActivePane::Monitor => (
-                "Monitor",
-                vec![
-                    "  Alt+j / Alt+Down  - Scroll down",
-                    "  Alt+k / Alt+Up    - Scroll up",
-                ],
-            ),
-            ActivePane::Diff | ActivePane::SideBySideDiff => (
-                "Diff View",
-                vec![
-                    "  j / Down / Ctrl+e - Scroll down",
-                    "  k / Up / Ctrl+y   - Scroll up",
-                    "  PageDown          - Page down",
-                    "  PageUp            - Page up",
-                    "  g g               - Go to top",
-                    "  Shift+G           - Go to bottom",
-                ],
-            ),
-            ActivePane::Advice => (
-                "LLM Advice",
-                vec![
-                    "  j / k           - Scroll up/down",
-                    "  /               - Enter input mode",
-                    "  Enter           - Submit question",
-                    "  Esc             - Exit input mode",
-                    "  Ctrl+r          - Refresh LLM advice",
-                ],
-            ),
+            )
+        } else {
+            match last_active_pane {
+                ActivePane::FileTree => (
+                    "File Tree",
+                    vec![
+                        "  Tab / g t     - Next file",
+                        "  Shift+Tab / g T - Previous file",
+                    ],
+                ),
+                ActivePane::Monitor => (
+                    "Monitor",
+                    vec![
+                        "  Alt+j / Alt+Down  - Scroll down",
+                        "  Alt+k / Alt+Up    - Scroll up",
+                    ],
+                ),
+                ActivePane::Diff | ActivePane::SideBySideDiff => (
+                    "Diff View",
+                    vec![
+                        "  j / Down / Ctrl+e - Scroll down",
+                        "  k / Up / Ctrl+y   - Scroll up",
+                        "  PageDown          - Page down",
+                        "  PageUp            - Page up",
+                        "  g g               - Go to top",
+                        "  Shift+G           - Go to bottom",
+                    ],
+                ),
+                ActivePane::Advice => (
+                    "LLM Advice",
+                    vec![
+                        "  j / k           - Scroll up/down",
+                        "  /               - Enter input mode",
+                        "  Enter           - Submit question",
+                        "  Esc             - Exit input mode",
+                        "  Ctrl+r          - Refresh LLM advice",
+                    ],
+                ),
+            }
         };
 
         help_text.push(Line::from(Span::styled(
@@ -774,6 +790,19 @@ impl Pane for HelpPane {
             Line::from("  Ctrl+o        - Toggle monitor pane visibility"),
             Line::from("  Ctrl+t        - Toggle light/dark theme"),
             Line::from("  q / Ctrl+c    - Quit application"),
+        ]);
+
+        // Add commit picker shortcut if not already in commit picker mode
+        if !app.is_in_commit_picker_mode() {
+            help_text.push(Line::from("  Ctrl+P        - Enter commit picker mode"));
+        }
+
+        // Add working directory shortcut if we have a selected commit
+        if app.get_selected_commit().is_some() {
+            help_text.push(Line::from("  Ctrl+W        - Return to working directory"));
+        }
+
+        help_text.extend(vec![
             Line::from(""),
             Line::from(Span::styled(
                 "Pane Modes:",
@@ -825,6 +854,55 @@ impl Pane for HelpPane {
 
     fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
+    }
+}
+
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+    use crate::ui::{App, Theme};
+    use crate::git::CommitInfo;
+
+    #[test]
+    fn test_help_detects_commit_picker_mode() {
+        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        
+        // Test normal mode
+        assert!(!app.is_in_commit_picker_mode());
+        
+        // Enter commit picker mode
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
+        
+        // Exit commit picker mode
+        app.exit_commit_picker_mode();
+        assert!(!app.is_in_commit_picker_mode());
+    }
+
+    #[test]
+    fn test_help_detects_selected_commit() {
+        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        
+        // Initially no commit selected
+        assert!(app.get_selected_commit().is_none());
+        
+        // Create a test commit and select it
+        let test_commit = CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![],
+        };
+        app.select_commit(test_commit);
+        
+        // Now should have a selected commit
+        assert!(app.get_selected_commit().is_some());
+        
+        // Clear the selected commit
+        app.clear_selected_commit();
+        assert!(app.get_selected_commit().is_none());
     }
 }
 
