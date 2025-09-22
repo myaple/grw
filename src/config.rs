@@ -99,6 +99,8 @@ pub struct Config {
     pub llm: Option<LlmConfig>,
     pub commit_history_limit: Option<usize>,
     pub commit_cache_size: Option<usize>,
+    pub summary_preload_enabled: Option<bool>,
+    pub summary_preload_count: Option<usize>,
 }
 
 impl Config {
@@ -122,6 +124,14 @@ impl Config {
     /// Get the commit cache size with a sensible default
     pub fn get_commit_cache_size(&self) -> usize {
         self.commit_cache_size.unwrap_or(200)
+    }
+
+    /// Get the summary preload configuration
+    pub fn get_summary_preload_config(&self) -> crate::git::PreloadConfig {
+        crate::git::PreloadConfig {
+            enabled: self.summary_preload_enabled.unwrap_or(true),
+            count: self.summary_preload_count.unwrap_or(5),
+        }
     }
 
     fn get_config_path() -> PathBuf {
@@ -162,6 +172,8 @@ impl Config {
             }),
             commit_history_limit: args.commit_history_limit.or(self.commit_history_limit),
             commit_cache_size: args.commit_cache_size.or(self.commit_cache_size),
+            summary_preload_enabled: args.summary_preload_enabled.or(self.summary_preload_enabled),
+            summary_preload_count: args.summary_preload_count.or(self.summary_preload_count),
         }
     }
 }
@@ -218,6 +230,12 @@ pub struct Args {
 
     #[arg(long, help = "Maximum number of commits to cache (default: 200)")]
     pub commit_cache_size: Option<usize>,
+
+    #[arg(long, help = "Enable summary pre-loading (default: true)")]
+    pub summary_preload_enabled: Option<bool>,
+
+    #[arg(long, help = "Number of summaries to pre-load (default: 5)")]
+    pub summary_preload_count: Option<usize>,
 }
 
 #[cfg(test)]

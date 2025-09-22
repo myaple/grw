@@ -1,4 +1,4 @@
-use crate::git::{CommitInfo, FileDiff, GitRepo, TreeNode};
+use crate::git::{CommitInfo, FileDiff, GitRepo, TreeNode, SummaryPreloader, PreloadConfig};
 use crate::llm::LlmClient;
 use crate::pane::{PaneId, PaneRegistry};
 use crossterm::event::KeyEvent;
@@ -176,6 +176,7 @@ pub struct App {
     last_active_pane: ActivePane,
     app_mode: AppMode,
     selected_commit: Option<CommitInfo>,
+    summary_preloader: SummaryPreloader,
 }
 
 impl App {
@@ -185,8 +186,8 @@ impl App {
         theme: Theme,
         llm_client: Option<LlmClient>,
     ) -> Self {
-        let pane_registry = if let Some(llm_client) = llm_client {
-            PaneRegistry::new(theme, llm_client)
+        let pane_registry = if let Some(ref llm_client) = llm_client {
+            PaneRegistry::new(theme, llm_client.clone())
         } else {
             // Provide a dummy or default LlmClient for the registry when none is available.
             // This depends on how PaneRegistry and AdvicePane are structured.
@@ -227,6 +228,7 @@ impl App {
             last_active_pane: ActivePane::default(),
             app_mode: AppMode::Normal,
             selected_commit: None,
+            summary_preloader: SummaryPreloader::new(llm_client.clone()),
         }
     }
 
@@ -1199,6 +1201,46 @@ impl App {
                 }
             }
         }
+    }
+
+    // Summary preloader methods
+    pub fn set_summary_preloader_git_worker_tx(&mut self, tx: tokio::sync::mpsc::Sender<crate::git::GitWorkerCommand>) {
+        self.summary_preloader.set_git_worker_tx(tx);
+    }
+
+    pub fn preload_summaries(&mut self, commits: &[CommitInfo]) {
+        self.summary_preloader.preload_summaries(commits);
+    }
+
+    pub fn preload_summaries_around_index(&mut self, commits: &[CommitInfo], current_index: usize) {
+        self.summary_preloader.preload_around_index(commits, current_index);
+    }
+
+    pub fn is_summary_loading(&self, commit_sha: &str) -> bool {
+        self.summary_preloader.is_loading(commit_sha)
+    }
+
+    pub fn set_preload_config(&mut self, config: PreloadConfig) {
+        self.summary_preloader.set_config(config);
+    }
+
+    pub fn get_preload_config(&self) -> &PreloadConfig {
+        self.summary_preloader.get_config()
+    }
+
+    pub fn clear_preloader_active_tasks(&mut self) {
+        self.summary_preloader.clear_active_tasks();
+    }
+
+    pub fn get_commit_picker_state(&self) -> Option<(Vec<CommitInfo>, usize)> {
+        if let Some(pane) = self.pane_registry.get_pane(&crate::pane::PaneId::CommitPicker) {
+            if let Some(commit_picker) = pane.as_commit_picker_pane() {
+                let commits = commit_picker.get_commits();
+                let current_index = commit_picker.get_current_index();
+                return Some((commits, current_index));
+            }
+        }
+        None
     }
 }
 

@@ -107,7 +107,7 @@
   - Implement fallback to default model when specific models are not configured
   - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5_
 
-- [ ] 17. Implement summary pre-loading system
+- [x] 17. Implement summary pre-loading system
   - Create SummaryPreloader struct with configurable pre-load count (default 5)
   - Implement background summary generation for upcoming commits
   - Add pre-loading logic that triggers when entering commit picker mode

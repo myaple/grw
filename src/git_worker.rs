@@ -155,6 +155,32 @@ impl GitWorker {
                         break;
                     }
                 }
+                GitWorkerCommand::GetCommitHistory(limit) => {
+                    let result = match self.get_commit_history(limit) {
+                        Ok(commits) => GitWorkerResult::CommitHistory(commits),
+                        Err(e) => GitWorkerResult::Error(e.to_string()),
+                    };
+                    if self.tx.send(result).await.is_err() {
+                        // Channel closed, terminate worker
+                        break;
+                    }
+                }
+                GitWorkerCommand::CacheSummary(commit_sha, summary) => {
+                    self.cache_summary(commit_sha, summary);
+                    let result = GitWorkerResult::SummaryCached;
+                    if self.tx.send(result).await.is_err() {
+                        // Channel closed, terminate worker
+                        break;
+                    }
+                }
+                GitWorkerCommand::GetCachedSummary(commit_sha) => {
+                    let cached_summary = self.get_cached_summary(&commit_sha);
+                    let result = GitWorkerResult::CachedSummary(cached_summary);
+                    if self.tx.send(result).await.is_err() {
+                        // Channel closed, terminate worker
+                        break;
+                    }
+                }
             }
         }
     }

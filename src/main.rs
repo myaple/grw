@@ -78,6 +78,14 @@ async fn main() -> Result<()> {
         llm_client.clone(),
     );
 
+    // Set up GitWorker communication for SummaryPreloader
+    let git_worker_tx = git_repo.get_git_worker_tx();
+    app.set_summary_preloader_git_worker_tx(git_worker_tx);
+
+    // Configure summary preloader from config
+    let preload_config = final_config.get_summary_preload_config();
+    app.set_preload_config(preload_config);
+
     let mut monitor_command = if let Some(cmd) = &final_config.monitor_command {
         Some(AsyncMonitorCommand::new(
             cmd.clone(),
@@ -126,6 +134,18 @@ async fn main() -> Result<()> {
                     git::GitWorkerResult::Error(e) => {
                         error!("Git worker error: {e}");
                     }
+                    git::GitWorkerResult::CommitHistory(_) => {
+                        // This is handled in the commit picker activation, not here
+                        debug!("Received commit history result in main loop (ignored)");
+                    }
+                    git::GitWorkerResult::CachedSummary(_) => {
+                        // This is handled by the SummaryPreloader, not here
+                        debug!("Received cached summary result in main loop (ignored)");
+                    }
+                    git::GitWorkerResult::SummaryCached => {
+                        // This is handled by the SummaryPreloader, not here
+                        debug!("Received summary cached confirmation in main loop (ignored)");
+                    }
                 }
             }
         } else {
@@ -138,6 +158,18 @@ async fn main() -> Result<()> {
                     }
                     git::GitWorkerResult::Error(e) => {
                         error!("Git worker error: {e}");
+                    }
+                    git::GitWorkerResult::CommitHistory(_) => {
+                        // This is handled in the commit picker activation, not here
+                        debug!("Received commit history result in main loop (ignored)");
+                    }
+                    git::GitWorkerResult::CachedSummary(_) => {
+                        // This is handled by the SummaryPreloader, not here
+                        debug!("Received cached summary result in main loop (ignored)");
+                    }
+                    git::GitWorkerResult::SummaryCached => {
+                        // This is handled by the SummaryPreloader, not here
+                        debug!("Received summary cached confirmation in main loop (ignored)");
                     }
                 }
             }
@@ -283,6 +315,13 @@ async fn main() -> Result<()> {
         // Update commit summary pane with current selection from commit picker
         if app.is_in_commit_picker_mode() {
             app.update_commit_summary_with_current_selection();
+            
+            // Trigger continuous pre-loading as user navigates
+            if let Some((commits, current_index)) = app.get_commit_picker_state() {
+                if !commits.is_empty() {
+                    app.preload_summaries_around_index(&commits, current_index);
+                }
+            }
         }
 
         if crossterm::event::poll(Duration::from_millis(10))? {
@@ -595,7 +634,15 @@ fn handle_key_event(
                             match git_worker.get_commit_history(commit_limit) {
                                 Ok(commits) => {
                                     debug!("Successfully loaded {} commits", commits.len());
-                                    app.update_commit_picker_commits(commits);
+                                    app.update_commit_picker_commits(commits.clone());
+                                    
+                                    // Configure and trigger summary pre-loading
+                                    let preload_config = config.get_summary_preload_config();
+                                    app.set_preload_config(preload_config);
+                                    
+                                    // Start pre-loading summaries for the first few commits
+                                    debug!("Starting summary pre-loading for {} commits", commits.len());
+                                    app.preload_summaries(&commits);
                                 }
                                 Err(e) => {
                                     error!("Failed to load commit history: {}", e);
