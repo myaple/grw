@@ -35,7 +35,9 @@ impl GitSharedState {
         }
     }
 
-    pub fn update_repo(&self, key: String, repo: GitRepo) {
+    /// Update repository data
+    pub fn update_repo(&self, repo: GitRepo) {
+        let key = "current".to_string(); // Use default key for current repo
         let _ = self.repo_data.insert(key, repo);
         self.last_update.store(
             std::time::SystemTime::now()
@@ -46,28 +48,100 @@ impl GitSharedState {
         );
     }
 
-    pub fn get_repo(&self, key: &str) -> Option<GitRepo> {
+    /// Get current repository data
+    pub fn get_repo(&self) -> Option<GitRepo> {
+        self.repo_data.read("current", |_, v| v.clone())
+    }
+
+    /// Get repository data by key (for future multi-repo support)
+    pub fn get_repo_by_key(&self, key: &str) -> Option<GitRepo> {
         self.repo_data.read(key, |_, v| v.clone())
     }
 
+    /// Update repository data with custom key
+    pub fn update_repo_with_key(&self, key: String, repo: GitRepo) {
+        let _ = self.repo_data.insert(key, repo);
+        self.last_update.store(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            Ordering::Relaxed
+        );
+    }
+
+    /// Cache commit information
     pub fn cache_commit(&self, sha: String, commit: CommitInfo) {
         let _ = self.commit_cache.insert(sha, commit);
     }
 
+    /// Get cached commit information
     pub fn get_cached_commit(&self, sha: &str) -> Option<CommitInfo> {
         self.commit_cache.read(sha, |_, v| v.clone())
     }
 
+    /// Cache file diff information
+    pub fn cache_file_diff(&self, key: String, diffs: Vec<FileDiff>) {
+        let _ = self.file_diff_cache.insert(key, diffs);
+    }
+
+    /// Get cached file diff information
+    pub fn get_cached_file_diff(&self, key: &str) -> Option<Vec<FileDiff>> {
+        self.file_diff_cache.read(key, |_, v| v.clone())
+    }
+
+    /// Set error state
     pub fn set_error(&self, key: String, error: String) {
         let _ = self.error_state.insert(key, error);
     }
 
-    pub fn clear_error(&self, key: &str) {
-        let _ = self.error_state.remove(key);
+    /// Clear error state
+    pub fn clear_error(&self, key: &str) -> bool {
+        self.error_state.remove(key).is_some()
     }
 
+    /// Get error state
     pub fn get_error(&self, key: &str) -> Option<String> {
         self.error_state.read(key, |_, v| v.clone())
+    }
+
+    /// Get all current errors
+    pub fn get_all_errors(&self) -> Vec<(String, String)> {
+        let mut errors = Vec::new();
+        self.error_state.scan(|k, v| {
+            errors.push((k.clone(), v.clone()));
+        });
+        errors
+    }
+
+    /// Clear all errors
+    pub fn clear_all_errors(&self) {
+        self.error_state.clear();
+    }
+
+    /// Get current view mode
+    pub fn get_view_mode(&self) -> u8 {
+        self.view_mode.load(Ordering::Relaxed)
+    }
+
+    /// Set view mode
+    pub fn set_view_mode(&self, mode: u8) {
+        self.view_mode.store(mode, Ordering::Relaxed);
+    }
+
+    /// Get last update timestamp
+    pub fn get_last_update(&self) -> u64 {
+        self.last_update.load(Ordering::Relaxed)
+    }
+
+    /// Check if data is stale based on given threshold
+    pub fn is_stale(&self, threshold_seconds: u64) -> bool {
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last_update = self.get_last_update();
+        current_time.saturating_sub(last_update) > threshold_seconds
     }
 }
 
@@ -289,9 +363,15 @@ mod tests {
             total_stats: (1, 2, 3),
         };
 
-        // Test repo operations
-        git_state.update_repo("main".to_string(), test_repo.clone());
-        let retrieved_repo = git_state.get_repo("main");
+        // Test repo operations with new signature
+        git_state.update_repo(test_repo.clone());
+        let retrieved_repo = git_state.get_repo();
+        assert!(retrieved_repo.is_some());
+        assert_eq!(retrieved_repo.unwrap().repo_name, "test-repo");
+
+        // Test repo operations with custom key
+        git_state.update_repo_with_key("main".to_string(), test_repo.clone());
+        let retrieved_repo = git_state.get_repo_by_key("main");
         assert!(retrieved_repo.is_some());
         assert_eq!(retrieved_repo.unwrap().repo_name, "test-repo");
 
@@ -310,15 +390,99 @@ mod tests {
         assert!(retrieved_commit.is_some());
         assert_eq!(retrieved_commit.unwrap().message, "Test commit");
 
+        // Test file diff caching
+        let test_diffs = vec![FileDiff {
+            path: PathBuf::from("test.rs"),
+            status: git2::Status::WT_MODIFIED,
+            line_strings: vec!["+ added line".to_string()],
+            additions: 1,
+            deletions: 0,
+        }];
+        git_state.cache_file_diff("test_diff".to_string(), test_diffs.clone());
+        let retrieved_diffs = git_state.get_cached_file_diff("test_diff");
+        assert!(retrieved_diffs.is_some());
+        assert_eq!(retrieved_diffs.unwrap().len(), 1);
+
         // Test error handling
         git_state.set_error("test_error".to_string(), "Test error message".to_string());
         let error = git_state.get_error("test_error");
         assert!(error.is_some());
         assert_eq!(error.unwrap(), "Test error message");
 
-        git_state.clear_error("test_error");
+        let cleared = git_state.clear_error("test_error");
+        assert!(cleared);
         let cleared_error = git_state.get_error("test_error");
         assert!(cleared_error.is_none());
+
+        // Test view mode operations
+        git_state.set_view_mode(2);
+        assert_eq!(git_state.get_view_mode(), 2);
+
+        // Test timestamp operations
+        let initial_time = git_state.get_last_update();
+        assert!(initial_time > 0); // Should be set by update_repo call
+
+        // Test staleness check
+        assert!(!git_state.is_stale(3600)); // Should not be stale within an hour
+        
+        // Create a new state to test staleness with no updates
+        let fresh_state = GitSharedState::new();
+        assert!(fresh_state.is_stale(0)); // Should be stale with 0 threshold since no updates
+    }
+
+    #[test]
+    fn test_git_shared_state_error_management() {
+        let git_state = GitSharedState::new();
+
+        // Test multiple errors
+        git_state.set_error("error1".to_string(), "First error".to_string());
+        git_state.set_error("error2".to_string(), "Second error".to_string());
+
+        let all_errors = git_state.get_all_errors();
+        assert_eq!(all_errors.len(), 2);
+
+        // Test clear all errors
+        git_state.clear_all_errors();
+        let all_errors_after_clear = git_state.get_all_errors();
+        assert!(all_errors_after_clear.is_empty());
+    }
+
+    #[test]
+    fn test_git_shared_state_concurrent_access() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let git_state = Arc::new(GitSharedState::new());
+        let mut handles = vec![];
+
+        // Test concurrent commit caching
+        for i in 0..10 {
+            let state = Arc::clone(&git_state);
+            let handle = thread::spawn(move || {
+                let commit = CommitInfo {
+                    sha: format!("commit_{}", i),
+                    short_sha: format!("commit_{}", i),
+                    message: format!("Test commit {}", i),
+                    author: "Test Author".to_string(),
+                    date: "2023-01-01".to_string(),
+                    files_changed: vec![],
+                };
+                state.cache_commit(format!("commit_{}", i), commit);
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Verify all commits were cached
+        for i in 0..10 {
+            let commit = git_state.get_cached_commit(&format!("commit_{}", i));
+            assert!(commit.is_some());
+            assert_eq!(commit.unwrap().message, format!("Test commit {}", i));
+        }
     }
 
     #[test]
