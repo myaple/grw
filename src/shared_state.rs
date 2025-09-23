@@ -345,11 +345,62 @@ impl LlmSharedState {
 }
 
 /// Timing information for monitor operations
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MonitorTiming {
     pub last_run: u64,
     pub elapsed: u64,
     pub has_run: bool,
+}
+
+impl MonitorTiming {
+    /// Create a new MonitorTiming instance
+    pub fn new() -> Self {
+        Self {
+            last_run: 0,
+            elapsed: 0,
+            has_run: false,
+        }
+    }
+
+    /// Create a MonitorTiming with current timestamp
+    pub fn with_current_time(elapsed: u64) -> Self {
+        Self {
+            last_run: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            elapsed,
+            has_run: true,
+        }
+    }
+
+    /// Update the timing with new elapsed time and current timestamp
+    pub fn update(&mut self, elapsed: u64) {
+        self.last_run = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.elapsed = elapsed;
+        self.has_run = true;
+    }
+
+    /// Check if the timing is stale based on given threshold
+    pub fn is_stale(&self, threshold_seconds: u64) -> bool {
+        if !self.has_run {
+            return true;
+        }
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        current_time.saturating_sub(self.last_run) > threshold_seconds
+    }
+}
+
+impl Default for MonitorTiming {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Shared state for monitor operations using lock-free data structures
@@ -362,39 +413,179 @@ pub struct MonitorSharedState {
     
     /// Configuration
     config: HashMap<String, String>,
+    
+    /// Error states for monitor operations
+    error_state: HashMap<String, String>,
 }
 
 impl MonitorSharedState {
+    /// Create a new MonitorSharedState instance
     pub fn new() -> Self {
         Self {
             output: HashMap::new(),
             timing_info: HashMap::new(),
             config: HashMap::new(),
+            error_state: HashMap::new(),
         }
     }
 
+    /// Update monitor command output
     pub fn update_output(&self, key: String, output: String) {
         let _ = self.output.insert(key, output);
     }
 
+    /// Get monitor command output
     pub fn get_output(&self, key: &str) -> Option<String> {
         self.output.read(key, |_, v| v.clone())
     }
 
+    /// Get all monitor outputs
+    pub fn get_all_outputs(&self) -> Vec<(String, String)> {
+        let mut outputs = Vec::new();
+        self.output.scan(|k, v| {
+            outputs.push((k.clone(), v.clone()));
+        });
+        outputs
+    }
+
+    /// Clear monitor output for a specific key
+    pub fn clear_output(&self, key: &str) -> bool {
+        self.output.remove(key).is_some()
+    }
+
+    /// Clear all monitor outputs
+    pub fn clear_all_outputs(&self) {
+        self.output.clear();
+    }
+
+    /// Update timing information for a monitor command
     pub fn update_timing(&self, key: String, timing: MonitorTiming) {
         let _ = self.timing_info.insert(key, timing);
     }
 
+    /// Update timing with elapsed time (convenience method)
+    pub fn update_timing_with_elapsed(&self, key: String, elapsed: u64) {
+        let timing = MonitorTiming::with_current_time(elapsed);
+        let _ = self.timing_info.insert(key, timing);
+    }
+
+    /// Get timing information for a monitor command
     pub fn get_timing(&self, key: &str) -> Option<MonitorTiming> {
         self.timing_info.read(key, |_, v| v.clone())
     }
 
+    /// Get all timing information
+    pub fn get_all_timing(&self) -> Vec<(String, MonitorTiming)> {
+        let mut timings = Vec::new();
+        self.timing_info.scan(|k, v| {
+            timings.push((k.clone(), v.clone()));
+        });
+        timings
+    }
+
+    /// Clear timing information for a specific key
+    pub fn clear_timing(&self, key: &str) -> bool {
+        self.timing_info.remove(key).is_some()
+    }
+
+    /// Clear all timing information
+    pub fn clear_all_timing(&self) {
+        self.timing_info.clear();
+    }
+
+    /// Set configuration value
     pub fn set_config(&self, key: String, value: String) {
         let _ = self.config.insert(key, value);
     }
 
+    /// Get configuration value
     pub fn get_config(&self, key: &str) -> Option<String> {
         self.config.read(key, |_, v| v.clone())
+    }
+
+    /// Get all configuration values
+    pub fn get_all_config(&self) -> Vec<(String, String)> {
+        let mut configs = Vec::new();
+        self.config.scan(|k, v| {
+            configs.push((k.clone(), v.clone()));
+        });
+        configs
+    }
+
+    /// Remove configuration value
+    pub fn remove_config(&self, key: &str) -> bool {
+        self.config.remove(key).is_some()
+    }
+
+    /// Clear all configuration
+    pub fn clear_all_config(&self) {
+        self.config.clear();
+    }
+
+    /// Set error state for a monitor operation
+    pub fn set_error(&self, key: String, error: String) {
+        let _ = self.error_state.insert(key, error);
+    }
+
+    /// Clear error state for a monitor operation
+    pub fn clear_error(&self, key: &str) -> bool {
+        self.error_state.remove(key).is_some()
+    }
+
+    /// Get error state for a monitor operation
+    pub fn get_error(&self, key: &str) -> Option<String> {
+        self.error_state.read(key, |_, v| v.clone())
+    }
+
+    /// Get all current errors
+    pub fn get_all_errors(&self) -> Vec<(String, String)> {
+        let mut errors = Vec::new();
+        self.error_state.scan(|k, v| {
+            errors.push((k.clone(), v.clone()));
+        });
+        errors
+    }
+
+    /// Clear all errors
+    pub fn clear_all_errors(&self) {
+        self.error_state.clear();
+    }
+
+    /// Check if any monitor commands have stale timing information
+    pub fn has_stale_timing(&self, threshold_seconds: u64) -> bool {
+        let mut has_stale = false;
+        self.timing_info.scan(|_, v| {
+            if v.is_stale(threshold_seconds) {
+                has_stale = true;
+            }
+        });
+        has_stale
+    }
+
+    /// Get count of monitor commands with output
+    pub fn output_count(&self) -> usize {
+        self.output.len()
+    }
+
+    /// Get count of monitor commands with timing information
+    pub fn timing_count(&self) -> usize {
+        self.timing_info.len()
+    }
+
+    /// Get count of configuration entries
+    pub fn config_count(&self) -> usize {
+        self.config.len()
+    }
+
+    /// Get count of error entries
+    pub fn error_count(&self) -> usize {
+        self.error_state.len()
+    }
+}
+
+impl Default for MonitorSharedState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -824,7 +1015,42 @@ mod tests {
     }
 
     #[test]
-    fn test_monitor_shared_state_operations() {
+    fn test_monitor_timing_operations() {
+        // Test MonitorTiming creation
+        let timing = MonitorTiming::new();
+        assert_eq!(timing.last_run, 0);
+        assert_eq!(timing.elapsed, 0);
+        assert!(!timing.has_run);
+
+        // Test MonitorTiming with current time
+        let timing_with_time = MonitorTiming::with_current_time(250);
+        assert!(timing_with_time.last_run > 0);
+        assert_eq!(timing_with_time.elapsed, 250);
+        assert!(timing_with_time.has_run);
+
+        // Test MonitorTiming update
+        let mut timing_mut = MonitorTiming::new();
+        timing_mut.update(500);
+        assert!(timing_mut.last_run > 0);
+        assert_eq!(timing_mut.elapsed, 500);
+        assert!(timing_mut.has_run);
+
+        // Test staleness check
+        let fresh_timing = MonitorTiming::with_current_time(100);
+        assert!(!fresh_timing.is_stale(3600)); // Should not be stale within an hour
+
+        let never_run_timing = MonitorTiming::new();
+        assert!(never_run_timing.is_stale(0)); // Should be stale if never run
+
+        // Test default
+        let default_timing = MonitorTiming::default();
+        assert_eq!(default_timing.last_run, 0);
+        assert_eq!(default_timing.elapsed, 0);
+        assert!(!default_timing.has_run);
+    }
+
+    #[test]
+    fn test_monitor_shared_state_basic_operations() {
         let monitor_state = MonitorSharedState::new();
 
         // Test output management
@@ -832,6 +1058,10 @@ mod tests {
         let output = monitor_state.get_output("cmd1");
         assert!(output.is_some());
         assert_eq!(output.unwrap(), "Command output");
+
+        // Test non-existent output
+        let no_output = monitor_state.get_output("nonexistent");
+        assert!(no_output.is_none());
 
         // Test timing management
         let timing = MonitorTiming {
@@ -847,10 +1077,222 @@ mod tests {
         assert_eq!(retrieved.elapsed, 500);
         assert!(retrieved.has_run);
 
+        // Test timing with elapsed convenience method
+        monitor_state.update_timing_with_elapsed("cmd2".to_string(), 750);
+        let timing2 = monitor_state.get_timing("cmd2");
+        assert!(timing2.is_some());
+        let timing2_unwrapped = timing2.unwrap();
+        assert!(timing2_unwrapped.last_run > 0);
+        assert_eq!(timing2_unwrapped.elapsed, 750);
+        assert!(timing2_unwrapped.has_run);
+
         // Test configuration
         monitor_state.set_config("timeout".to_string(), "30".to_string());
         let config_value = monitor_state.get_config("timeout");
         assert!(config_value.is_some());
         assert_eq!(config_value.unwrap(), "30");
+
+        // Test non-existent config
+        let no_config = monitor_state.get_config("nonexistent");
+        assert!(no_config.is_none());
+    }
+
+    #[test]
+    fn test_monitor_shared_state_bulk_operations() {
+        let monitor_state = MonitorSharedState::new();
+
+        // Add multiple outputs
+        monitor_state.update_output("cmd1".to_string(), "Output 1".to_string());
+        monitor_state.update_output("cmd2".to_string(), "Output 2".to_string());
+        monitor_state.update_output("cmd3".to_string(), "Output 3".to_string());
+
+        // Test get all outputs
+        let all_outputs = monitor_state.get_all_outputs();
+        assert_eq!(all_outputs.len(), 3);
+        assert_eq!(monitor_state.output_count(), 3);
+
+        // Test clear specific output
+        let cleared = monitor_state.clear_output("cmd2");
+        assert!(cleared);
+        assert_eq!(monitor_state.output_count(), 2);
+        assert!(monitor_state.get_output("cmd2").is_none());
+
+        // Test clear all outputs
+        monitor_state.clear_all_outputs();
+        assert_eq!(monitor_state.output_count(), 0);
+        let all_outputs_after_clear = monitor_state.get_all_outputs();
+        assert!(all_outputs_after_clear.is_empty());
+
+        // Add multiple timing entries
+        let timing1 = MonitorTiming::with_current_time(100);
+        let timing2 = MonitorTiming::with_current_time(200);
+        monitor_state.update_timing("cmd1".to_string(), timing1);
+        monitor_state.update_timing("cmd2".to_string(), timing2);
+
+        // Test get all timing
+        let all_timing = monitor_state.get_all_timing();
+        assert_eq!(all_timing.len(), 2);
+        assert_eq!(monitor_state.timing_count(), 2);
+
+        // Test clear specific timing
+        let cleared_timing = monitor_state.clear_timing("cmd1");
+        assert!(cleared_timing);
+        assert_eq!(monitor_state.timing_count(), 1);
+
+        // Test clear all timing
+        monitor_state.clear_all_timing();
+        assert_eq!(monitor_state.timing_count(), 0);
+
+        // Add multiple config entries
+        monitor_state.set_config("timeout".to_string(), "30".to_string());
+        monitor_state.set_config("retries".to_string(), "3".to_string());
+        monitor_state.set_config("interval".to_string(), "5".to_string());
+
+        // Test get all config
+        let all_config = monitor_state.get_all_config();
+        assert_eq!(all_config.len(), 3);
+        assert_eq!(monitor_state.config_count(), 3);
+
+        // Test remove specific config
+        let removed = monitor_state.remove_config("retries");
+        assert!(removed);
+        assert_eq!(monitor_state.config_count(), 2);
+        assert!(monitor_state.get_config("retries").is_none());
+
+        // Test clear all config
+        monitor_state.clear_all_config();
+        assert_eq!(monitor_state.config_count(), 0);
+    }
+
+    #[test]
+    fn test_monitor_shared_state_error_management() {
+        let monitor_state = MonitorSharedState::new();
+
+        // Test error setting and retrieval
+        monitor_state.set_error("cmd1".to_string(), "Command failed".to_string());
+        let error = monitor_state.get_error("cmd1");
+        assert!(error.is_some());
+        assert_eq!(error.unwrap(), "Command failed");
+
+        // Test multiple errors
+        monitor_state.set_error("cmd2".to_string(), "Timeout error".to_string());
+        monitor_state.set_error("cmd3".to_string(), "Permission denied".to_string());
+
+        let all_errors = monitor_state.get_all_errors();
+        assert_eq!(all_errors.len(), 3);
+        assert_eq!(monitor_state.error_count(), 3);
+
+        // Test clear specific error
+        let cleared = monitor_state.clear_error("cmd2");
+        assert!(cleared);
+        assert_eq!(monitor_state.error_count(), 2);
+        assert!(monitor_state.get_error("cmd2").is_none());
+
+        // Test clear all errors
+        monitor_state.clear_all_errors();
+        assert_eq!(monitor_state.error_count(), 0);
+        let all_errors_after_clear = monitor_state.get_all_errors();
+        assert!(all_errors_after_clear.is_empty());
+
+        // Test clearing non-existent error
+        let not_cleared = monitor_state.clear_error("nonexistent");
+        assert!(!not_cleared);
+    }
+
+    #[test]
+    fn test_monitor_shared_state_staleness_detection() {
+        let monitor_state = MonitorSharedState::new();
+
+        // Add fresh timing
+        let fresh_timing = MonitorTiming::with_current_time(100);
+        monitor_state.update_timing("fresh_cmd".to_string(), fresh_timing);
+
+        // Add stale timing (simulate old timestamp)
+        let mut stale_timing = MonitorTiming::new();
+        stale_timing.last_run = 1000000000; // Very old timestamp
+        stale_timing.elapsed = 200;
+        stale_timing.has_run = true;
+        monitor_state.update_timing("stale_cmd".to_string(), stale_timing);
+
+        // Test staleness detection with reasonable threshold
+        assert!(monitor_state.has_stale_timing(3600)); // Should detect stale timing
+
+        // Test with very large threshold
+        assert!(!monitor_state.has_stale_timing(999999999)); // Should not detect stale timing
+
+        // Test with no timing entries
+        let empty_monitor_state = MonitorSharedState::new();
+        assert!(!empty_monitor_state.has_stale_timing(0)); // No timing entries, so no stale timing
+    }
+
+    #[test]
+    fn test_monitor_shared_state_concurrent_access() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let monitor_state = Arc::new(MonitorSharedState::new());
+        let mut handles = vec![];
+
+        // Test concurrent output updates
+        for i in 0..10 {
+            let state = Arc::clone(&monitor_state);
+            let handle = thread::spawn(move || {
+                let cmd_key = format!("cmd_{}", i);
+                let output = format!("Output from command {}", i);
+                state.update_output(cmd_key, output);
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Verify all outputs were stored
+        assert_eq!(monitor_state.output_count(), 10);
+        for i in 0..10 {
+            let cmd_key = format!("cmd_{}", i);
+            let output = monitor_state.get_output(&cmd_key);
+            assert!(output.is_some());
+            assert_eq!(output.unwrap(), format!("Output from command {}", i));
+        }
+
+        // Test concurrent timing updates
+        let mut timing_handles = vec![];
+        for i in 0..5 {
+            let state = Arc::clone(&monitor_state);
+            let handle = thread::spawn(move || {
+                let timing_key = format!("timing_{}", i);
+                let elapsed = (i + 1) * 100;
+                state.update_timing_with_elapsed(timing_key, elapsed as u64);
+            });
+            timing_handles.push(handle);
+        }
+
+        // Wait for all timing threads to complete
+        for handle in timing_handles {
+            handle.join().unwrap();
+        }
+
+        // Verify all timing entries were stored
+        assert_eq!(monitor_state.timing_count(), 5);
+        for i in 0..5 {
+            let timing_key = format!("timing_{}", i);
+            let timing = monitor_state.get_timing(&timing_key);
+            assert!(timing.is_some());
+            let timing_unwrapped = timing.unwrap();
+            assert_eq!(timing_unwrapped.elapsed, ((i + 1) * 100) as u64);
+            assert!(timing_unwrapped.has_run);
+        }
+    }
+
+    #[test]
+    fn test_monitor_shared_state_default() {
+        let monitor_state = MonitorSharedState::default();
+        assert_eq!(monitor_state.output_count(), 0);
+        assert_eq!(monitor_state.timing_count(), 0);
+        assert_eq!(monitor_state.config_count(), 0);
+        assert_eq!(monitor_state.error_count(), 0);
     }
 }
