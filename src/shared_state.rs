@@ -589,6 +589,55 @@ impl Default for MonitorSharedState {
     }
 }
 
+/// Statistics about the current state of all shared state components
+#[derive(Debug, Clone, PartialEq)]
+pub struct SharedStateStatistics {
+    // Git state statistics
+    pub git_commits_cached: usize,
+    pub git_file_diffs_cached: usize,
+    pub git_repos_tracked: usize,
+    pub git_errors: usize,
+    
+    // LLM state statistics
+    pub llm_summaries_cached: usize,
+    pub llm_advice_cached: usize,
+    pub llm_active_summary_tasks: usize,
+    pub llm_active_advice_tasks: usize,
+    pub llm_errors: usize,
+    
+    // Monitor state statistics
+    pub monitor_outputs: usize,
+    pub monitor_timings: usize,
+    pub monitor_configs: usize,
+    pub monitor_errors: usize,
+}
+
+impl SharedStateStatistics {
+    /// Get total number of cached items across all components
+    pub fn total_cached_items(&self) -> usize {
+        self.git_commits_cached + 
+        self.git_file_diffs_cached + 
+        self.llm_summaries_cached + 
+        self.llm_advice_cached + 
+        self.monitor_outputs
+    }
+    
+    /// Get total number of active tasks
+    pub fn total_active_tasks(&self) -> usize {
+        self.llm_active_summary_tasks + self.llm_active_advice_tasks
+    }
+    
+    /// Get total number of errors across all components
+    pub fn total_errors(&self) -> usize {
+        self.git_errors + self.llm_errors + self.monitor_errors
+    }
+    
+    /// Check if the system is healthy (no errors and reasonable cache sizes)
+    pub fn is_healthy(&self) -> bool {
+        self.total_errors() == 0 && self.total_cached_items() < 10000 // Reasonable cache limit
+    }
+}
+
 /// Central manager for all shared state components
 pub struct SharedStateManager {
     git_state: Arc<GitSharedState>,
@@ -621,18 +670,116 @@ impl SharedStateManager {
         &self.monitor_state
     }
 
-    /// Initialize all shared state components with default values
+    /// Initialize all shared state components with default values and configuration
     pub fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Initialize any default configuration or state here
-        // For now, the components are initialized in their constructors
+        // Initialize default configuration for monitor state
+        self.monitor_state.set_config("update_interval".to_string(), "1000".to_string());
+        self.monitor_state.set_config("max_output_size".to_string(), "10485760".to_string()); // 10MB
+        self.monitor_state.set_config("cleanup_interval".to_string(), "300".to_string()); // 5 minutes
+        
+        // Initialize git state with default view mode
+        self.git_state.set_view_mode(0); // Default to WorkingTree view
+        
+        // Clear any existing errors from previous sessions
+        self.git_state.clear_all_errors();
+        self.llm_state.clear_all_errors();
+        self.monitor_state.clear_all_errors();
+        
         Ok(())
     }
 
-    /// Cleanup and shutdown all shared state components
-    pub fn shutdown(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Perform any necessary cleanup
-        // scc data structures handle their own cleanup automatically
+    /// Perform cleanup operations on all shared state components
+    pub fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // Clean up stale LLM tasks (older than 1 hour)
+        self.llm_state.cleanup_stale_tasks(3600);
+        
+        // Clear all active tasks to prevent resource leaks
+        self.llm_state.clear_all_active_tasks();
+        
+        // Clear all errors
+        self.git_state.clear_all_errors();
+        self.llm_state.clear_all_errors();
+        self.monitor_state.clear_all_errors();
+        
         Ok(())
+    }
+
+    /// Shutdown all shared state components and perform final cleanup
+    pub fn shutdown(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // Perform cleanup first
+        self.cleanup()?;
+        
+        // Clear all cached data to free memory
+        self.git_state.commit_cache.clear();
+        self.git_state.file_diff_cache.clear();
+        self.git_state.repo_data.clear();
+        
+        self.llm_state.summary_cache.clear();
+        self.llm_state.advice_cache.clear();
+        self.llm_state.current_advice.clear();
+        
+        self.monitor_state.clear_all_outputs();
+        self.monitor_state.clear_all_timing();
+        self.monitor_state.clear_all_config();
+        
+        Ok(())
+    }
+
+    /// Get statistics about the current state of all components
+    pub fn get_statistics(&self) -> SharedStateStatistics {
+        SharedStateStatistics {
+            git_commits_cached: self.git_state.commit_cache.len(),
+            git_file_diffs_cached: self.git_state.file_diff_cache.len(),
+            git_repos_tracked: self.git_state.repo_data.len(),
+            git_errors: self.git_state.get_all_errors().len(),
+            
+            llm_summaries_cached: self.llm_state.summary_cache.len(),
+            llm_advice_cached: self.llm_state.advice_cache.len(),
+            llm_active_summary_tasks: self.llm_state.active_summary_task_count(),
+            llm_active_advice_tasks: self.llm_state.active_advice_task_count(),
+            llm_errors: self.llm_state.get_all_errors().len(),
+            
+            monitor_outputs: self.monitor_state.output_count(),
+            monitor_timings: self.monitor_state.timing_count(),
+            monitor_configs: self.monitor_state.config_count(),
+            monitor_errors: self.monitor_state.error_count(),
+        }
+    }
+
+    /// Check if any component has errors
+    pub fn has_errors(&self) -> bool {
+        !self.git_state.get_all_errors().is_empty() ||
+        !self.llm_state.get_all_errors().is_empty() ||
+        !self.monitor_state.get_all_errors().is_empty()
+    }
+
+    /// Get all errors from all components
+    pub fn get_all_errors(&self) -> Vec<(String, String, String)> {
+        let mut all_errors = Vec::new();
+        
+        // Git errors
+        for (key, error) in self.git_state.get_all_errors() {
+            all_errors.push(("git".to_string(), key, error));
+        }
+        
+        // LLM errors
+        for (key, error) in self.llm_state.get_all_errors() {
+            all_errors.push(("llm".to_string(), key, error));
+        }
+        
+        // Monitor errors
+        for (key, error) in self.monitor_state.get_all_errors() {
+            all_errors.push(("monitor".to_string(), key, error));
+        }
+        
+        all_errors
+    }
+
+    /// Clear all errors from all components
+    pub fn clear_all_errors(&self) {
+        self.git_state.clear_all_errors();
+        self.llm_state.clear_all_errors();
+        self.monitor_state.clear_all_errors();
     }
 }
 
@@ -663,13 +810,187 @@ mod tests {
         let manager = SharedStateManager::new();
         let result = manager.initialize();
         assert!(result.is_ok());
+        
+        // Verify default configuration was set
+        let config = manager.monitor_state().get_config("update_interval");
+        assert!(config.is_some());
+        assert_eq!(config.unwrap(), "1000");
+        
+        // Verify default view mode was set
+        assert_eq!(manager.git_state().get_view_mode(), 0);
+    }
+
+    #[test]
+    fn test_shared_state_manager_cleanup() {
+        let manager = SharedStateManager::new();
+        
+        // Add some test data and errors
+        manager.git_state().set_error("test_error".to_string(), "Test error".to_string());
+        manager.llm_state().start_summary_task("test_task".to_string());
+        manager.llm_state().set_error("llm_error".to_string(), "LLM error".to_string());
+        
+        // Verify data exists
+        assert!(manager.git_state().get_error("test_error").is_some());
+        assert!(manager.llm_state().is_summary_loading("test_task"));
+        assert!(manager.llm_state().get_error("llm_error").is_some());
+        
+        // Perform cleanup
+        let result = manager.cleanup();
+        assert!(result.is_ok());
+        
+        // Verify cleanup occurred
+        assert!(manager.git_state().get_error("test_error").is_none());
+        assert!(!manager.llm_state().is_summary_loading("test_task"));
+        assert!(manager.llm_state().get_error("llm_error").is_none());
     }
 
     #[test]
     fn test_shared_state_manager_shutdown() {
         let manager = SharedStateManager::new();
+        
+        // Add some test data
+        let test_repo = GitRepo {
+            path: PathBuf::from("/test/repo"),
+            changed_files: vec![],
+            staged_files: vec![],
+            dirty_directory_files: vec![],
+            last_commit_files: vec![],
+            last_commit_id: Some("abc123".to_string()),
+            current_view_mode: ViewMode::WorkingTree,
+            repo_name: "test-repo".to_string(),
+            branch_name: "main".to_string(),
+            commit_info: ("abc123".to_string(), "Test commit".to_string()),
+            total_stats: (1, 2, 3),
+        };
+        
+        manager.git_state().update_repo(test_repo);
+        manager.llm_state().cache_summary("test".to_string(), "Test summary".to_string());
+        manager.monitor_state().update_output("test".to_string(), "Test output".to_string());
+        
+        // Verify data exists
+        assert!(manager.git_state().get_repo().is_some());
+        assert!(manager.llm_state().get_cached_summary("test").is_some());
+        assert!(manager.monitor_state().get_output("test").is_some());
+        
+        // Perform shutdown
         let result = manager.shutdown();
         assert!(result.is_ok());
+        
+        // Verify all data was cleared
+        assert!(manager.git_state().get_repo().is_none());
+        assert!(manager.llm_state().get_cached_summary("test").is_none());
+        assert!(manager.monitor_state().get_output("test").is_none());
+    }
+
+    #[test]
+    fn test_shared_state_manager_statistics() {
+        let manager = SharedStateManager::new();
+        
+        // Add some test data
+        let test_repo = GitRepo {
+            path: PathBuf::from("/test/repo"),
+            changed_files: vec![],
+            staged_files: vec![],
+            dirty_directory_files: vec![],
+            last_commit_files: vec![],
+            last_commit_id: Some("abc123".to_string()),
+            current_view_mode: ViewMode::WorkingTree,
+            repo_name: "test-repo".to_string(),
+            branch_name: "main".to_string(),
+            commit_info: ("abc123".to_string(), "Test commit".to_string()),
+            total_stats: (1, 2, 3),
+        };
+        
+        let test_commit = CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![],
+        };
+        
+        manager.git_state().update_repo(test_repo);
+        manager.git_state().cache_commit("abc123".to_string(), test_commit);
+        manager.llm_state().cache_summary("abc123".to_string(), "Test summary".to_string());
+        manager.llm_state().start_summary_task("task1".to_string());
+        manager.monitor_state().update_output("cmd1".to_string(), "Output".to_string());
+        
+        let stats = manager.get_statistics();
+        
+        assert_eq!(stats.git_repos_tracked, 1);
+        assert_eq!(stats.git_commits_cached, 1);
+        assert_eq!(stats.llm_summaries_cached, 1);
+        assert_eq!(stats.llm_active_summary_tasks, 1);
+        assert_eq!(stats.monitor_outputs, 1);
+        
+        assert_eq!(stats.total_cached_items(), 3); // commit + summary + output (repo is not counted in cached items)
+        assert_eq!(stats.total_active_tasks(), 1);
+        assert_eq!(stats.total_errors(), 0);
+        assert!(stats.is_healthy());
+    }
+
+    #[test]
+    fn test_shared_state_manager_error_handling() {
+        let manager = SharedStateManager::new();
+        
+        // Add errors to different components
+        manager.git_state().set_error("git_error".to_string(), "Git failed".to_string());
+        manager.llm_state().set_error("llm_error".to_string(), "LLM failed".to_string());
+        manager.monitor_state().set_error("monitor_error".to_string(), "Monitor failed".to_string());
+        
+        // Test has_errors
+        assert!(manager.has_errors());
+        
+        // Test get_all_errors
+        let all_errors = manager.get_all_errors();
+        assert_eq!(all_errors.len(), 3);
+        
+        // Verify error categorization
+        let git_errors: Vec<_> = all_errors.iter().filter(|(component, _, _)| component == "git").collect();
+        let llm_errors: Vec<_> = all_errors.iter().filter(|(component, _, _)| component == "llm").collect();
+        let monitor_errors: Vec<_> = all_errors.iter().filter(|(component, _, _)| component == "monitor").collect();
+        
+        assert_eq!(git_errors.len(), 1);
+        assert_eq!(llm_errors.len(), 1);
+        assert_eq!(monitor_errors.len(), 1);
+        
+        // Test clear_all_errors
+        manager.clear_all_errors();
+        assert!(!manager.has_errors());
+        assert!(manager.get_all_errors().is_empty());
+    }
+
+    #[test]
+    fn test_shared_state_statistics_methods() {
+        let stats = SharedStateStatistics {
+            git_commits_cached: 5,
+            git_file_diffs_cached: 3,
+            git_repos_tracked: 1,
+            git_errors: 0,
+            llm_summaries_cached: 10,
+            llm_advice_cached: 2,
+            llm_active_summary_tasks: 2,
+            llm_active_advice_tasks: 1,
+            llm_errors: 0,
+            monitor_outputs: 4,
+            monitor_timings: 4,
+            monitor_configs: 3,
+            monitor_errors: 0,
+        };
+        
+        assert_eq!(stats.total_cached_items(), 24); // 5+3+10+2+4 = 24
+        assert_eq!(stats.total_active_tasks(), 3); // 2+1 = 3
+        assert_eq!(stats.total_errors(), 0);
+        assert!(stats.is_healthy());
+        
+        // Test unhealthy state with errors
+        let unhealthy_stats = SharedStateStatistics {
+            git_errors: 1,
+            ..stats
+        };
+        assert_eq!(unhealthy_stats.total_errors(), 1);
+        assert!(!unhealthy_stats.is_healthy());
     }
 
     #[test]

@@ -19,6 +19,7 @@ mod llm;
 mod logging;
 mod monitor;
 mod pane;
+mod shared_state;
 mod ui;
 
 use std::env;
@@ -28,6 +29,7 @@ use git::AsyncGitRepo;
 use llm::{AsyncLLMCommand, LlmClient};
 use log::{debug, error, info};
 use monitor::AsyncMonitorCommand;
+use shared_state::SharedStateManager;
 use ui::App;
 
 pub const GIT_SHA: &str = "unknown";
@@ -50,6 +52,15 @@ async fn main() -> Result<()> {
     let repo_path = std::env::current_dir()?;
     log::info!("Starting grw in directory: {repo_path:?}");
     log::debug!("Debug mode enabled");
+    
+    // Initialize shared state manager
+    let shared_state = SharedStateManager::new();
+    if let Err(e) = shared_state.initialize() {
+        error!("Failed to initialize shared state: {}", e);
+        return Err(color_eyre::eyre::eyre!("Failed to initialize shared state: {}", e));
+    }
+    info!("Shared state manager initialized successfully");
+    
     let mut git_repo = AsyncGitRepo::new(repo_path, 500)?;
 
     let llm_client = if let Some(llm_config) = &final_config.llm {
@@ -384,6 +395,13 @@ async fn main() -> Result<()> {
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen)?;
     let _ = terminal.clear();
+
+    // Cleanup shared state
+    if let Err(e) = shared_state.shutdown() {
+        error!("Error during shared state shutdown: {}", e);
+    } else {
+        info!("Shared state shutdown completed successfully");
+    }
 
     log::info!("Application shutdown complete");
     Ok(())
