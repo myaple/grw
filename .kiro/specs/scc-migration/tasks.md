@@ -20,14 +20,14 @@
     - Create unit tests for all GitSharedState operations
     - _Requirements: 3.1, 3.3, 2.3_
 
-- [ ] 3. Implement LlmSharedState structure and operations
-  - [ ] 3.1 Create LlmSharedState struct with concurrent collections
+- [x] 3. Implement LlmSharedState structure and operations
+  - [x] 3.1 Create LlmSharedState struct with concurrent collections
     - Define LlmSharedState with scc::HashMap for summary and advice caches
     - Add scc::Bag for tracking active tasks
     - Implement error state management structures
     - _Requirements: 4.1, 4.2, 1.4_
 
-  - [ ] 3.2 Implement LlmSharedState methods for cache management
+  - [x] 3.2 Implement LlmSharedState methods for cache management
     - Write summary caching methods (cache_summary, get_cached_summary)
     - Implement task tracking methods (start_summary_task, complete_summary_task, is_summary_loading)
     - Add advice management methods (update_advice, get_current_advice)

@@ -153,11 +153,11 @@ pub struct LlmSharedState {
     /// Advice cache with diff hash as key
     advice_cache: HashMap<String, String>,
     
-    /// Active summary generation tasks
-    active_summary_tasks: HashMap<String, bool>,
+    /// Active summary generation tasks (using HashMap for efficient lookup)
+    active_summary_tasks: HashMap<String, u64>, // commit_sha -> timestamp
     
-    /// Active advice generation tasks  
-    active_advice_tasks: HashMap<String, bool>,
+    /// Active advice generation tasks (using HashMap for efficient lookup)
+    active_advice_tasks: HashMap<String, u64>, // task_id -> timestamp
     
     /// Current advice content
     current_advice: HashMap<String, String>,
@@ -178,32 +178,169 @@ impl LlmSharedState {
         }
     }
 
+    /// Cache a summary for a specific commit SHA
     pub fn cache_summary(&self, commit_sha: String, summary: String) {
         let _ = self.summary_cache.insert(commit_sha, summary);
     }
 
+    /// Get a cached summary for a specific commit SHA
     pub fn get_cached_summary(&self, commit_sha: &str) -> Option<String> {
         self.summary_cache.read(commit_sha, |_, v| v.clone())
     }
 
+    /// Check if a summary is currently being loaded for a commit SHA
     pub fn is_summary_loading(&self, commit_sha: &str) -> bool {
         self.active_summary_tasks.contains(commit_sha)
     }
 
+    /// Start tracking a summary generation task
     pub fn start_summary_task(&self, commit_sha: String) {
-        let _ = self.active_summary_tasks.insert(commit_sha, true);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = self.active_summary_tasks.insert(commit_sha, timestamp);
     }
 
+    /// Complete a summary generation task and remove it from tracking
     pub fn complete_summary_task(&self, commit_sha: &str) {
         let _ = self.active_summary_tasks.remove(commit_sha);
     }
 
+    /// Start tracking an advice generation task
+    pub fn start_advice_task(&self, task_id: String) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = self.active_advice_tasks.insert(task_id, timestamp);
+    }
+
+    /// Complete an advice generation task and remove it from tracking
+    pub fn complete_advice_task(&self, task_id: &str) {
+        let _ = self.active_advice_tasks.remove(task_id);
+    }
+
+    /// Check if an advice task is currently active
+    pub fn is_advice_loading(&self, task_id: &str) -> bool {
+        self.active_advice_tasks.contains(task_id)
+    }
+
+    /// Cache advice content with a specific key
+    pub fn cache_advice(&self, key: String, advice: String) {
+        let _ = self.advice_cache.insert(key, advice);
+    }
+
+    /// Get cached advice for a specific key
+    pub fn get_cached_advice(&self, key: &str) -> Option<String> {
+        self.advice_cache.read(key, |_, v| v.clone())
+    }
+
+    /// Update current advice content
     pub fn update_advice(&self, key: String, advice: String) {
         let _ = self.current_advice.insert(key, advice);
     }
 
+    /// Get current advice content
     pub fn get_current_advice(&self, key: &str) -> Option<String> {
         self.current_advice.read(key, |_, v| v.clone())
+    }
+
+    /// Set error state for a specific operation
+    pub fn set_error(&self, key: String, error: String) {
+        let _ = self.error_state.insert(key, error);
+    }
+
+    /// Clear error state for a specific operation
+    pub fn clear_error(&self, key: &str) -> bool {
+        self.error_state.remove(key).is_some()
+    }
+
+    /// Get error state for a specific operation
+    pub fn get_error(&self, key: &str) -> Option<String> {
+        self.error_state.read(key, |_, v| v.clone())
+    }
+
+    /// Get all current errors
+    pub fn get_all_errors(&self) -> Vec<(String, String)> {
+        let mut errors = Vec::new();
+        self.error_state.scan(|k, v| {
+            errors.push((k.clone(), v.clone()));
+        });
+        errors
+    }
+
+    /// Clear all errors
+    pub fn clear_all_errors(&self) {
+        self.error_state.clear();
+    }
+
+    /// Get count of active summary tasks
+    pub fn active_summary_task_count(&self) -> usize {
+        self.active_summary_tasks.len()
+    }
+
+    /// Get count of active advice tasks
+    pub fn active_advice_task_count(&self) -> usize {
+        self.active_advice_tasks.len()
+    }
+
+    /// Get all active summary tasks with their timestamps
+    pub fn get_active_summary_tasks(&self) -> Vec<(String, u64)> {
+        let mut tasks = Vec::new();
+        self.active_summary_tasks.scan(|k, v| {
+            tasks.push((k.clone(), *v));
+        });
+        tasks
+    }
+
+    /// Get all active advice tasks with their timestamps
+    pub fn get_active_advice_tasks(&self) -> Vec<(String, u64)> {
+        let mut tasks = Vec::new();
+        self.active_advice_tasks.scan(|k, v| {
+            tasks.push((k.clone(), *v));
+        });
+        tasks
+    }
+
+    /// Clear all active tasks (for cleanup/reset)
+    pub fn clear_all_active_tasks(&self) {
+        self.active_summary_tasks.clear();
+        self.active_advice_tasks.clear();
+    }
+
+    /// Clean up stale tasks older than the specified threshold (in seconds)
+    pub fn cleanup_stale_tasks(&self, threshold_seconds: u64) {
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Collect stale summary tasks
+        let mut stale_summary_tasks = Vec::new();
+        self.active_summary_tasks.scan(|k, v| {
+            if current_time.saturating_sub(*v) > threshold_seconds {
+                stale_summary_tasks.push(k.clone());
+            }
+        });
+
+        // Remove stale summary tasks
+        for task in stale_summary_tasks {
+            let _ = self.active_summary_tasks.remove(&task);
+        }
+
+        // Collect stale advice tasks
+        let mut stale_advice_tasks = Vec::new();
+        self.active_advice_tasks.scan(|k, v| {
+            if current_time.saturating_sub(*v) > threshold_seconds {
+                stale_advice_tasks.push(k.clone());
+            }
+        });
+
+        // Remove stale advice tasks
+        for task in stale_advice_tasks {
+            let _ = self.active_advice_tasks.remove(&task);
+        }
     }
 }
 
@@ -499,14 +636,191 @@ mod tests {
         assert!(!llm_state.is_summary_loading("def456"));
         llm_state.start_summary_task("def456".to_string());
         assert!(llm_state.is_summary_loading("def456"));
+        
+        // Test task count
+        assert_eq!(llm_state.active_summary_task_count(), 1);
+
+        // Test task completion
         llm_state.complete_summary_task("def456");
         assert!(!llm_state.is_summary_loading("def456"));
+        assert_eq!(llm_state.active_summary_task_count(), 0);
+
+        // Test advice caching
+        llm_state.cache_advice("diff_hash_1".to_string(), "Cached advice".to_string());
+        let cached_advice = llm_state.get_cached_advice("diff_hash_1");
+        assert!(cached_advice.is_some());
+        assert_eq!(cached_advice.unwrap(), "Cached advice");
 
         // Test advice management
         llm_state.update_advice("current".to_string(), "Test advice".to_string());
         let advice = llm_state.get_current_advice("current");
         assert!(advice.is_some());
         assert_eq!(advice.unwrap(), "Test advice");
+
+        // Test advice task tracking
+        assert!(!llm_state.is_advice_loading("advice_task_1"));
+        llm_state.start_advice_task("advice_task_1".to_string());
+        assert!(llm_state.is_advice_loading("advice_task_1"));
+        assert_eq!(llm_state.active_advice_task_count(), 1);
+
+        // Test advice task completion
+        llm_state.complete_advice_task("advice_task_1");
+        assert!(!llm_state.is_advice_loading("advice_task_1"));
+        assert_eq!(llm_state.active_advice_task_count(), 0);
+
+        // Test error handling
+        llm_state.set_error("summary_error".to_string(), "Failed to generate summary".to_string());
+        let error = llm_state.get_error("summary_error");
+        assert!(error.is_some());
+        assert_eq!(error.unwrap(), "Failed to generate summary");
+
+        let cleared = llm_state.clear_error("summary_error");
+        assert!(cleared);
+        let cleared_error = llm_state.get_error("summary_error");
+        assert!(cleared_error.is_none());
+
+        // Test clearing all tasks
+        llm_state.start_summary_task("test1".to_string());
+        llm_state.start_advice_task("test2".to_string());
+        assert_eq!(llm_state.active_summary_task_count(), 1);
+        assert_eq!(llm_state.active_advice_task_count(), 1);
+        
+        llm_state.clear_all_active_tasks();
+        assert_eq!(llm_state.active_summary_task_count(), 0);
+        assert_eq!(llm_state.active_advice_task_count(), 0);
+    }
+
+    #[test]
+    fn test_llm_shared_state_concurrent_access() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let llm_state = Arc::new(LlmSharedState::new());
+        let mut handles = vec![];
+
+        // Test concurrent summary caching
+        for i in 0..10 {
+            let state = Arc::clone(&llm_state);
+            let handle = thread::spawn(move || {
+                let commit_sha = format!("commit_{}", i);
+                let summary = format!("Summary for commit {}", i);
+                state.cache_summary(commit_sha.clone(), summary);
+                state.start_summary_task(commit_sha);
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Verify all summaries were cached
+        for i in 0..10 {
+            let commit_sha = format!("commit_{}", i);
+            let summary = llm_state.get_cached_summary(&commit_sha);
+            assert!(summary.is_some());
+            assert_eq!(summary.unwrap(), format!("Summary for commit {}", i));
+            assert!(llm_state.is_summary_loading(&commit_sha));
+        }
+
+        // Verify task count
+        assert_eq!(llm_state.active_summary_task_count(), 10);
+    }
+
+    #[test]
+    fn test_llm_shared_state_error_management() {
+        let llm_state = LlmSharedState::new();
+
+        // Test multiple errors
+        llm_state.set_error("error1".to_string(), "First error".to_string());
+        llm_state.set_error("error2".to_string(), "Second error".to_string());
+
+        let all_errors = llm_state.get_all_errors();
+        assert_eq!(all_errors.len(), 2);
+
+        // Test clear all errors
+        llm_state.clear_all_errors();
+        let all_errors_after_clear = llm_state.get_all_errors();
+        assert!(all_errors_after_clear.is_empty());
+    }
+
+    #[test]
+    fn test_llm_shared_state_cache_operations() {
+        let llm_state = LlmSharedState::new();
+
+        // Test summary cache operations
+        let commit_sha = "test_commit_123";
+        let summary = "This is a test summary for the commit";
+        
+        // Initially no summary should exist
+        assert!(llm_state.get_cached_summary(commit_sha).is_none());
+        
+        // Cache the summary
+        llm_state.cache_summary(commit_sha.to_string(), summary.to_string());
+        
+        // Verify summary is cached
+        let cached_summary = llm_state.get_cached_summary(commit_sha);
+        assert!(cached_summary.is_some());
+        assert_eq!(cached_summary.unwrap(), summary);
+
+        // Test advice cache operations
+        let diff_hash = "diff_hash_456";
+        let advice = "This code looks good, consider adding tests";
+        
+        // Initially no advice should exist
+        assert!(llm_state.get_cached_advice(diff_hash).is_none());
+        
+        // Cache the advice
+        llm_state.cache_advice(diff_hash.to_string(), advice.to_string());
+        
+        // Verify advice is cached
+        let cached_advice = llm_state.get_cached_advice(diff_hash);
+        assert!(cached_advice.is_some());
+        assert_eq!(cached_advice.unwrap(), advice);
+
+        // Test current advice operations
+        let advice_key = "current_diff";
+        let current_advice = "Current advice for the diff";
+        
+        llm_state.update_advice(advice_key.to_string(), current_advice.to_string());
+        let retrieved_advice = llm_state.get_current_advice(advice_key);
+        assert!(retrieved_advice.is_some());
+        assert_eq!(retrieved_advice.unwrap(), current_advice);
+    }
+
+    #[test]
+    fn test_llm_shared_state_task_management() {
+        let llm_state = LlmSharedState::new();
+
+        // Test getting active tasks
+        llm_state.start_summary_task("commit1".to_string());
+        llm_state.start_summary_task("commit2".to_string());
+        llm_state.start_advice_task("advice1".to_string());
+
+        let summary_tasks = llm_state.get_active_summary_tasks();
+        let advice_tasks = llm_state.get_active_advice_tasks();
+
+        assert_eq!(summary_tasks.len(), 2);
+        assert_eq!(advice_tasks.len(), 1);
+
+        // Verify task names are correct
+        let summary_task_names: Vec<String> = summary_tasks.iter().map(|(name, _)| name.clone()).collect();
+        assert!(summary_task_names.contains(&"commit1".to_string()));
+        assert!(summary_task_names.contains(&"commit2".to_string()));
+
+        let advice_task_names: Vec<String> = advice_tasks.iter().map(|(name, _)| name.clone()).collect();
+        assert!(advice_task_names.contains(&"advice1".to_string()));
+
+        // Test that cleanup with a large threshold doesn't remove recent tasks
+        llm_state.cleanup_stale_tasks(3600); // 1 hour threshold - tasks should not be stale
+        assert_eq!(llm_state.active_summary_task_count(), 2);
+        assert_eq!(llm_state.active_advice_task_count(), 1);
+
+        // Test manual cleanup by clearing all tasks
+        llm_state.clear_all_active_tasks();
+        assert_eq!(llm_state.active_summary_task_count(), 0);
+        assert_eq!(llm_state.active_advice_task_count(), 0);
     }
 
     #[test]
