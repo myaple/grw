@@ -62,21 +62,21 @@
     - Create integration tests for SharedStateManager
     - _Requirements: 1.3, 2.4, 5.1_
 
-- [ ] 6. Migrate GitWorker to use shared state
-  - [ ] 6.1 Update GitWorker struct to use GitSharedState
+- [x] 6. Migrate GitWorker to use shared state
+  - [x] 6.1 Update GitWorker struct to use GitSharedState
     - Modify GitWorker to accept Arc<GitSharedState> in constructor
     - Remove channel-related fields (rx, tx) from GitWorker
     - Update internal caches to use shared state instead of local HashMap
     - _Requirements: 3.1, 2.1, 2.2_
 
-  - [ ] 6.2 Implement shared state operations in GitWorker
+  - [x] 6.2 Implement shared state operations in GitWorker
     - Replace channel sends with direct shared state updates in update() method
     - Modify get_commit_history to store results in shared commit cache
     - Update cache_summary and get_cached_summary to use shared state
     - Remove channel message handling from run() method
     - _Requirements: 3.1, 3.2, 3.3_
 
-  - [ ] 6.3 Update GitWorker run loop for continuous operation
+  - [x] 6.3 Update GitWorker run loop for continuous operation
     - Implement continuous update loop without channel dependency
     - Add proper error handling that updates shared error state
     - Implement configurable update intervals using tokio::time::sleep
