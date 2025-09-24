@@ -405,6 +405,7 @@ impl Default for MonitorTiming {
 }
 
 /// Shared state for monitor operations using lock-free data structures
+#[derive(Debug)]
 pub struct MonitorSharedState {
     /// Monitor command output
     output: HashMap<String, String>,

@@ -116,6 +116,7 @@ async fn main() -> Result<()> {
         Some(AsyncMonitorCommand::new(
             cmd.clone(),
             final_config.monitor_interval.unwrap_or(5),
+            shared_state_manager.monitor_state().clone(),
         ))
     } else {
         None
@@ -175,23 +176,38 @@ async fn main() -> Result<()> {
         }
 
         // Update monitor command if it exists
-        if let Some(ref mut monitor) = monitor_command {
-            if let Some(result) = monitor.try_get_result() {
-                match result {
-                    monitor::MonitorResult::Success(output) => {
-                        app.update_monitor_output(output);
-                    }
-                    monitor::MonitorResult::Error(output) => {
-                        log::error!("Monitor command failed");
-                        app.update_monitor_output(output);
-                    }
+        if let Some(ref monitor) = monitor_command {
+            // Get output directly from shared state
+            let command_key = monitor.get_command_key();
+            if let Some(output) = shared_state_manager.monitor_state().get_output(command_key) {
+                // Check if there's an error for this command
+                if let Some(_error) = shared_state_manager.monitor_state().get_error(command_key) {
+                    log::error!("Monitor command failed");
+                    app.update_monitor_output(output);
+                } else {
+                    app.update_monitor_output(output);
                 }
             }
 
-            // Update timing information
-            let elapsed = monitor.get_elapsed_since_last_run();
-            let has_run = monitor.has_run_yet();
-            app.update_monitor_timing(elapsed, has_run);
+            // Update timing information from shared state
+            if let Some(timing) = shared_state_manager.monitor_state().get_timing(command_key) {
+                if timing.has_run {
+                    let current_time = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let elapsed_since_last = current_time.saturating_sub(timing.last_run);
+                    let elapsed = Some(std::time::Duration::from_secs(elapsed_since_last));
+                    app.update_monitor_timing(elapsed, timing.has_run);
+                } else {
+                    app.update_monitor_timing(None, false);
+                }
+            } else {
+                // Fallback to monitor's own timing methods for backward compatibility
+                let elapsed = monitor.get_elapsed_since_last_run();
+                let has_run = monitor.has_run_yet();
+                app.update_monitor_timing(elapsed, has_run);
+            }
         }
 
         // Poll for LLM advice responses from advice pane's own channel (for interactive conversations)

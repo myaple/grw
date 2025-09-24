@@ -132,18 +132,20 @@
     - Create integration tests for LLM shared state operations
     - _Requirements: 4.1, 4.3, 4.4_
 
-- [ ] 10. Migrate monitor functionality to shared state
-  - [ ] 10.1 Update AsyncMonitorCommand to use MonitorSharedState
+- [x] 10. Migrate monitor functionality to shared state
+  - [x] 10.1 Update AsyncMonitorCommand to use MonitorSharedState
     - Modify AsyncMonitorCommand to accept Arc<MonitorSharedState> in constructor
     - Remove channel-related fields from AsyncMonitorCommand
     - Update monitor output storage to use shared state
+    - Ensure that monitor interval continues functioning
     - _Requirements: 6.1, 2.1, 2.2_
 
-  - [ ] 10.2 Update main thread monitor polling
+  - [x] 10.2 Update main thread monitor polling
     - Remove monitor.try_get_result() calls from main loop
     - Replace with direct access to shared_state.monitor_state().get_output()
     - Update timing information access to use shared state
     - Create tests for monitor shared state integration
+    - Ensure that monitor interval continues functioning
     - _Requirements: 6.2, 6.4, 2.3_
 
 - [ ] 11. Remove all channel dependencies and cleanup
