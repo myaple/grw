@@ -705,13 +705,16 @@ impl App {
         }
 
         // Forward to advice pane if it's visible and not in commit picker mode
-        if !handled
-            && self.is_showing_advice_pane()
-            && let Some(pane_handled) = self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
-                pane.handle_event(&crate::pane::AppEvent::Key(key))
-            })
-        {
-            handled |= pane_handled;
+        if !handled && !self.is_in_commit_picker_mode() {
+            if let Some(pane_handled) = self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
+                if pane.visible() {
+                    pane.handle_event(&crate::pane::AppEvent::Key(key))
+                } else {
+                    false
+                }
+            }) {
+                handled |= pane_handled;
+            }
         }
 
         handled

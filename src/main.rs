@@ -449,7 +449,8 @@ fn handle_key_event(
         return false; // Don't quit, stay in commit picker mode
     }
 
-    if app.is_showing_advice_pane() && app.forward_key_to_panes(key) {
+    let panes_handled = app.forward_key_to_panes(key);
+    if panes_handled {
         return false;
     }
 
@@ -463,74 +464,39 @@ fn handle_key_event(
             true
         }
         KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_to_bottom(app.current_diff_height);
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_to_bottom(app.current_diff_height);
+            false
         }
         KeyCode::Char('j') if key.modifiers.is_empty() => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_down(app.current_diff_height);
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_down(app.current_diff_height);
+            false
         }
         KeyCode::Down => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_down(app.current_diff_height);
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_down(app.current_diff_height);
+            false
         }
         KeyCode::Char('k') if key.modifiers.is_empty() => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_up();
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_up();
+            false
         }
         KeyCode::Up => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_up();
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_up();
+            false
         }
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_down(app.current_diff_height);
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_down(app.current_diff_height);
+            false
         }
         KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_up();
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_up();
+            false
         }
         KeyCode::Char('g') => {
             if app.handle_g_press() {
