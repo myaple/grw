@@ -129,8 +129,6 @@ async fn main() -> Result<()> {
 
     let mut llm_command = if let Some(client) = &llm_client {
         let command = AsyncLLMCommand::new(client.clone(), Arc::clone(&shared_state_manager.llm_state()));
-        log::debug!("Triggering initial LLM advice refresh");
-        command.refresh();
         Some(command)
     } else {
         None
@@ -196,11 +194,11 @@ async fn main() -> Result<()> {
             app.update_monitor_timing(elapsed, has_run);
         }
 
-        // Poll for LLM advice responses
+        // Poll for LLM advice responses from advice pane's own channel (for interactive conversations)
         app.poll_llm_advice();
 
-        // Poll for LLM commit summary responses
-        app.poll_llm_summaries();
+        // Poll for LLM commit summary responses from shared state
+        // This is now handled by the shared state cache check below
 
         // Check shared state for cached summaries
         if let Some(current_commit) = app.get_current_selected_commit_from_picker() {
@@ -214,20 +212,27 @@ async fn main() -> Result<()> {
         if let Some(ref mut llm) = llm_command {
             if let Some(repo) = &git_repo.repo {
                 let _ = llm.git_repo_tx.send(Some(repo.clone()));
-            }
-
-            if let Some(result) = llm.try_get_result() {
-                match result {
-                    llm::LLMResult::Success(output) => {
-                        app.update_llm_advice(output);
-                    }
-                    llm::LLMResult::Error(output) => {
-                        log::error!("LLM command failed");
-                        app.update_llm_advice(output);
-                    }
-                    llm::LLMResult::Noop => {}
+                // Trigger initial refresh when git repo is first available
+                static INITIAL_REFRESH_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if !INITIAL_REFRESH_DONE.load(std::sync::atomic::Ordering::Relaxed) {
+                    log::debug!("Triggering initial LLM advice refresh");
+                    llm.refresh();
+                    INITIAL_REFRESH_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             }
+        }
+
+        // Poll for LLM advice from shared state
+        if let Some(advice) = shared_state_manager.llm_state().get_current_advice("current") {
+            app.update_llm_advice(advice);
+        }
+
+        // Check for LLM errors in shared state
+        if let Some(error) = shared_state_manager.llm_state().get_error("advice_generation") {
+            log::error!("LLM advice generation error: {error}");
+            app.update_llm_advice(format!("❌ {}", error));
+            // Clear the error after handling it
+            shared_state_manager.llm_state().clear_error("advice_generation");
         }
 
         // Calculate monitor visible height before rendering
@@ -336,8 +341,8 @@ async fn main() -> Result<()> {
         // Handle cache callbacks from CommitSummaryPane
         app.handle_commit_summary_cache_callbacks(shared_state_manager.llm_state());
 
-        // Poll for LLM summary updates
-        app.poll_commit_summary_updates();
+        // Poll for LLM summary updates from shared state
+        // Summary updates are now handled through shared state cache
 
         if crossterm::event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = crossterm::event::read()? {

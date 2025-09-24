@@ -118,14 +118,14 @@
     - Implement task coordination using shared active task tracking
     - _Requirements: 4.2, 4.3, 2.2_
 
-- [ ] 9. Update main thread LLM polling to use shared state
-  - [ ] 9.1 Replace LLM channel polling with shared state access
+- [x] 9. Update main thread LLM polling to use shared state
+  - [x] 9.1 Replace LLM channel polling with shared state access
     - Remove llm_command.try_get_result() calls from main loop
     - Replace with direct access to shared_state.llm_state().get_current_advice()
     - Update summary polling to read from shared summary cache
     - _Requirements: 4.4, 2.3_
 
-  - [ ] 9.2 Update commit summary handling to use shared state
+  - [x] 9.2 Update commit summary handling to use shared state
     - Modify handle_cached_summary_result to read from shared cache
     - Replace GitWorkerResult::CachedSummary handling with shared state access
     - Update summary preloading to use shared state coordination

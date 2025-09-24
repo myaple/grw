@@ -287,4 +287,177 @@ fn test_shared_state_manager_stress_test() {
     // Cleanup should work
     assert!(manager.cleanup().is_ok());
     assert!(manager.shutdown().is_ok());
+}#
+[test]
+fn test_llm_main_thread_polling_integration() {
+    let manager = SharedStateManager::new();
+    let _ = manager.initialize();
+    
+    // Test advice polling from shared state
+    let advice_key = "main_advice";
+    let test_advice = "This is test advice from LLM";
+    
+    // Initially no advice should be available
+    assert!(manager.llm_state().get_current_advice(advice_key).is_none());
+    
+    // Simulate LLM worker updating advice in shared state
+    manager.llm_state().update_advice(advice_key.to_string(), test_advice.to_string());
+    
+    // Main thread should be able to read the advice
+    let retrieved_advice = manager.llm_state().get_current_advice(advice_key);
+    assert!(retrieved_advice.is_some());
+    assert_eq!(retrieved_advice.unwrap(), test_advice);
+    
+    // Test error handling for advice generation
+    let error_msg = "Failed to generate advice";
+    manager.llm_state().set_error("advice_generation".to_string(), error_msg.to_string());
+    
+    let error = manager.llm_state().get_error("advice_generation");
+    assert!(error.is_some());
+    assert_eq!(error.unwrap(), error_msg);
+    
+    // Clear error
+    assert!(manager.llm_state().clear_error("advice_generation"));
+    assert!(manager.llm_state().get_error("advice_generation").is_none());
+}
+
+#[test]
+fn test_llm_summary_cache_polling_integration() {
+    let manager = SharedStateManager::new();
+    let _ = manager.initialize();
+    
+    let commit_sha = "abc123def456";
+    let summary = "This commit adds new functionality";
+    
+    // Initially no summary should be cached
+    assert!(manager.llm_state().get_cached_summary(commit_sha).is_none());
+    
+    // Simulate LLM worker caching a summary
+    manager.llm_state().cache_summary(commit_sha.to_string(), summary.to_string());
+    
+    // Main thread should be able to read the cached summary
+    let cached_summary = manager.llm_state().get_cached_summary(commit_sha);
+    assert!(cached_summary.is_some());
+    assert_eq!(cached_summary.unwrap(), summary);
+    
+    // Test multiple summaries
+    let commit_sha2 = "def456ghi789";
+    let summary2 = "This commit fixes a bug";
+    
+    manager.llm_state().cache_summary(commit_sha2.to_string(), summary2.to_string());
+    
+    // Both summaries should be available
+    assert_eq!(manager.llm_state().get_cached_summary(commit_sha).unwrap(), summary);
+    assert_eq!(manager.llm_state().get_cached_summary(commit_sha2).unwrap(), summary2);
+}
+
+#[test]
+fn test_llm_task_coordination_integration() {
+    let manager = SharedStateManager::new();
+    let _ = manager.initialize();
+    
+    let commit_sha = "task_test_commit";
+    
+    // Initially no task should be active
+    assert!(!manager.llm_state().is_summary_loading(commit_sha));
+    assert_eq!(manager.llm_state().active_summary_task_count(), 0);
+    
+    // Start a summary task
+    manager.llm_state().start_summary_task(commit_sha.to_string());
+    
+    // Task should now be active
+    assert!(manager.llm_state().is_summary_loading(commit_sha));
+    assert_eq!(manager.llm_state().active_summary_task_count(), 1);
+    
+    // Complete the task
+    manager.llm_state().complete_summary_task(commit_sha);
+    
+    // Task should no longer be active
+    assert!(!manager.llm_state().is_summary_loading(commit_sha));
+    assert_eq!(manager.llm_state().active_summary_task_count(), 0);
+    
+    // Test advice task coordination
+    let advice_task_id = "advice_task_1";
+    
+    assert!(!manager.llm_state().is_advice_loading(advice_task_id));
+    assert_eq!(manager.llm_state().active_advice_task_count(), 0);
+    
+    manager.llm_state().start_advice_task(advice_task_id.to_string());
+    
+    assert!(manager.llm_state().is_advice_loading(advice_task_id));
+    assert_eq!(manager.llm_state().active_advice_task_count(), 1);
+    
+    manager.llm_state().complete_advice_task(advice_task_id);
+    
+    assert!(!manager.llm_state().is_advice_loading(advice_task_id));
+    assert_eq!(manager.llm_state().active_advice_task_count(), 0);
+}
+
+#[test]
+fn test_llm_concurrent_polling_and_updates() {
+    let manager = Arc::new(SharedStateManager::new());
+    let _ = manager.initialize();
+    
+    let mut handles = vec![];
+    
+    // Simulate main thread polling
+    let manager_main = Arc::clone(&manager);
+    let main_handle = thread::spawn(move || {
+        for i in 0..50 {
+            // Poll for advice
+            let _advice = manager_main.llm_state().get_current_advice("main_advice");
+            
+            // Poll for summaries
+            let commit_sha = format!("commit_{}", i % 5);
+            let _summary = manager_main.llm_state().get_cached_summary(&commit_sha);
+            
+            // Check for errors
+            let _error = manager_main.llm_state().get_error("advice_generation");
+            
+            thread::sleep(Duration::from_millis(1));
+        }
+    });
+    handles.push(main_handle);
+    
+    // Simulate LLM workers updating shared state
+    for worker_id in 0..3 {
+        let manager_worker = Arc::clone(&manager);
+        let worker_handle = thread::spawn(move || {
+            for i in 0..20 {
+                let commit_sha = format!("commit_{}", i % 5);
+                let summary = format!("Summary from worker {} for iteration {}", worker_id, i);
+                
+                // Cache summary
+                manager_worker.llm_state().cache_summary(commit_sha.clone(), summary);
+                
+                // Update advice
+                let advice = format!("Advice from worker {} iteration {}", worker_id, i);
+                manager_worker.llm_state().update_advice("main_advice".to_string(), advice);
+                
+                // Simulate task coordination
+                manager_worker.llm_state().start_summary_task(commit_sha.clone());
+                thread::sleep(Duration::from_millis(1));
+                manager_worker.llm_state().complete_summary_task(&commit_sha);
+                
+                thread::sleep(Duration::from_millis(2));
+            }
+        });
+        handles.push(worker_handle);
+    }
+    
+    // Wait for all threads to complete
+    for handle in handles {
+        handle.join().expect("Thread should complete successfully");
+    }
+    
+    // Verify system is still functional
+    let stats = manager.get_statistics();
+    assert!(stats.llm_summaries_cached > 0);
+    
+    // Verify we can still read data
+    let advice = manager.llm_state().get_current_advice("main_advice");
+    assert!(advice.is_some());
+    
+    // Cleanup
+    assert!(manager.cleanup().is_ok());
 }
