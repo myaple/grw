@@ -23,6 +23,7 @@ mod shared_state;
 mod ui;
 
 use std::env;
+use std::sync::Arc;
 
 use config::{Args, Config};
 use git::AsyncGitRepo;
@@ -54,14 +55,29 @@ async fn main() -> Result<()> {
     log::debug!("Debug mode enabled");
     
     // Initialize shared state manager
-    let shared_state = SharedStateManager::new();
-    if let Err(e) = shared_state.initialize() {
+    let shared_state_manager = SharedStateManager::new();
+    if let Err(e) = shared_state_manager.initialize() {
         error!("Failed to initialize shared state: {}", e);
         return Err(color_eyre::eyre::eyre!("Failed to initialize shared state: {}", e));
     }
     info!("Shared state manager initialized successfully");
     
-    let mut git_repo = AsyncGitRepo::new(repo_path, 500)?;
+    // Create GitWorker with shared state and start it running continuously
+    let mut git_worker = crate::git_worker::GitWorker::new_with_shared_state(
+        repo_path.clone(), 
+        Arc::clone(&shared_state_manager.git_state())
+    )?;
+    
+    // Start the GitWorker in a background task
+    tokio::spawn(async move {
+        if let Err(e) = git_worker.run_continuous(500).await {
+            error!("GitWorker continuous run failed: {}", e);
+        }
+    });
+    
+    // Keep a reference to the repo path for other uses
+    let repo_path_for_git_repo = repo_path.clone();
+    let mut git_repo = AsyncGitRepo::new(repo_path_for_git_repo, 500)?;
 
     let llm_client = if let Some(llm_config) = &final_config.llm {
         if llm_config.api_key.is_some() || env::var("OPENAI_API_KEY").is_ok() {
@@ -89,9 +105,7 @@ async fn main() -> Result<()> {
         llm_client.clone(),
     );
 
-    // Set up GitWorker communication for SummaryPreloader
-    let git_worker_tx = git_repo.get_git_worker_tx();
-    app.set_summary_preloader_git_worker_tx(git_worker_tx);
+    // SummaryPreloader will use shared state instead of channels
 
     // Configure summary preloader from config
     let preload_config = final_config.get_summary_preload_config();
@@ -129,64 +143,35 @@ async fn main() -> Result<()> {
     execute!(io::stdout(), EnterAlternateScreen)?;
 
     loop {
-        // Poll for git updates (but skip if a commit is selected to avoid overriding commit files)
+        // Read git updates from shared state (but skip if a commit is selected to avoid overriding commit files)
         if app.get_selected_commit().is_none() {
-            git_repo.update();
-            if let Some(result) = git_repo.try_get_result() {
-                match result {
-                    git::GitWorkerResult::Update(repo) => {
-                        let changed_files = repo.get_display_files();
-                        let tree = repo.get_file_tree();
+            // Check for git updates from shared state
+            if let Some(repo) = shared_state_manager.git_state().get_repo() {
+                let changed_files = repo.get_display_files();
+                let tree = repo.get_file_tree();
 
-                        app.update_files(changed_files.clone());
-                        app.update_tree(&tree);
-                        git_repo.repo = Some(repo);
-                    }
-                    git::GitWorkerResult::Error(e) => {
-                        error!("Git worker error: {e}");
-                    }
-                    git::GitWorkerResult::CommitHistory(_) => {
-                        // This is handled in the commit picker activation, not here
-                        debug!("Received commit history result in main loop (ignored)");
-                    }
-                    git::GitWorkerResult::CachedSummary(cached_summary) => {
-                        // Handle cached summary result for CommitSummaryPane
-                        if let Some(current_commit) = app.get_current_selected_commit_from_picker() {
-                            app.handle_cached_summary_result(cached_summary, &current_commit.sha);
-                        }
-                    }
-                    git::GitWorkerResult::SummaryCached => {
-                        // Summary has been cached in GitWorker
-                        debug!("Summary cached confirmation received");
-                    }
-                }
+                app.update_files(changed_files.clone());
+                app.update_tree(&tree);
+                git_repo.repo = Some(repo);
+            }
+            
+            // Check for git errors in shared state
+            if let Some(error) = shared_state_manager.git_state().get_error("git_status") {
+                error!("Git worker error: {error}");
+                // Clear the error after handling it
+                shared_state_manager.git_state().clear_error("git_status");
             }
         } else {
             // Still update the git repo state for status bar, but don't override app files
-            git_repo.update();
-            if let Some(result) = git_repo.try_get_result() {
-                match result {
-                    git::GitWorkerResult::Update(repo) => {
-                        git_repo.repo = Some(repo);
-                    }
-                    git::GitWorkerResult::Error(e) => {
-                        error!("Git worker error: {e}");
-                    }
-                    git::GitWorkerResult::CommitHistory(_) => {
-                        // This is handled in the commit picker activation, not here
-                        debug!("Received commit history result in main loop (ignored)");
-                    }
-                    git::GitWorkerResult::CachedSummary(cached_summary) => {
-                        // Handle cached summary result for CommitSummaryPane
-                        if let Some(current_commit) = app.get_current_selected_commit_from_picker() {
-                            app.handle_cached_summary_result(cached_summary, &current_commit.sha);
-                        }
-                    }
-                    git::GitWorkerResult::SummaryCached => {
-                        // Summary has been cached in GitWorker
-                        debug!("Summary cached confirmation received");
-                    }
-                }
+            if let Some(repo) = shared_state_manager.git_state().get_repo() {
+                git_repo.repo = Some(repo);
+            }
+            
+            // Check for git errors in shared state
+            if let Some(error) = shared_state_manager.git_state().get_error("git_status") {
+                error!("Git worker error: {error}");
+                // Clear the error after handling it
+                shared_state_manager.git_state().clear_error("git_status");
             }
         }
 
@@ -215,6 +200,14 @@ async fn main() -> Result<()> {
 
         // Poll for LLM commit summary responses
         app.poll_llm_summaries();
+
+        // Check shared state for cached summaries
+        if let Some(current_commit) = app.get_current_selected_commit_from_picker() {
+            if let Some(cached_summary) = shared_state_manager.llm_state().get_cached_summary(&current_commit.sha) {
+                // Handle cached summary from shared state
+                app.handle_cached_summary_result(Some(cached_summary), &current_commit.sha);
+            }
+        }
 
         // Update llm command if it exists
         if let Some(ref mut llm) = llm_command {
@@ -347,7 +340,7 @@ async fn main() -> Result<()> {
 
         if crossterm::event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = crossterm::event::read()? {
-                if handle_key_event(key, &mut app, &git_repo, &final_config) {
+                if handle_key_event(key, &mut app, &git_repo, &final_config, &shared_state_manager) {
                     break;
                 }
             }
@@ -397,7 +390,7 @@ async fn main() -> Result<()> {
     let _ = terminal.clear();
 
     // Cleanup shared state
-    if let Err(e) = shared_state.shutdown() {
+    if let Err(e) = shared_state_manager.shutdown() {
         error!("Error during shared state shutdown: {}", e);
     } else {
         info!("Shared state shutdown completed successfully");
@@ -412,6 +405,7 @@ fn handle_key_event(
     app: &mut App,
     git_repo: &AsyncGitRepo,
     config: &Config,
+    shared_state_manager: &SharedStateManager,
 ) -> bool {
     // Handle commit picker mode key events first
     if app.is_in_commit_picker_mode() {
@@ -648,11 +642,11 @@ fn handle_key_event(
                     app.enter_commit_picker_mode();
                     app.set_commit_picker_loading();
 
-                    // Create a temporary GitWorker to load commit history
-                    let (_tx, rx) = tokio::sync::mpsc::channel(1);
-                    let (result_tx, _result_rx) = tokio::sync::mpsc::channel(1);
-
-                    match crate::git_worker::GitWorker::new(repo.path.clone(), rx, result_tx) {
+                    // Create a temporary GitWorker to load commit history using shared state
+                    match crate::git_worker::GitWorker::new_with_shared_state(
+                        repo.path.clone(), 
+                        Arc::clone(&shared_state_manager.git_state())
+                    ) {
                         Ok(mut git_worker) => {
                             // Configure cache size from config
                             git_worker.set_cache_size(config.get_commit_cache_size());
@@ -747,7 +741,8 @@ mod tests {
         let ctrl_p_key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
 
         // Handle the key event
-        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default());
+        let dummy_shared_state = SharedStateManager::new();
+        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
 
         // Should not quit
         assert!(!should_quit);
@@ -777,7 +772,8 @@ mod tests {
         let ctrl_p_key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
 
         // Handle the key event
-        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default());
+        let dummy_shared_state = SharedStateManager::new();
+        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
 
         // Should not quit
         assert!(!should_quit);
@@ -807,7 +803,8 @@ mod tests {
         let ctrl_p_key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
 
         // Handle the key event
-        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default());
+        let dummy_shared_state = SharedStateManager::new();
+        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
 
         // Should not quit
         assert!(!should_quit);
@@ -887,7 +884,8 @@ mod tests {
         let escape_key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
 
         // Handle the key event
-        let should_quit = handle_key_event(escape_key, &mut app, &git_repo, &Config::default());
+        let dummy_shared_state = SharedStateManager::new();
+        let should_quit = handle_key_event(escape_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
 
         // Should not quit
         assert!(!should_quit);
@@ -920,7 +918,8 @@ mod tests {
         let question_key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
 
         // Handle the key event
-        let should_quit = handle_key_event(question_key, &mut app, &git_repo, &Config::default());
+        let dummy_shared_state = SharedStateManager::new();
+        let should_quit = handle_key_event(question_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
 
         // Should not quit
         assert!(!should_quit);
@@ -932,7 +931,7 @@ mod tests {
         assert!(app.is_showing_help());
 
         // Press '?' again to toggle help off
-        let should_quit2 = handle_key_event(question_key, &mut app, &git_repo, &Config::default());
+        let should_quit2 = handle_key_event(question_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
         assert!(!should_quit2);
 
         // Help should now be hidden again
@@ -1052,7 +1051,8 @@ mod tests {
         let ctrl_w_key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
 
         // Handle the key event
-        let should_quit = handle_key_event(ctrl_w_key, &mut app, &git_repo, &Config::default());
+        let dummy_shared_state = SharedStateManager::new();
+        let should_quit = handle_key_event(ctrl_w_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
 
         // Should not quit
         assert!(!should_quit);

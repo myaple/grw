@@ -83,14 +83,14 @@
     - Create integration tests for GitWorker shared state operations
     - _Requirements: 3.4, 3.5, 2.3_
 
-- [ ] 7. Update main thread to read from GitSharedState
-  - [ ] 7.1 Replace git channel polling with shared state access
+- [x] 7. Update main thread to read from GitSharedState
+  - [x] 7.1 Replace git channel polling with shared state access
     - Remove git_repo.try_get_result() calls from main loop
     - Replace with direct access to shared_state.git_state().get_repo()
     - Update error handling to check shared error state
     - _Requirements: 3.4, 2.3_
 
-  - [ ] 7.2 Update commit picker to use shared commit cache
+  - [x] 7.2 Update commit picker to use shared commit cache
     - Modify commit picker activation to read from shared commit cache
     - Replace GitWorkerResult::CommitHistory handling with shared state access
     - Update commit loading logic to trigger shared state updates

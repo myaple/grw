@@ -1059,6 +1059,8 @@ impl App {
 
     /// Check GitWorker cache for summary and set it in CommitSummaryPane if available
     pub fn check_and_set_cached_summary(&mut self, commit_sha: &str) {
+        // This method will be updated to use shared state when called from main.rs
+        // For now, keep the old implementation for backward compatibility
         if let Some(tx) = self.summary_preloader.get_git_worker_tx() {
             let commit_sha = commit_sha.to_string();
             
@@ -1067,6 +1069,17 @@ impl App {
                     log::error!("Failed to send GetCachedSummary command: {}", e);
                 }
             });
+        }
+    }
+
+    /// Check shared state cache for summary and set it in CommitSummaryPane if available (new method)
+    pub fn check_and_set_cached_summary_from_shared_state(
+        &mut self, 
+        commit_sha: &str,
+        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>
+    ) {
+        if let Some(cached_summary) = llm_state.get_cached_summary(commit_sha) {
+            self.handle_cached_summary_result(Some(cached_summary), commit_sha);
         }
     }
 
@@ -1093,8 +1106,10 @@ impl App {
         }
     }
 
-    /// Cache a newly generated summary in GitWorker
+    /// Cache a newly generated summary in shared state
     pub fn cache_generated_summary(&mut self, commit_sha: String, summary: String) {
+        // This method will be updated to use shared state when called from main.rs
+        // For now, keep the old implementation for backward compatibility
         if let Some(tx) = self.summary_preloader.get_git_worker_tx() {
             tokio::spawn(async move {
                 if let Err(e) = tx.send(crate::git::GitWorkerCommand::CacheSummary(commit_sha, summary)).await {
@@ -1102,6 +1117,16 @@ impl App {
                 }
             });
         }
+    }
+
+    /// Cache a newly generated summary in shared state (new method)
+    pub fn cache_generated_summary_in_shared_state(
+        &mut self, 
+        commit_sha: String, 
+        summary: String,
+        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>
+    ) {
+        llm_state.cache_summary(commit_sha, summary);
     }
 
     /// Handle cache callbacks from CommitSummaryPane
