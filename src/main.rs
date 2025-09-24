@@ -103,6 +103,7 @@ async fn main() -> Result<()> {
             config::Theme::Light => ui::Theme::Light,
         },
         llm_client.clone(),
+        Arc::clone(&shared_state_manager.llm_state()),
     );
 
     // SummaryPreloader will use shared state instead of channels
@@ -127,7 +128,7 @@ async fn main() -> Result<()> {
     }
 
     let mut llm_command = if let Some(client) = &llm_client {
-        let command = AsyncLLMCommand::new(client.clone());
+        let command = AsyncLLMCommand::new(client.clone(), Arc::clone(&shared_state_manager.llm_state()));
         log::debug!("Triggering initial LLM advice refresh");
         command.refresh();
         Some(command)
@@ -322,7 +323,7 @@ async fn main() -> Result<()> {
 
         // Update commit summary pane with current selection from commit picker
         if app.is_in_commit_picker_mode() {
-            app.update_commit_summary_with_current_selection();
+            app.update_commit_summary_with_current_selection(shared_state_manager.llm_state());
             
             // Trigger continuous pre-loading as user navigates
             if let Some((commits, current_index)) = app.get_commit_picker_state() {
@@ -333,7 +334,7 @@ async fn main() -> Result<()> {
         }
 
         // Handle cache callbacks from CommitSummaryPane
-        app.handle_commit_summary_cache_callbacks();
+        app.handle_commit_summary_cache_callbacks(shared_state_manager.llm_state());
 
         // Poll for LLM summary updates
         app.poll_commit_summary_updates();
@@ -718,11 +719,15 @@ mod tests {
     use super::*;
     use crate::ui::{App, Theme};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    
+    fn create_test_llm_state() -> Arc<crate::shared_state::LlmSharedState> {
+        Arc::new(crate::shared_state::LlmSharedState::new())
+    }
 
     #[tokio::test]
     async fn test_ctrl_p_activates_commit_picker() {
         // Create a test app with diff panel enabled
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
         // Create a mock git repo
         let temp_dir = tempfile::tempdir().unwrap();
@@ -755,7 +760,7 @@ mod tests {
     #[tokio::test]
     async fn test_ctrl_p_only_activates_when_diff_panel_shown() {
         // Create a test app with diff panel disabled
-        let mut app = App::new_with_config(false, true, Theme::Dark, None);
+        let mut app = App::new_with_config(false, true, Theme::Dark, None, create_test_llm_state());
 
         let temp_dir = tempfile::tempdir().unwrap();
         let repo_path = temp_dir.path().to_path_buf();
@@ -785,7 +790,7 @@ mod tests {
     #[tokio::test]
     async fn test_ctrl_p_does_not_activate_when_already_in_commit_picker_mode() {
         // Create a test app with diff panel enabled
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
         let temp_dir = tempfile::tempdir().unwrap();
         let repo_path = temp_dir.path().to_path_buf();
@@ -816,7 +821,7 @@ mod tests {
     #[tokio::test]
     async fn test_commit_selection_and_return_to_normal_mode() {
         // Create a test app with diff panel enabled
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
         // Enter commit picker mode
         app.enter_commit_picker_mode();
@@ -866,7 +871,7 @@ mod tests {
     #[tokio::test]
     async fn test_escape_exits_commit_picker_mode() {
         // Create a test app with diff panel enabled
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
         let temp_dir = tempfile::tempdir().unwrap();
         let repo_path = temp_dir.path().to_path_buf();
@@ -897,7 +902,7 @@ mod tests {
     #[tokio::test]
     async fn test_question_mark_toggles_help_in_commit_picker_mode() {
         // Create a test app with diff panel enabled
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
         let temp_dir = tempfile::tempdir().unwrap();
         let repo_path = temp_dir.path().to_path_buf();
@@ -947,7 +952,7 @@ mod tests {
         use crate::ui;
 
         // Create a test app with diff panel enabled
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
         let temp_dir = tempfile::tempdir().unwrap();
         let repo_path = temp_dir.path().to_path_buf();
@@ -987,7 +992,7 @@ mod tests {
     #[tokio::test]
     async fn test_selected_commit_persists_and_can_be_cleared() {
         // Create a test app
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
         // Initially no commit should be selected
         assert!(app.get_selected_commit().is_none());
@@ -1024,7 +1029,7 @@ mod tests {
     #[tokio::test]
     async fn test_ctrl_w_clears_selected_commit() {
         // Create a test app
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
         let temp_dir = tempfile::tempdir().unwrap();
         let repo_path = temp_dir.path().to_path_buf();

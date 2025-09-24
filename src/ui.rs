@@ -10,6 +10,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem},
 };
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppMode {
@@ -185,6 +186,7 @@ impl App {
         show_changed_files_pane: bool,
         theme: Theme,
         llm_client: Option<LlmClient>,
+        llm_state: Arc<crate::shared_state::LlmSharedState>,
     ) -> Self {
         let pane_registry = if let Some(ref llm_client) = llm_client {
             PaneRegistry::new(theme, llm_client.clone())
@@ -228,7 +230,7 @@ impl App {
             last_active_pane: ActivePane::default(),
             app_mode: AppMode::Normal,
             selected_commit: None,
-            summary_preloader: SummaryPreloader::new(llm_client.clone()),
+            summary_preloader: SummaryPreloader::new(llm_client.clone(), Arc::clone(&llm_state)),
         }
     }
 
@@ -1040,7 +1042,7 @@ impl App {
             .unwrap_or(false)
     }
 
-    pub fn update_commit_summary_with_current_selection(&mut self) {
+    pub fn update_commit_summary_with_current_selection(&mut self, llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>) {
         if let Some(current_commit) = self.get_current_selected_commit_from_picker() {
             let commit_sha = current_commit.sha.clone();
             
@@ -1053,35 +1055,24 @@ impl App {
                 });
             
             // Then check if we have a cached summary and set it if available
-            self.check_and_set_cached_summary(&commit_sha);
+            self.check_and_set_cached_summary(&commit_sha, llm_state);
         }
     }
 
-    /// Check GitWorker cache for summary and set it in CommitSummaryPane if available
-    pub fn check_and_set_cached_summary(&mut self, commit_sha: &str) {
-        // This method will be updated to use shared state when called from main.rs
-        // For now, keep the old implementation for backward compatibility
-        if let Some(tx) = self.summary_preloader.get_git_worker_tx() {
-            let commit_sha = commit_sha.to_string();
-            
-            tokio::spawn(async move {
-                if let Err(e) = tx.send(crate::git::GitWorkerCommand::GetCachedSummary(commit_sha)).await {
-                    log::error!("Failed to send GetCachedSummary command: {}", e);
-                }
-            });
+    /// Check shared state cache for summary and set it in CommitSummaryPane if available
+    pub fn check_and_set_cached_summary(&mut self, commit_sha: &str, llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>) {
+        // Check shared state cache directly
+        if let Some(summary) = llm_state.get_cached_summary(commit_sha) {
+            self.pane_registry
+                .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
+                        commit_summary.set_cached_summary(commit_sha, summary);
+                    }
+                });
         }
     }
 
-    /// Check shared state cache for summary and set it in CommitSummaryPane if available (new method)
-    pub fn check_and_set_cached_summary_from_shared_state(
-        &mut self, 
-        commit_sha: &str,
-        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>
-    ) {
-        if let Some(cached_summary) = llm_state.get_cached_summary(commit_sha) {
-            self.handle_cached_summary_result(Some(cached_summary), commit_sha);
-        }
-    }
+
 
     /// Handle cached summary result from GitWorker
     pub fn handle_cached_summary_result(&mut self, cached_summary: Option<String>, commit_sha: &str) {
@@ -1107,30 +1098,15 @@ impl App {
     }
 
     /// Cache a newly generated summary in shared state
-    pub fn cache_generated_summary(&mut self, commit_sha: String, summary: String) {
-        // This method will be updated to use shared state when called from main.rs
-        // For now, keep the old implementation for backward compatibility
-        if let Some(tx) = self.summary_preloader.get_git_worker_tx() {
-            tokio::spawn(async move {
-                if let Err(e) = tx.send(crate::git::GitWorkerCommand::CacheSummary(commit_sha, summary)).await {
-                    log::error!("Failed to send CacheSummary command: {}", e);
-                }
-            });
-        }
-    }
-
-    /// Cache a newly generated summary in shared state (new method)
-    pub fn cache_generated_summary_in_shared_state(
-        &mut self, 
-        commit_sha: String, 
-        summary: String,
-        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>
-    ) {
+    pub fn cache_generated_summary(&mut self, commit_sha: String, summary: String, llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>) {
+        // Cache directly in shared state
         llm_state.cache_summary(commit_sha, summary);
     }
 
+
+
     /// Handle cache callbacks from CommitSummaryPane
-    pub fn handle_commit_summary_cache_callbacks(&mut self) {
+    pub fn handle_commit_summary_cache_callbacks(&mut self, llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>) {
         if let Some(cache_callback) = self.pane_registry
             .with_pane_mut(&PaneId::CommitSummary, |pane| {
                 pane.as_commit_summary_pane_mut()
@@ -1139,7 +1115,7 @@ impl App {
             .flatten()
         {
             let (commit_sha, summary) = cache_callback;
-            self.cache_generated_summary(commit_sha, summary);
+            self.cache_generated_summary(commit_sha, summary, llm_state);
         }
     }
 
@@ -1305,10 +1281,7 @@ impl App {
         }
     }
 
-    // Summary preloader methods
-    pub fn set_summary_preloader_git_worker_tx(&mut self, tx: tokio::sync::mpsc::Sender<crate::git::GitWorkerCommand>) {
-        self.summary_preloader.set_git_worker_tx(tx);
-    }
+    // Summary preloader methods - no longer needed with shared state
 
     pub fn preload_summaries(&mut self, commits: &[CommitInfo]) {
         self.summary_preloader.preload_summaries(commits);
@@ -1657,7 +1630,8 @@ mod tests {
             llm_config.api_key = Some("dummy_key".to_string());
         }
         let llm_client = LlmClient::new(llm_config).ok();
-        App::new_with_config(show_diff_panel, show_changed_files_pane, theme, llm_client)
+        let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
+        App::new_with_config(show_diff_panel, show_changed_files_pane, theme, llm_client, llm_state)
     }
 
     #[test]

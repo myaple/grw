@@ -861,11 +861,16 @@ impl Pane for HelpPane {
 mod help_tests {
     use super::*;
     use crate::ui::{App, Theme};
+    use std::sync::Arc;
+    
+    fn create_test_llm_state() -> Arc<crate::shared_state::LlmSharedState> {
+        Arc::new(crate::shared_state::LlmSharedState::new())
+    }
     use crate::git::CommitInfo;
 
     #[test]
     fn test_help_detects_commit_picker_mode() {
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
         
         // Test normal mode
         assert!(!app.is_in_commit_picker_mode());
@@ -881,7 +886,7 @@ mod help_tests {
 
     #[test]
     fn test_help_detects_selected_commit() {
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
         
         // Initially no commit selected
         assert!(app.get_selected_commit().is_none());
@@ -1004,7 +1009,7 @@ mod help_tests {
         
         // The UI should NOT be updated since it's for a different commit
         assert!(pane.llm_summary.is_none());
-        assert_eq!(pane.loading_state, CommitSummaryLoadingState::LoadingFiles);
+        assert_eq!(pane.loading_state, CommitSummaryLoadingState::Loaded);
     }
 }
 
@@ -1822,7 +1827,6 @@ pub struct CommitSummaryPane {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommitSummaryLoadingState {
     NoCommit,
-    LoadingFiles,
     LoadingSummary,
     Loaded,
     Error,
@@ -1886,7 +1890,9 @@ impl CommitSummaryPane {
 
             // Update loading state based on new commit
             if self.current_commit.is_some() {
-                self.loading_state = CommitSummaryLoadingState::LoadingFiles;
+                // Since commits from get_commit_history already have files_changed populated,
+                // we can immediately show the files and only wait for LLM summary
+                self.loading_state = CommitSummaryLoadingState::Loaded;
                 // Don't request LLM summary immediately - let the App check cache first
             } else {
                 self.loading_state = CommitSummaryLoadingState::NoCommit;
@@ -2155,16 +2161,7 @@ impl Pane for CommitSummaryPane {
                 f.render_widget(paragraph, area);
                 return Ok(());
             }
-            CommitSummaryLoadingState::LoadingFiles => {
-                let paragraph = Paragraph::new("⏳ Loading commit details...").block(
-                    Block::default()
-                        .title(self.title())
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border_color())),
-                );
-                f.render_widget(paragraph, area);
-                return Ok(());
-            }
+
             CommitSummaryLoadingState::Error => {
                 let error_text = if let Some(error) = &self.summary_error {
                     format!("❌ Error loading commit details:\n{}", error)
@@ -2646,6 +2643,53 @@ mod tests {
         assert!(pane_no_llm.llm_client.is_none());
         assert!(pane_no_llm.llm_summary.is_none());
         assert!(!pane_no_llm.is_loading_summary);
+    }
+
+    #[test]
+    fn test_commit_files_display_immediately() {
+        let mut pane = CommitSummaryPane::new();
+        
+        // Create a commit with file changes (simulating data from get_commit_history)
+        let commit = crate::git::CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            author: "Test Author".to_string(),
+            date: "2023-01-01".to_string(),
+            files_changed: vec![
+                crate::git::CommitFileChange {
+                    path: std::path::PathBuf::from("src/main.rs"),
+                    status: crate::git::FileChangeStatus::Modified,
+                    additions: 10,
+                    deletions: 5,
+                },
+                crate::git::CommitFileChange {
+                    path: std::path::PathBuf::from("src/lib.rs"),
+                    status: crate::git::FileChangeStatus::Added,
+                    additions: 20,
+                    deletions: 0,
+                },
+            ],
+        };
+
+        // Update the pane with the commit
+        pane.update_commit(Some(commit.clone()));
+
+        // Verify that the pane is immediately in Loaded state (not LoadingFiles)
+        assert_eq!(pane.loading_state, CommitSummaryLoadingState::Loaded);
+        
+        // Verify that the commit data is available
+        assert!(pane.current_commit.is_some());
+        let current_commit = pane.current_commit.as_ref().unwrap();
+        assert_eq!(current_commit.files_changed.len(), 2);
+        assert_eq!(current_commit.files_changed[0].path, std::path::PathBuf::from("src/main.rs"));
+        assert_eq!(current_commit.files_changed[1].path, std::path::PathBuf::from("src/lib.rs"));
+        
+        // LLM summary should still be None (not loaded yet)
+        assert!(pane.llm_summary.is_none());
+        
+        // But the files should be immediately available for display
+        // (This would be verified in the render method, which would show files immediately)
     }
 
     #[test]

@@ -97,21 +97,21 @@
     - Create tests for commit picker shared state integration
     - _Requirements: 3.2, 3.4_
 
-- [ ] 8. Migrate LLM workers to use shared state
-  - [ ] 8.1 Update AsyncLLMCommand to use LlmSharedState
+- [x] 8. Migrate LLM workers to use shared state
+  - [x] 8.1 Update AsyncLLMCommand to use LlmSharedState
     - Modify AsyncLLMCommand to accept Arc<LlmSharedState> in constructor
     - Remove channel-related fields (result_rx, result_tx) from AsyncLLMCommand
     - Update advice generation to store results in shared state
     - _Requirements: 4.4, 2.1, 2.2_
 
-  - [ ] 8.2 Implement shared state operations in LLM workers
+  - [x] 8.2 Implement shared state operations in LLM workers
     - Replace channel sends with direct shared state updates in advice generation
     - Update summary generation to use shared summary cache
     - Modify task tracking to use shared active task collections
     - Remove channel message handling from LLM worker loops
     - _Requirements: 4.1, 4.2, 4.4_
 
-  - [ ] 8.3 Update SummaryPreloader to use shared state
+  - [x] 8.3 Update SummaryPreloader to use shared state
     - Modify SummaryPreloader to use LlmSharedState instead of channels
     - Update preload_single_summary to check and update shared cache
     - Replace GitWorkerCommand sends with direct shared state access

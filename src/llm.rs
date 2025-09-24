@@ -1,12 +1,13 @@
 use crate::config::LlmConfig;
 use crate::git::GitRepo;
+use crate::shared_state::LlmSharedState;
 use log::debug;
 use openai_api_rs::v1::api::OpenAIClient;
 use openai_api_rs::v1::chat_completion::{self, ChatCompletionRequest};
 use std::env;
 use std::fs;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{mpsc, Mutex, watch};
 
 
 
@@ -79,9 +80,9 @@ impl LlmClient {
 
 #[derive(Debug)]
 pub struct AsyncLLMCommand {
-    pub result_rx: mpsc::Receiver<LLMResult>,
     pub git_repo_tx: watch::Sender<Option<GitRepo>>,
     refresh_tx: mpsc::Sender<()>,
+    llm_state: Arc<LlmSharedState>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,10 +93,10 @@ pub enum LLMResult {
 }
 
 impl AsyncLLMCommand {
-    pub fn new(llm_client: LlmClient) -> Self {
-        let (result_tx, result_rx) = mpsc::channel(32);
+    pub fn new(llm_client: LlmClient, llm_state: Arc<LlmSharedState>) -> Self {
         let (git_repo_tx, mut git_repo_rx) = watch::channel(None);
         let (refresh_tx, mut refresh_rx) = mpsc::channel(1);
+        let llm_state_clone = Arc::clone(&llm_state);
 
         tokio::spawn(async move {
             loop {
@@ -118,11 +119,19 @@ impl AsyncLLMCommand {
 
                         if diff.is_empty() {
                             debug!("No diff found, skipping LLM query.");
-                            if result_tx.send(LLMResult::Noop).await.is_err() {
-                                break;
-                            }
+                            // Store noop result in shared state
+                            llm_state_clone.update_advice("current".to_string(), "No changes to review".to_string());
                             continue;
                         }
+
+                        // Generate a task ID for tracking this advice generation
+                        let task_id = format!("advice_{}", std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis());
+                        
+                        // Start tracking the advice task
+                        llm_state_clone.start_advice_task(task_id.clone());
 
                         let claude_instructions =
                             fs::read_to_string("CLAUDE.md").unwrap_or_default();
@@ -153,16 +162,17 @@ impl AsyncLLMCommand {
 
                         match llm_client.get_llm_advice(history).await {
                             Ok(content) => {
-                                if result_tx.send(LLMResult::Success(content)).await.is_err() {
-                                    break;
-                                }
+                                // Store advice result in shared state
+                                llm_state_clone.update_advice("current".to_string(), content.clone());
+                                llm_state_clone.cache_advice(task_id.clone(), content);
+                                llm_state_clone.complete_advice_task(&task_id);
                                 debug!("Async LLM command completed successfully");
                             }
                             Err(e) => {
                                 let error_str = format!("LLM command execution failed: {e}");
-                                if result_tx.send(LLMResult::Error(error_str)).await.is_err() {
-                                    break;
-                                }
+                                // Store error in shared state
+                                llm_state_clone.set_error("advice_generation".to_string(), error_str.clone());
+                                llm_state_clone.complete_advice_task(&task_id);
                                 debug!("Async LLM command execution error: {e}");
                             }
                         }
@@ -173,9 +183,9 @@ impl AsyncLLMCommand {
         });
 
         Self {
-            result_rx,
             git_repo_tx,
             refresh_tx,
+            llm_state,
         }
     }
 
@@ -184,7 +194,20 @@ impl AsyncLLMCommand {
         let _ = self.refresh_tx.try_send(());
     }
 
-    pub fn try_get_result(&mut self) -> Option<LLMResult> {
-        self.result_rx.try_recv().ok()
+    pub fn try_get_result(&self) -> Option<LLMResult> {
+        // Check for errors first
+        if let Some(error) = self.llm_state.get_error("advice_generation") {
+            // Clear the error after reading it
+            self.llm_state.clear_error("advice_generation");
+            return Some(LLMResult::Error(error));
+        }
+
+        // Check for current advice
+        if let Some(advice) = self.llm_state.get_current_advice("current") {
+            return Some(LLMResult::Success(advice));
+        }
+
+        // No result available
+        None
     }
 }

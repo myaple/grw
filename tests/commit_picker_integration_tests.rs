@@ -1,7 +1,13 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::sync::Arc;
 
 // Import the main application modules
 use grw::{App, CommitFileChange, CommitInfo, FileChangeStatus, Theme};
+
+/// Helper function to create test LLM shared state
+fn create_test_llm_state() -> Arc<grw::shared_state::LlmSharedState> {
+    Arc::new(grw::shared_state::LlmSharedState::new())
+}
 
 /// Helper function to create test commits
 fn create_test_commits() -> Vec<CommitInfo> {
@@ -59,7 +65,7 @@ fn create_test_commits() -> Vec<CommitInfo> {
 #[tokio::test]
 async fn test_complete_commit_picker_workflow_enter_navigate_select_return() {
     // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None);
+    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
     // Step 1: Verify initial state - not in commit picker mode
     assert!(!app.is_in_commit_picker_mode());
@@ -106,7 +112,7 @@ async fn test_complete_commit_picker_workflow_enter_navigate_select_return() {
 #[tokio::test]
 async fn test_commit_picker_with_empty_commit_list() {
     // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None);
+    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
     // Enter commit picker mode
     app.enter_commit_picker_mode();
@@ -136,7 +142,7 @@ async fn test_commit_picker_with_empty_commit_list() {
 #[tokio::test]
 async fn test_commit_picker_with_single_commit() {
     // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None);
+    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
     // Enter commit picker mode
     app.enter_commit_picker_mode();
@@ -167,7 +173,7 @@ async fn test_commit_picker_with_single_commit() {
 #[tokio::test]
 async fn test_commit_picker_with_many_commits() {
     // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None);
+    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
     // Enter commit picker mode
     app.enter_commit_picker_mode();
@@ -208,7 +214,7 @@ async fn test_commit_picker_with_many_commits() {
 #[tokio::test]
 async fn test_g_t_and_g_shift_t_navigation() {
     // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None);
+    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
     // Enter commit picker mode
     app.enter_commit_picker_mode();
@@ -240,7 +246,7 @@ async fn test_g_t_and_g_shift_t_navigation() {
 #[tokio::test]
 async fn test_commit_highlighting_and_selection() {
     // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None);
+    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
     // Enter commit picker mode
     app.enter_commit_picker_mode();
@@ -275,7 +281,7 @@ async fn test_commit_highlighting_and_selection() {
 #[tokio::test]
 async fn test_integration_with_existing_diff_navigation_after_commit_selection() {
     // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None);
+    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
     // Step 1: Enter commit picker mode and select a commit
     app.enter_commit_picker_mode();
@@ -317,7 +323,7 @@ async fn test_integration_with_existing_diff_navigation_after_commit_selection()
 #[tokio::test]
 async fn test_escape_key_exits_commit_picker() {
     // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None);
+    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
     // Enter commit picker mode
     app.enter_commit_picker_mode();
@@ -342,7 +348,7 @@ async fn test_escape_key_exits_commit_picker() {
 #[tokio::test]
 async fn test_commit_picker_only_activates_when_diff_panel_visible() {
     // Create app with diff panel disabled
-    let mut app = App::new_with_config(false, true, Theme::Dark, None);
+    let mut app = App::new_with_config(false, true, Theme::Dark, None, create_test_llm_state());
 
     // Verify diff panel is not visible
     assert!(!app.is_showing_diff_panel());
@@ -369,7 +375,7 @@ async fn test_commit_picker_only_activates_when_diff_panel_visible() {
 #[tokio::test]
 async fn test_commit_picker_state_persistence_across_navigation() {
     // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None);
+    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
     // Enter commit picker mode
     app.enter_commit_picker_mode();
@@ -403,7 +409,7 @@ async fn test_commit_picker_state_persistence_across_navigation() {
 #[tokio::test]
 async fn test_commit_picker_error_handling() {
     // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None);
+    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
     // Enter commit picker mode
     app.enter_commit_picker_mode();
@@ -426,7 +432,7 @@ async fn test_commit_picker_error_handling() {
 #[tokio::test]
 async fn test_commit_picker_loading_state() {
     // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None);
+    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
     // Enter commit picker mode
     app.enter_commit_picker_mode();
@@ -449,7 +455,8 @@ async fn test_commit_picker_loading_state() {
 #[tokio::test]
 async fn test_commit_summary_pane_integration() {
     // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None);
+    let llm_state = create_test_llm_state();
+    let mut app = App::new_with_config(true, true, Theme::Dark, None, llm_state);
 
     // Enter commit picker mode
     app.enter_commit_picker_mode();
@@ -469,7 +476,8 @@ async fn test_commit_summary_pane_integration() {
     assert!(app.is_in_commit_picker_mode());
 
     // Update commit summary with current selection
-    app.update_commit_summary_with_current_selection();
+    let llm_state = create_test_llm_state();
+    app.update_commit_summary_with_current_selection(&llm_state);
 
     // Should still be in commit picker mode
     assert!(app.is_in_commit_picker_mode());

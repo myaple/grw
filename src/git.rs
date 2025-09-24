@@ -1,10 +1,12 @@
 use crate::git_worker::GitWorker;
+use crate::shared_state::LlmSharedState;
 use color_eyre::eyre::Result;
 use git2::Status;
 use log::debug;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::collections::HashSet;
+
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
@@ -264,8 +266,7 @@ impl Default for PreloadConfig {
 pub struct SummaryPreloader {
     llm_client: Option<crate::llm::LlmClient>,
     config: PreloadConfig,
-    active_tasks: HashSet<String>,
-    git_worker_tx: Option<mpsc::Sender<GitWorkerCommand>>,
+    llm_state: Arc<crate::shared_state::LlmSharedState>,
 }
 
 impl std::fmt::Debug for SummaryPreloader {
@@ -273,38 +274,29 @@ impl std::fmt::Debug for SummaryPreloader {
         f.debug_struct("SummaryPreloader")
             .field("llm_client", &self.llm_client.is_some())
             .field("config", &self.config)
-            .field("active_tasks", &self.active_tasks)
-            .field("git_worker_tx", &self.git_worker_tx.is_some())
+            .field("llm_state", &"Arc<LlmSharedState>")
             .finish()
     }
 }
 
 impl SummaryPreloader {
-    pub fn new(llm_client: Option<crate::llm::LlmClient>) -> Self {
+    pub fn new(llm_client: Option<crate::llm::LlmClient>, llm_state: Arc<LlmSharedState>) -> Self {
         Self {
             llm_client,
             config: PreloadConfig::default(),
-            active_tasks: HashSet::new(),
-            git_worker_tx: None,
+            llm_state,
         }
     }
 
-    pub fn new_with_config(llm_client: Option<crate::llm::LlmClient>, config: PreloadConfig) -> Self {
+    pub fn new_with_config(llm_client: Option<crate::llm::LlmClient>, config: PreloadConfig, llm_state: Arc<LlmSharedState>) -> Self {
         Self {
             llm_client,
             config,
-            active_tasks: HashSet::new(),
-            git_worker_tx: None,
+            llm_state,
         }
     }
 
-    pub fn set_git_worker_tx(&mut self, tx: mpsc::Sender<GitWorkerCommand>) {
-        self.git_worker_tx = Some(tx);
-    }
 
-    pub fn get_git_worker_tx(&self) -> Option<mpsc::Sender<GitWorkerCommand>> {
-        self.git_worker_tx.clone()
-    }
 
     /// Pre-load summaries for a configurable number of commits starting from the beginning
     pub fn preload_summaries(&mut self, commits: &[CommitInfo]) {
@@ -335,44 +327,40 @@ impl SummaryPreloader {
 
     /// Check if a summary is currently being loaded
     pub fn is_loading(&self, commit_sha: &str) -> bool {
-        self.active_tasks.contains(commit_sha)
+        self.llm_state.is_summary_loading(commit_sha)
     }
 
     /// Pre-load a single commit summary in the background
     fn preload_single_summary(&mut self, commit_sha: &str) {
         // Skip if already loading or no LLM client available
-        if self.active_tasks.contains(commit_sha) || self.llm_client.is_none() {
+        if self.llm_state.is_summary_loading(commit_sha) || self.llm_client.is_none() {
             return;
         }
 
         // Check if summary is already cached
-        if let Some(git_worker_tx) = &self.git_worker_tx {
-            let sha = commit_sha.to_string();
-            let tx = git_worker_tx.clone();
-            let llm_client = self.llm_client.clone();
-            
-            // Mark as active
-            self.active_tasks.insert(commit_sha.to_string());
-
-            // Spawn background task to check cache and generate if needed
-            let mut active_tasks_clone = self.active_tasks.clone();
-            tokio::spawn(async move {
-                // First check if it's already cached
-                if let Ok(()) = tx.send(GitWorkerCommand::GetCachedSummary(sha.clone())).await {
-                    // The result will be handled by the main app loop
-                    // If not cached, we'll generate it
-                    Self::generate_summary_if_needed(sha, llm_client, tx, &mut active_tasks_clone).await;
-                }
-            });
+        if self.llm_state.get_cached_summary(commit_sha).is_some() {
+            debug!("Summary for commit {} already cached, skipping preload", commit_sha);
+            return;
         }
+
+        let sha = commit_sha.to_string();
+        let llm_client = self.llm_client.clone();
+        let llm_state = Arc::clone(&self.llm_state);
+        
+        // Mark as active in shared state
+        self.llm_state.start_summary_task(sha.clone());
+
+        // Spawn background task to generate summary
+        tokio::spawn(async move {
+            Self::generate_summary_with_shared_state(sha, llm_client, llm_state).await;
+        });
     }
 
-    /// Generate summary if not already cached
-    async fn generate_summary_if_needed(
+    /// Generate summary using shared state
+    async fn generate_summary_with_shared_state(
         commit_sha: String,
         llm_client: Option<crate::llm::LlmClient>,
-        git_worker_tx: mpsc::Sender<GitWorkerCommand>,
-        active_tasks: &mut HashSet<String>,
+        llm_state: Arc<LlmSharedState>,
     ) {
         if let Some(client) = llm_client {
             // Get the full diff using git show command
@@ -399,19 +387,22 @@ impl SummaryPreloader {
                     // Git command failed, log error but continue
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     debug!("Git show failed for commit {}: {}", commit_sha, stderr);
-                    active_tasks.remove(&commit_sha);
+                    llm_state.set_error(format!("summary_{}", commit_sha), format!("Git show failed: {}", stderr));
+                    llm_state.complete_summary_task(&commit_sha);
                     return;
                 }
                 Ok(Err(e)) => {
                     // Failed to execute git command
                     debug!("Failed to execute git show for commit {}: {}", commit_sha, e);
-                    active_tasks.remove(&commit_sha);
+                    llm_state.set_error(format!("summary_{}", commit_sha), format!("Failed to execute git show: {}", e));
+                    llm_state.complete_summary_task(&commit_sha);
                     return;
                 }
                 Err(e) => {
                     // Task execution failed
                     debug!("Task execution failed for commit {}: {}", commit_sha, e);
-                    active_tasks.remove(&commit_sha);
+                    llm_state.set_error(format!("summary_{}", commit_sha), format!("Task execution failed: {}", e));
+                    llm_state.complete_summary_task(&commit_sha);
                     return;
                 }
             };
@@ -448,19 +439,24 @@ impl SummaryPreloader {
             // Generate summary
             match client.get_llm_summary(history).await {
                 Ok(summary) => {
-                    // Cache the summary
+                    // Cache the summary in shared state
                     let sanitized_summary = summary.chars().take(1000).collect::<String>();
-                    let _ = git_worker_tx.send(GitWorkerCommand::CacheSummary(commit_sha.clone(), sanitized_summary)).await;
+                    llm_state.cache_summary(commit_sha.clone(), sanitized_summary);
                     debug!("Successfully pre-loaded summary for commit {}", commit_sha);
                 }
                 Err(e) => {
-                    // Log error but don't block UI
+                    // Store error in shared state
                     debug!("Failed to generate summary for commit {}: {}", commit_sha, e);
+                    llm_state.set_error(format!("summary_{}", commit_sha), format!("Failed to generate summary: {}", e));
                 }
             }
 
-            // Remove from active tasks regardless of success/failure
-            active_tasks.remove(&commit_sha);
+            // Complete the task in shared state regardless of success/failure
+            llm_state.complete_summary_task(&commit_sha);
+        } else {
+            // No LLM client available
+            llm_state.set_error(format!("summary_{}", commit_sha), "No LLM client available".to_string());
+            llm_state.complete_summary_task(&commit_sha);
         }
     }
 
@@ -475,14 +471,18 @@ impl SummaryPreloader {
     }
 
     /// Clear all active tasks (useful for cleanup)
-    pub fn clear_active_tasks(&mut self) {
-        self.active_tasks.clear();
+    pub fn clear_active_tasks(&self) {
+        self.llm_state.clear_all_active_tasks();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    
+    fn create_test_llm_state() -> Arc<LlmSharedState> {
+        Arc::new(LlmSharedState::new())
+    }
 
     #[test]
     fn test_preload_config_default() {
@@ -493,11 +493,10 @@ mod tests {
 
     #[test]
     fn test_summary_preloader_new() {
-        let preloader = SummaryPreloader::new(None);
+        let preloader = SummaryPreloader::new(None, create_test_llm_state());
         assert!(preloader.llm_client.is_none());
         assert_eq!(preloader.config.count, 5);
         assert!(preloader.config.enabled);
-        assert!(preloader.active_tasks.is_empty());
     }
 
     #[test]
@@ -506,7 +505,7 @@ mod tests {
             enabled: false,
             count: 10,
         };
-        let preloader = SummaryPreloader::new_with_config(None, config.clone());
+        let preloader = SummaryPreloader::new_with_config(None, config.clone(), create_test_llm_state());
         assert_eq!(preloader.config.enabled, false);
         assert_eq!(preloader.config.count, 10);
     }
@@ -517,7 +516,7 @@ mod tests {
             enabled: false,
             count: 5,
         };
-        let mut preloader = SummaryPreloader::new_with_config(None, config);
+        let mut preloader = SummaryPreloader::new_with_config(None, config, create_test_llm_state());
         
         let commits = vec![CommitInfo {
             sha: "abc123".to_string(),
@@ -530,12 +529,13 @@ mod tests {
 
         // Should not start any tasks when disabled
         preloader.preload_summaries(&commits);
-        assert!(preloader.active_tasks.is_empty());
+        // With shared state, we can check if the task is loading
+        assert!(!preloader.is_loading("abc123"));
     }
 
     #[test]
     fn test_preload_summaries_no_llm_client() {
-        let mut preloader = SummaryPreloader::new(None);
+        let mut preloader = SummaryPreloader::new(None, create_test_llm_state());
         
         let commits = vec![CommitInfo {
             sha: "abc123".to_string(),
@@ -548,12 +548,13 @@ mod tests {
 
         // Should not start any tasks without LLM client
         preloader.preload_summaries(&commits);
-        assert!(preloader.active_tasks.is_empty());
+        // With shared state, we can check if the task is loading
+        assert!(!preloader.is_loading("abc123"));
     }
 
     #[test]
     fn test_preload_around_index() {
-        let mut preloader = SummaryPreloader::new(None);
+        let mut preloader = SummaryPreloader::new(None, create_test_llm_state());
         
         let commits = vec![
             CommitInfo {
@@ -576,33 +577,35 @@ mod tests {
 
         // Should not start any tasks without LLM client
         preloader.preload_around_index(&commits, 0);
-        assert!(preloader.active_tasks.is_empty());
+        // With shared state, we can check if the task is loading
+        assert!(!preloader.is_loading("abc123"));
+        assert!(!preloader.is_loading("def456"));
     }
 
     #[test]
     fn test_is_loading() {
-        let mut preloader = SummaryPreloader::new(None);
+        let preloader = SummaryPreloader::new(None, create_test_llm_state());
         
         // Initially nothing is loading
         assert!(!preloader.is_loading("abc123"));
         
-        // Manually add to active tasks for testing
-        preloader.active_tasks.insert("abc123".to_string());
+        // Manually add to active tasks for testing using shared state
+        preloader.llm_state.start_summary_task("abc123".to_string());
         assert!(preloader.is_loading("abc123"));
         assert!(!preloader.is_loading("def456"));
     }
 
     #[test]
     fn test_clear_active_tasks() {
-        let mut preloader = SummaryPreloader::new(None);
+        let preloader = SummaryPreloader::new(None, create_test_llm_state());
         
-        // Add some active tasks
-        preloader.active_tasks.insert("abc123".to_string());
-        preloader.active_tasks.insert("def456".to_string());
-        assert_eq!(preloader.active_tasks.len(), 2);
+        // Add some active tasks using shared state
+        preloader.llm_state.start_summary_task("abc123".to_string());
+        preloader.llm_state.start_summary_task("def456".to_string());
+        assert_eq!(preloader.llm_state.active_summary_task_count(), 2);
         
         // Clear all tasks
         preloader.clear_active_tasks();
-        assert!(preloader.active_tasks.is_empty());
+        assert_eq!(preloader.llm_state.active_summary_task_count(), 0);
     }
 }

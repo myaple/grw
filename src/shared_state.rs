@@ -146,6 +146,7 @@ impl GitSharedState {
 }
 
 /// Shared state for LLM operations using lock-free data structures
+#[derive(Debug)]
 pub struct LlmSharedState {
     /// Summary cache with commit SHA as key
     summary_cache: HashMap<String, String>,
