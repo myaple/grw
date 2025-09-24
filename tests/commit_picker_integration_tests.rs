@@ -110,172 +110,148 @@ async fn test_complete_commit_picker_workflow_enter_navigate_select_return() {
 }
 
 #[tokio::test]
-async fn test_commit_picker_with_empty_commit_list() {
-    // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
+async fn test_commit_picker_edge_cases() {
+    // Test empty commit list
+    {
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
 
-    // Enter commit picker mode
-    app.enter_commit_picker_mode();
-    assert!(app.is_in_commit_picker_mode());
+        app.update_commit_picker_commits(vec![]);
 
-    // Load empty commit list
-    app.update_commit_picker_commits(vec![]);
-
-    // Try navigation - should handle empty list gracefully
-    let j_key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-    let k_key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-
-    app.forward_key_to_commit_picker(j_key);
-    app.forward_key_to_commit_picker(k_key);
-
-    // Should still be in commit picker mode
-    assert!(app.is_in_commit_picker_mode());
-
-    // Try to select (should handle gracefully)
-    let enter_key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-    app.forward_key_to_commit_picker(enter_key);
-
-    // Should still be in commit picker mode since no commit to select
-    assert!(app.is_in_commit_picker_mode());
-}
-
-#[tokio::test]
-async fn test_commit_picker_with_single_commit() {
-    // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
-
-    // Enter commit picker mode
-    app.enter_commit_picker_mode();
-    assert!(app.is_in_commit_picker_mode());
-
-    // Load single commit
-    let single_commit = vec![create_test_commits()[0].clone()];
-    app.update_commit_picker_commits(single_commit);
-
-    // Try navigation - should handle single commit gracefully
-    let j_key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-    let k_key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-
-    app.forward_key_to_commit_picker(j_key);
-    app.forward_key_to_commit_picker(k_key);
-
-    // Should still be in commit picker mode
-    assert!(app.is_in_commit_picker_mode());
-
-    // Select the single commit
-    let enter_key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-    app.forward_key_to_commit_picker(enter_key);
-
-    // Should have selection state
-    assert!(app.is_commit_picker_enter_pressed());
-}
-
-#[tokio::test]
-async fn test_commit_picker_with_many_commits() {
-    // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
-
-    // Enter commit picker mode
-    app.enter_commit_picker_mode();
-    assert!(app.is_in_commit_picker_mode());
-
-    // Create many commits for testing pagination/scrolling
-    let mut many_commits = Vec::new();
-    for i in 1..=20 {
-        many_commits.push(CommitInfo {
-            sha: format!("commit{:02}sha{}", i, "0".repeat(10)),
-            short_sha: format!("commit{:02}", i),
-            message: format!("Commit number {}", i),
-            author: "Test Author".to_string(),
-            date: format!("2023-01-{:02} 12:00:00", i),
-            files_changed: vec![CommitFileChange {
-                path: std::path::PathBuf::from(format!("file{}.txt", i)),
-                status: FileChangeStatus::Modified,
-                additions: i,
-                deletions: i / 2,
-            }],
-        });
-    }
-
-    app.update_commit_picker_commits(many_commits);
-
-    // Test extensive navigation
-    let j_key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-
-    // Navigate through multiple commits
-    for _ in 0..10 {
+        // Navigation should handle empty list gracefully
+        let j_key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        let k_key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
         app.forward_key_to_commit_picker(j_key);
+        app.forward_key_to_commit_picker(k_key);
+
+        // Should still be in commit picker mode
+        assert!(app.is_in_commit_picker_mode());
+
+        // Selection should handle gracefully
+        let enter_key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        app.forward_key_to_commit_picker(enter_key);
+        assert!(app.is_in_commit_picker_mode());
     }
 
-    // Should still be in commit picker mode and handle many commits
-    assert!(app.is_in_commit_picker_mode());
+    // Test single commit
+    {
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
+
+        let single_commit = vec![create_test_commits()[0].clone()];
+        app.update_commit_picker_commits(single_commit);
+
+        // Navigation should handle single commit gracefully
+        let j_key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        let k_key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+        app.forward_key_to_commit_picker(j_key);
+        app.forward_key_to_commit_picker(k_key);
+
+        // Should still be in commit picker mode
+        assert!(app.is_in_commit_picker_mode());
+
+        // Selection should work
+        let enter_key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        app.forward_key_to_commit_picker(enter_key);
+        assert!(app.is_commit_picker_enter_pressed());
+    }
+
+    // Test many commits (pagination)
+    {
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
+
+        // Create many commits for testing pagination/scrolling
+        let mut many_commits = Vec::new();
+        for i in 1..=20 {
+            many_commits.push(CommitInfo {
+                sha: format!("commit{:02}sha{}", i, "0".repeat(10)),
+                short_sha: format!("commit{:02}", i),
+                message: format!("Commit number {}", i),
+                author: "Test Author".to_string(),
+                date: format!("2023-01-{:02} 12:00:00", i),
+                files_changed: vec![CommitFileChange {
+                    path: std::path::PathBuf::from(format!("file{}.txt", i)),
+                    status: FileChangeStatus::Modified,
+                    additions: i,
+                    deletions: i / 2,
+                }],
+            });
+        }
+
+        app.update_commit_picker_commits(many_commits);
+
+        // Test extensive navigation
+        let j_key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+
+        // Navigate through multiple commits
+        for _ in 0..10 {
+            app.forward_key_to_commit_picker(j_key);
+        }
+
+        // Should still be in commit picker mode and handle many commits
+        assert!(app.is_in_commit_picker_mode());
+    }
 }
 
-#[tokio::test]
-async fn test_g_t_and_g_shift_t_navigation() {
-    // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
-    // Enter commit picker mode
+#[tokio::test]
+async fn test_commit_picker_navigation_variants() {
+    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
     app.enter_commit_picker_mode();
     assert!(app.is_in_commit_picker_mode());
 
-    // Load test commits
     let test_commits = create_test_commits();
     app.update_commit_picker_commits(test_commits);
 
-    // Test g+t navigation (next commit)
-    let g_key = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
-    let t_key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE);
+    // Test j/k navigation
+    {
+        let j_key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        let k_key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
 
-    // Simulate g press followed by t (within timing window)
-    app.forward_key_to_commit_picker(g_key);
-    // In real implementation, there would be timing logic here
-    app.forward_key_to_commit_picker(t_key);
+        // Move down
+        app.forward_key_to_commit_picker(j_key);
 
-    // Test g+T navigation (previous commit)
-    let shift_t_key = KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT);
+        // Move up
+        app.forward_key_to_commit_picker(k_key);
 
-    app.forward_key_to_commit_picker(g_key);
-    app.forward_key_to_commit_picker(shift_t_key);
+        // Should still be in commit picker mode
+        assert!(app.is_in_commit_picker_mode());
+    }
 
-    // Should still be in commit picker mode
-    assert!(app.is_in_commit_picker_mode());
-}
+    // Test g+t/g+T navigation
+    {
+        let g_key = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+        let t_key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE);
+        let shift_t_key = KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT);
 
-#[tokio::test]
-async fn test_commit_highlighting_and_selection() {
-    // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
+        // Simulate g+t navigation (next commit)
+        app.forward_key_to_commit_picker(g_key);
+        app.forward_key_to_commit_picker(t_key);
 
-    // Enter commit picker mode
-    app.enter_commit_picker_mode();
-    assert!(app.is_in_commit_picker_mode());
+        // Simulate g+T navigation (previous commit)
+        app.forward_key_to_commit_picker(g_key);
+        app.forward_key_to_commit_picker(shift_t_key);
 
-    // Load test commits
-    let test_commits = create_test_commits();
-    app.update_commit_picker_commits(test_commits);
+        // Should still be in commit picker mode
+        assert!(app.is_in_commit_picker_mode());
+    }
 
-    // Navigate and test highlighting
-    let j_key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-    let k_key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+    // Test selection and highlighting
+    {
+        let enter_key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        app.forward_key_to_commit_picker(enter_key);
 
-    // Move down
-    app.forward_key_to_commit_picker(j_key);
+        // Should have selection state
+        assert!(app.is_commit_picker_enter_pressed());
 
-    // Move up
-    app.forward_key_to_commit_picker(k_key);
-
-    // Test selection
-    let enter_key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-    app.forward_key_to_commit_picker(enter_key);
-
-    // Should have selection state
-    assert!(app.is_commit_picker_enter_pressed());
-
-    // Verify we can get the selected commit
-    let selected_commit = app.get_current_selected_commit_from_picker();
-    assert!(selected_commit.is_some());
+        // Verify we can get the selected commit
+        let selected_commit = app.get_current_selected_commit_from_picker();
+        assert!(selected_commit.is_some());
+    }
 }
 
 #[tokio::test]
@@ -373,83 +349,63 @@ async fn test_commit_picker_only_activates_when_diff_panel_visible() {
 }
 
 #[tokio::test]
-async fn test_commit_picker_state_persistence_across_navigation() {
-    // Create app with diff panel enabled
+async fn test_commit_picker_state_management() {
     let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
 
-    // Enter commit picker mode
-    app.enter_commit_picker_mode();
-    assert!(app.is_in_commit_picker_mode());
+    // Test state persistence across navigation
+    {
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
 
-    // Load test commits
-    let test_commits = create_test_commits();
-    app.update_commit_picker_commits(test_commits);
+        let test_commits = create_test_commits();
+        app.update_commit_picker_commits(test_commits);
 
-    // Navigate through commits and verify state persistence
-    let j_key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        let j_key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        let k_key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
 
-    // Navigate down several times
-    for _ in 0..3 {
+        // Navigate down several times
+        for _ in 0..3 {
+            app.forward_key_to_commit_picker(j_key);
+            assert!(app.is_in_commit_picker_mode());
+        }
+
+        // Navigate back up
+        for _ in 0..2 {
+            app.forward_key_to_commit_picker(k_key);
+            assert!(app.is_in_commit_picker_mode());
+        }
+
+        // State should be preserved throughout navigation
+        assert!(app.is_in_commit_picker_mode());
+    }
+
+    // Test error handling
+    {
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
+
+        app.set_commit_picker_error("Test error message".to_string());
+        assert!(app.is_in_commit_picker_mode());
+
+        // Navigation should handle error state gracefully
+        let j_key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
         app.forward_key_to_commit_picker(j_key);
-        // Verify we're still in commit picker mode after each navigation
         assert!(app.is_in_commit_picker_mode());
     }
 
-    // Navigate back up
-    let k_key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-    for _ in 0..2 {
-        app.forward_key_to_commit_picker(k_key);
+    // Test loading state
+    {
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
+
+        app.set_commit_picker_loading();
+        assert!(app.is_in_commit_picker_mode());
+
+        // Load commits after loading state
+        let test_commits = create_test_commits();
+        app.update_commit_picker_commits(test_commits);
         assert!(app.is_in_commit_picker_mode());
     }
-
-    // State should be preserved throughout navigation
-    assert!(app.is_in_commit_picker_mode());
-}
-
-#[tokio::test]
-async fn test_commit_picker_error_handling() {
-    // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
-
-    // Enter commit picker mode
-    app.enter_commit_picker_mode();
-    assert!(app.is_in_commit_picker_mode());
-
-    // Set error state
-    app.set_commit_picker_error("Test error message".to_string());
-
-    // Should still be in commit picker mode but with error state
-    assert!(app.is_in_commit_picker_mode());
-
-    // Try navigation with error state - should handle gracefully
-    let j_key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-    app.forward_key_to_commit_picker(j_key);
-
-    // Should still be in commit picker mode
-    assert!(app.is_in_commit_picker_mode());
-}
-
-#[tokio::test]
-async fn test_commit_picker_loading_state() {
-    // Create app with diff panel enabled
-    let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
-
-    // Enter commit picker mode
-    app.enter_commit_picker_mode();
-    assert!(app.is_in_commit_picker_mode());
-
-    // Set loading state
-    app.set_commit_picker_loading();
-
-    // Should still be in commit picker mode but with loading state
-    assert!(app.is_in_commit_picker_mode());
-
-    // Load commits after loading state
-    let test_commits = create_test_commits();
-    app.update_commit_picker_commits(test_commits);
-
-    // Should still be in commit picker mode with commits loaded
-    assert!(app.is_in_commit_picker_mode());
 }
 
 #[tokio::test]

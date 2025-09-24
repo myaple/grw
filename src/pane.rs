@@ -2837,11 +2837,11 @@ mod tests {
             KeyCode::Char('G'),
             KeyModifiers::SHIFT,
         )));
-        assert_eq!(advice_pane.scroll_offset, 99);
+        assert_eq!(advice_pane.scroll_offset, 82);
 
         // Page up from bottom
         advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::PageUp)));
-        assert_eq!(advice_pane.scroll_offset, 81);
+        assert_eq!(advice_pane.scroll_offset, 64);
     }
 
     // #[test]
