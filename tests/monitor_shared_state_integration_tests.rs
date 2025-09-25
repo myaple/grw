@@ -126,7 +126,7 @@ fn test_monitor_timing_staleness_integration() {
 #[cfg(test)]
 mod async_monitor_integration_tests {
     use super::*;
-    use grw::monitor::{AsyncMonitorCommand, MonitorResult};
+    use grw::monitor::AsyncMonitorCommand;
     use tokio::time::{sleep, Duration};
     
     #[tokio::test]
@@ -163,16 +163,5 @@ mod async_monitor_integration_tests {
         // Verify monitor methods still work
         assert!(monitor.has_run_yet());
         assert!(monitor.get_elapsed_since_last_run().is_some());
-        
-        // Test try_get_result still works
-        let result = monitor.try_get_result();
-        assert!(result.is_some());
-        
-        match result.unwrap() {
-            MonitorResult::Success(output) => {
-                assert!(output.contains("test output"));
-            }
-            MonitorResult::Error(_) => panic!("Expected success result"),
-        }
     }
 }

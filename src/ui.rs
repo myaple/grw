@@ -189,7 +189,7 @@ impl App {
         llm_state: Arc<crate::shared_state::LlmSharedState>,
     ) -> Self {
         let pane_registry = if let Some(ref llm_client) = llm_client {
-            PaneRegistry::new(theme, llm_client.clone())
+            PaneRegistry::new(theme, llm_client.clone(), llm_state.clone())
         } else {
             // Provide a dummy or default LlmClient for the registry when none is available.
             // This depends on how PaneRegistry and AdvicePane are structured.
@@ -199,7 +199,7 @@ impl App {
                 dummy_llm_config.api_key = Some("dummy_key".to_string());
             }
             let dummy_llm_client = LlmClient::new(dummy_llm_config).unwrap();
-            PaneRegistry::new(theme, dummy_llm_client)
+            PaneRegistry::new(theme, dummy_llm_client, llm_state.clone())
         };
 
         Self {

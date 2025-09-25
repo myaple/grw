@@ -119,6 +119,11 @@ impl GitSharedState {
         self.error_state.clear();
     }
 
+    /// Check if there are any active errors
+    pub fn has_errors(&self) -> bool {
+        !self.error_state.is_empty()
+    }
+
     /// Get current view mode
     pub fn get_view_mode(&self) -> u8 {
         self.view_mode.load(Ordering::Relaxed)
@@ -274,6 +279,11 @@ impl LlmSharedState {
     /// Clear all errors
     pub fn clear_all_errors(&self) {
         self.error_state.clear();
+    }
+
+    /// Check if there are any active errors
+    pub fn has_errors(&self) -> bool {
+        !self.error_state.is_empty()
     }
 
     /// Get count of active summary tasks
@@ -551,6 +561,11 @@ impl MonitorSharedState {
     /// Clear all errors
     pub fn clear_all_errors(&self) {
         self.error_state.clear();
+    }
+
+    /// Check if there are any active errors
+    pub fn has_errors(&self) -> bool {
+        !self.error_state.is_empty()
     }
 
     /// Check if any monitor commands have stale timing information
@@ -1617,5 +1632,39 @@ mod tests {
         assert_eq!(monitor_state.timing_count(), 0);
         assert_eq!(monitor_state.config_count(), 0);
         assert_eq!(monitor_state.error_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_error_recovery_mechanisms() {
+        let manager = SharedStateManager::new();
+        manager.initialize().unwrap();
+        
+        // Test error accumulation and cleanup
+        manager.git_state().set_error("test_error_1".to_string(), "Error 1".to_string());
+        manager.git_state().set_error("test_error_2".to_string(), "Error 2".to_string());
+        manager.llm_state().set_error("summary_abc123".to_string(), "Summary error".to_string());
+        manager.monitor_state().set_error("monitor_cmd".to_string(), "Monitor error".to_string());
+        
+        // Verify errors exist
+        assert!(manager.git_state().has_errors());
+        assert!(manager.llm_state().has_errors());
+        assert!(manager.monitor_state().has_errors());
+        
+        // Test selective error clearing
+        let git_errors = manager.git_state().get_all_errors();
+        assert_eq!(git_errors.len(), 2);
+        
+        // Clear specific errors
+        manager.git_state().clear_error("test_error_1");
+        assert_eq!(manager.git_state().get_all_errors().len(), 1);
+        
+        // Test bulk error clearing
+        manager.git_state().clear_all_errors();
+        manager.llm_state().clear_all_errors();
+        manager.monitor_state().clear_all_errors();
+        
+        assert!(!manager.git_state().has_errors());
+        assert!(!manager.llm_state().has_errors());
+        assert!(!manager.monitor_state().has_errors());
     }
 }

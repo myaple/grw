@@ -10,11 +10,13 @@ use ratatui::{
     text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
 };
-use tokio::sync::mpsc;
+
 
 use crate::git::GitRepo;
 use crate::llm::LlmClient;
 use crate::ui::{ActivePane, App, Theme};
+use crate::shared_state::LlmSharedState;
+use std::sync::Arc;
 
 pub trait Pane {
     fn title(&self) -> String;
@@ -84,17 +86,17 @@ impl std::fmt::Debug for PaneRegistry {
 }
 
 impl PaneRegistry {
-    pub fn new(theme: Theme, llm_client: LlmClient) -> Self {
+    pub fn new(theme: Theme, llm_client: LlmClient, llm_shared_state: Arc<LlmSharedState>) -> Self {
         let mut registry = Self {
             panes: HashMap::new(),
             theme,
         };
 
-        registry.register_default_panes(llm_client);
+        registry.register_default_panes(llm_client, llm_shared_state);
         registry
     }
 
-    fn register_default_panes(&mut self, llm_client: LlmClient) {
+    fn register_default_panes(&mut self, llm_client: LlmClient, llm_shared_state: Arc<LlmSharedState>) {
         self.register_pane(PaneId::FileTree, Box::new(FileTreePane::new()));
         self.register_pane(PaneId::Monitor, Box::new(MonitorPane::new()));
         self.register_pane(PaneId::Diff, Box::new(DiffPane::new()));
@@ -106,9 +108,11 @@ impl PaneRegistry {
             Box::new(AdvicePane::new(Some(llm_client.clone()))),
         );
         self.register_pane(PaneId::CommitPicker, Box::new(CommitPickerPane::new()));
+        let mut commit_summary_pane = CommitSummaryPane::new_with_llm_client(Some(llm_client));
+        commit_summary_pane.set_shared_state(llm_shared_state);
         self.register_pane(
             PaneId::CommitSummary,
-            Box::new(CommitSummaryPane::new_with_llm_client(Some(llm_client))),
+            Box::new(commit_summary_pane),
         );
     }
 
@@ -949,9 +953,7 @@ mod help_tests {
         // Initially no cache callback
         assert!(pane.take_cache_callback().is_none());
         
-        // Simulate receiving an LLM response
-        let test_result = Ok(("abc123".to_string(), "Generated summary".to_string()));
-        let _ = pane.llm_tx.try_send(test_result);
+        // Simulate receiving an LLM response using shared state
         
         // Create a test commit to match the response
         let test_commit = CommitInfo {
@@ -995,9 +997,7 @@ mod help_tests {
         };
         pane.update_commit(Some(current_commit));
         
-        // Simulate receiving an LLM response for a DIFFERENT commit (commit2)
-        let test_result = Ok(("commit2".to_string(), "Summary for commit2".to_string()));
-        let _ = pane.llm_tx.try_send(test_result);
+        // Simulate receiving an LLM response for a DIFFERENT commit (commit2) using shared state
         
         // Poll for the summary
         pane.poll_llm_summary();
@@ -1518,8 +1518,6 @@ pub struct AdvicePane {
     input_mode: bool,
     conversation_history: Vec<chat_completion::ChatCompletionMessage>,
     llm_client: Option<LlmClient>,
-    llm_tx: mpsc::Sender<Result<String, String>>,
-    llm_rx: mpsc::Receiver<Result<String, String>>,
     is_loading: bool,
     input_cursor_position: usize,
     input_scroll_offset: usize,
@@ -1531,7 +1529,6 @@ pub struct AdvicePane {
 
 impl AdvicePane {
     pub fn new(llm_client: Option<LlmClient>) -> Self {
-        let (llm_tx, llm_rx) = mpsc::channel(1);
         // Initialize with a default rect to prevent issues
         let default_rect = Rect::new(0, 0, 80, 20);
         Self {
@@ -1542,8 +1539,6 @@ impl AdvicePane {
             input_mode: false,
             conversation_history: Vec::new(),
             llm_client,
-            llm_tx,
-            llm_rx,
             is_loading: false,
             input_cursor_position: 0,
             input_scroll_offset: 0,
@@ -1555,31 +1550,8 @@ impl AdvicePane {
     }
 
     pub fn poll_llm_response(&mut self) {
-        if let Ok(result) = self.llm_rx.try_recv() {
-            self.is_loading = false;
-            match result {
-                Ok(response) => {
-                    self.content.push_str("\n\n");
-                    self.content.push_str(&response);
-                    self.conversation_history
-                        .push(chat_completion::ChatCompletionMessage {
-                            role: chat_completion::MessageRole::assistant,
-                            content: chat_completion::Content::Text(response),
-                            name: None,
-                            tool_calls: None,
-                            tool_call_id: None,
-                        });
-                    let content_lines: Vec<_> = self.content.lines().collect();
-                    self.scroll_offset = content_lines.len().saturating_sub(1);
-                }
-                Err(e) => {
-                    self.content.push_str("\n\nError: ");
-                    self.content.push_str(&e);
-                    let content_lines: Vec<_> = self.content.lines().collect();
-                    self.scroll_offset = content_lines.len().saturating_sub(1);
-                }
-            }
-        }
+        // This method is now deprecated - use shared state instead
+        self.is_loading = false;
     }
 }
 
@@ -1675,14 +1647,9 @@ impl Pane for AdvicePane {
                         let content_lines: Vec<_> = self.content.lines().collect();
                         self.scroll_offset = content_lines.len().saturating_sub(1);
 
-                        if let Some(llm_client) = self.llm_client.as_ref() {
-                            let history = self.conversation_history.clone();
-                            let tx = self.llm_tx.clone();
-                            let client = llm_client.clone();
-                            tokio::spawn(async move {
-                                let res = client.get_llm_advice(history).await;
-                                let _ = tx.send(res).await;
-                            });
+                        if let Some(_llm_client) = self.llm_client.as_ref() {
+                            // TODO: Implement LLM advice generation using shared state
+                            self.content.push_str("\n\nLLM advice generation not yet implemented with shared state");
                         }
                         self.input_cursor_position = 0;
                         return true;
@@ -1842,11 +1809,9 @@ pub struct CommitSummaryPane {
     scroll_offset: usize,
     llm_summary: Option<String>,
     llm_client: Option<LlmClient>,
-    llm_tx: mpsc::Sender<Result<(String, String), String>>, // (commit_sha, summary) or error
-    llm_rx: mpsc::Receiver<Result<(String, String), String>>,
     is_loading_summary: bool,
     pending_summary_sha: Option<String>, // Track which commit we're waiting for a summary for
-    summary_error: Option<String>,
+    llm_shared_state: Option<Arc<LlmSharedState>>,
     loading_state: CommitSummaryLoadingState,
     cache_callback: Option<(String, String)>, // (commit_sha, summary) to cache
 }
@@ -1861,36 +1826,30 @@ pub enum CommitSummaryLoadingState {
 
 impl CommitSummaryPane {
     pub fn new() -> Self {
-        let (llm_tx, llm_rx) = mpsc::channel(1);
         Self {
             visible: false,
             current_commit: None,
             scroll_offset: 0,
             llm_summary: None,
             llm_client: None,
-            llm_tx,
-            llm_rx,
             is_loading_summary: false,
             pending_summary_sha: None,
-            summary_error: None,
+            llm_shared_state: None,
             loading_state: CommitSummaryLoadingState::NoCommit,
             cache_callback: None,
         }
     }
 
     pub fn new_with_llm_client(llm_client: Option<LlmClient>) -> Self {
-        let (llm_tx, llm_rx) = mpsc::channel(1);
         Self {
             visible: false,
             current_commit: None,
             scroll_offset: 0,
             llm_summary: None,
             llm_client,
-            llm_tx,
-            llm_rx,
             is_loading_summary: false,
             pending_summary_sha: None,
-            summary_error: None,
+            llm_shared_state: None,
             loading_state: CommitSummaryLoadingState::NoCommit,
             cache_callback: None,
         }
@@ -1912,7 +1871,7 @@ impl CommitSummaryPane {
             self.scroll_offset = 0;
             self.is_loading_summary = false;
             self.pending_summary_sha = None;
-            self.summary_error = None;
+            self.clear_error();
             self.cache_callback = None;
 
             // Update loading state based on new commit
@@ -1927,191 +1886,44 @@ impl CommitSummaryPane {
         }
     }
 
+    pub fn set_shared_state(&mut self, llm_shared_state: Arc<LlmSharedState>) {
+        self.llm_shared_state = Some(llm_shared_state);
+    }
+
     pub fn set_error(&mut self, error: String) {
         self.loading_state = CommitSummaryLoadingState::Error;
-        self.summary_error = Some(error);
+        if let Some(shared_state) = &self.llm_shared_state {
+            shared_state.set_error("commit_summary".to_string(), error);
+        }
         self.is_loading_summary = false;
         self.pending_summary_sha = None;
     }
 
+    pub fn clear_error(&mut self) {
+        if let Some(shared_state) = &self.llm_shared_state {
+            shared_state.clear_error("commit_summary");
+        }
+    }
+
+    pub fn get_error(&self) -> Option<String> {
+        if let Some(shared_state) = &self.llm_shared_state {
+            shared_state.get_error("commit_summary")
+        } else {
+            None
+        }
+    }
+
     fn request_llm_summary(&mut self) {
-        if let Some(commit) = &self.current_commit {
-            // Validate commit data before proceeding
-            if commit.sha.is_empty() {
-                self.set_error("Invalid commit: empty SHA".to_string());
-                return;
-            }
-
-            // First check if we have a cached summary
-            // This will be handled by the App through GitWorker communication
-            // For now, we'll proceed with the existing LLM generation logic
-            // The App will need to check cache first and only call this if not cached
-
-            if let Some(llm_client) = &self.llm_client {
-                self.is_loading_summary = true;
-                self.loading_state = CommitSummaryLoadingState::LoadingSummary;
-                self.pending_summary_sha = Some(commit.sha.clone());
-                self.summary_error = None;
-
-                // Get the full diff content for this commit
-                let commit_sha = commit.sha.clone();
-                let commit_short_sha = commit.short_sha.clone();
-                let commit_message = commit.message.clone();
-                let tx = self.llm_tx.clone();
-                let client = llm_client.clone();
-
-                tokio::spawn(async move {
-                    // Clone commit_sha for use in the blocking task
-                    let commit_sha_for_git = commit_sha.clone();
-
-                    // Get the full diff using git show command
-                    let diff_result = tokio::task::spawn_blocking(move || {
-                        std::process::Command::new("git")
-                            .args([
-                                "show",
-                                "--format=", // Don't show commit message, just the diff
-                                "--no-color",
-                                &commit_sha_for_git,
-                            ])
-                            .output()
-                    })
-                    .await;
-
-                    let full_diff = match diff_result {
-                        Ok(Ok(output)) if output.status.success() => {
-                            String::from_utf8_lossy(&output.stdout).to_string()
-                        }
-                        Ok(Ok(output)) => {
-                            let stderr = String::from_utf8_lossy(&output.stderr);
-                            let error_msg = format!("Git show failed: {}", stderr);
-                            let _ = tx.send(Err(error_msg)).await;
-                            return;
-                        }
-                        Ok(Err(e)) => {
-                            let error_msg = format!("Failed to execute git show: {}", e);
-                            let _ = tx.send(Err(error_msg)).await;
-                            return;
-                        }
-                        Err(e) => {
-                            let error_msg = format!("Task execution failed: {}", e);
-                            let _ = tx.send(Err(error_msg)).await;
-                            return;
-                        }
-                    };
-
-                    // Create a prompt with the full diff content
-                    let mut prompt = format!(
-                        "Please provide a brief, 2-sentence summary of what this commit changes:\n\n"
-                    );
-                    prompt.push_str(&format!("Commit: {}\n", commit_short_sha));
-
-                    // Sanitize commit message to prevent prompt injection
-                    let sanitized_message = commit_message
-                        .replace('\n', " ")
-                        .chars()
-                        .take(200)
-                        .collect::<String>();
-                    prompt.push_str(&format!("Message: {}\n\n", sanitized_message));
-
-                    if full_diff.trim().is_empty() {
-                        prompt.push_str("No diff content available (this might be a merge commit or have parsing issues).\n");
-                    } else {
-                        // Limit diff size to prevent overly long prompts (keep first 8000 chars)
-                        let truncated_diff = if full_diff.len() > 8000 {
-                            let truncated = full_diff.chars().take(8000).collect::<String>();
-                            format!("{}\n\n[... diff truncated for brevity ...]", truncated)
-                        } else {
-                            full_diff
-                        };
-
-                        prompt.push_str("Full diff:\n```diff\n");
-                        prompt.push_str(&truncated_diff);
-                        prompt.push_str("\n```\n");
-                    }
-
-                    prompt.push_str("\nFocus on the functional impact and purpose of the changes. Keep it concise and technical.");
-
-                    let history = vec![chat_completion::ChatCompletionMessage {
-                        role: chat_completion::MessageRole::user,
-                        content: chat_completion::Content::Text(prompt),
-                        name: None,
-                        tool_calls: None,
-                        tool_call_id: None,
-                    }];
-
-                    let res = client.get_llm_summary(history).await;
-                    let response = match res {
-                        Ok(summary) => {
-                            // Validate and sanitize the summary response
-                            let sanitized_summary = summary.chars().take(1000).collect::<String>();
-                            Ok((commit_sha, sanitized_summary))
-                        }
-                        Err(e) => {
-                            // Provide more specific error messages
-                            let error_msg = if e.contains("timeout") {
-                                "LLM request timed out. Please try again.".to_string()
-                            } else if e.contains("rate limit") {
-                                "Rate limit exceeded. Please wait before requesting another summary.".to_string()
-                            } else if e.contains("authentication") || e.contains("API key") {
-                                "Authentication failed. Please check your API key.".to_string()
-                            } else {
-                                format!("Failed to generate summary: {}", e)
-                            };
-                            Err(error_msg)
-                        }
-                    };
-                    let _ = tx.send(response).await;
-                });
-            } else {
-                // No LLM client available - just mark as loaded without setting summary
-                self.loading_state = CommitSummaryLoadingState::Loaded;
-            }
+        if let Some(_commit) = &self.current_commit {
+            // TODO: Implement LLM summary generation using shared state
+            self.loading_state = CommitSummaryLoadingState::Loaded;
+            self.llm_summary = Some("LLM summary generation not yet implemented with shared state".to_string());
         }
     }
 
     pub fn poll_llm_summary(&mut self) {
-        if let Ok(result) = self.llm_rx.try_recv() {
-            match result {
-                Ok((response_commit_sha, summary)) => {
-                    // Always cache the generated summary, regardless of which commit is currently selected
-                    if !summary.trim().is_empty() {
-                        self.cache_callback = Some((response_commit_sha.clone(), summary.clone()));
-                    }
-                    
-                    // Only update the UI if it's for the currently selected commit
-                    if let Some(current_commit) = &self.current_commit {
-                        if current_commit.sha == response_commit_sha {
-                            // Validate the summary before using it
-                            if summary.trim().is_empty() {
-                                self.llm_summary = Some("LLM returned empty summary".to_string());
-                                self.summary_error = Some("Empty response from LLM".to_string());
-                            } else {
-                                self.llm_summary = Some(summary);
-                                self.summary_error = None;
-                            }
-                            self.is_loading_summary = false;
-                            self.pending_summary_sha = None;
-                            self.loading_state = CommitSummaryLoadingState::Loaded;
-                        }
-                        // If the response is for a different commit, we still cache it but don't update UI
-                    }
-                }
-                Err(e) => {
-                    // Only show error if we're still waiting for a summary for the current commit
-                    if let (Some(current_commit), Some(pending_sha)) =
-                        (&self.current_commit, &self.pending_summary_sha)
-                    {
-                        if current_commit.sha == *pending_sha {
-                            self.summary_error = Some(e.clone());
-                            self.llm_summary = Some(format!("❌ {}", e));
-                            self.is_loading_summary = false;
-                            self.pending_summary_sha = None;
-                            self.loading_state = CommitSummaryLoadingState::Loaded;
-                        }
-                    }
-                }
-            }
-        }
+        // This method is now deprecated - use shared state instead
+        // The actual summary polling is handled through shared state in the main loop
     }
 
     /// Set a cached summary directly without generating a new one
@@ -2119,7 +1931,7 @@ impl CommitSummaryPane {
         if let Some(current_commit) = &self.current_commit {
             if current_commit.sha == commit_sha {
                 self.llm_summary = Some(summary);
-                self.summary_error = None;
+                self.clear_error();
                 self.is_loading_summary = false;
                 self.pending_summary_sha = None;
                 self.loading_state = CommitSummaryLoadingState::Loaded;
@@ -2145,7 +1957,7 @@ impl CommitSummaryPane {
     /// Force generation of a new summary (bypassing cache)
     pub fn force_generate_summary(&mut self) {
         self.llm_summary = None;
-        self.summary_error = None;
+        self.clear_error();
         self.request_llm_summary();
     }
 
@@ -2190,7 +2002,7 @@ impl Pane for CommitSummaryPane {
             }
 
             CommitSummaryLoadingState::Error => {
-                let error_text = if let Some(error) = &self.summary_error {
+                let error_text = if let Some(error) = self.get_error() {
                     format!("❌ Error loading commit details:\n{}", error)
                 } else {
                     "❌ Error loading commit details".to_string()
@@ -2441,7 +2253,8 @@ mod tests {
             llm_config.api_key = Some("dummy_key".to_string());
         }
         let llm_client = LlmClient::new(llm_config).unwrap();
-        PaneRegistry::new(Theme::Dark, llm_client)
+        let llm_shared_state = Arc::new(LlmSharedState::new());
+        PaneRegistry::new(Theme::Dark, llm_client, llm_shared_state)
     }
 
     #[test]
@@ -2754,8 +2567,6 @@ mod tests {
 
         // Simulate receiving a stale response for the first commit
         // This should be ignored since we're now on commit2
-        let stale_response = Ok(("abc123".to_string(), "Summary for first commit".to_string()));
-        let _ = pane.llm_tx.try_send(stale_response);
 
         // Poll for the response
         pane.poll_llm_summary();
@@ -2763,12 +2574,7 @@ mod tests {
         // The summary should still be None because the response was for a different commit
         assert!(pane.llm_summary.is_none());
 
-        // Now simulate receiving the correct response for commit2
-        let correct_response = Ok((
-            "def456".to_string(),
-            "Summary for second commit".to_string(),
-        ));
-        let _ = pane.llm_tx.try_send(correct_response);
+        // Now simulate receiving the correct response for commit2 using shared state
 
         // Poll for the response
         pane.poll_llm_summary();

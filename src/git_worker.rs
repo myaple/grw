@@ -1,6 +1,5 @@
 use crate::git::{
-    CommitFileChange, CommitInfo, FileChangeStatus, FileDiff, GitRepo, GitWorkerCommand,
-    GitWorkerResult, ViewMode,
+    CommitFileChange, CommitInfo, FileChangeStatus, FileDiff, GitRepo, ViewMode,
 };
 use crate::shared_state::GitSharedState;
 use color_eyre::eyre::Result;
@@ -8,7 +7,6 @@ use git2::{DiffOptions, Repository, Status, StatusOptions};
 use log::debug;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::mpsc;
 
 pub struct GitWorker {
     repo: Repository,
@@ -20,16 +18,12 @@ pub struct GitWorker {
     last_commit_id: Option<String>,
     current_view_mode: ViewMode,
     shared_state: Arc<GitSharedState>,
-    // Keep channels temporarily for backward compatibility during migration
-    rx: Option<mpsc::Receiver<GitWorkerCommand>>,
-    tx: Option<mpsc::Sender<GitWorkerResult>>,
-    // Remove local caches - now using shared state
     cache_max_size: usize,
 }
 
 impl GitWorker {
-    /// Create a new GitWorker with shared state (new constructor)
-    pub fn new_with_shared_state(
+    /// Create a new GitWorker with shared state
+    pub fn new(
         path: PathBuf,
         shared_state: Arc<GitSharedState>,
     ) -> Result<Self> {
@@ -51,44 +45,11 @@ impl GitWorker {
             last_commit_id,
             current_view_mode: ViewMode::WorkingTree,
             shared_state,
-            rx: None,
-            tx: None,
             cache_max_size: 200, // Default cache size
         })
     }
 
-    /// Legacy constructor for backward compatibility during migration
-    pub fn new(
-        path: PathBuf,
-        rx: mpsc::Receiver<GitWorkerCommand>,
-        tx: mpsc::Sender<GitWorkerResult>,
-    ) -> Result<Self> {
-        let repo = Repository::open(&path)?;
 
-        let last_commit_id = repo
-            .head()
-            .ok()
-            .and_then(|head| head.peel_to_commit().ok())
-            .map(|commit| commit.id().to_string());
-
-        // Create a temporary shared state for backward compatibility
-        let shared_state = Arc::new(GitSharedState::new());
-
-        Ok(Self {
-            repo,
-            path,
-            changed_files: Vec::new(),
-            staged_files: Vec::new(),
-            dirty_directory_files: Vec::new(),
-            last_commit_files: Vec::new(),
-            last_commit_id,
-            current_view_mode: ViewMode::WorkingTree,
-            shared_state,
-            rx: Some(rx),
-            tx: Some(tx),
-            cache_max_size: 200, // Default cache size
-        })
-    }
 
     /// Set the maximum cache size for commit data
     pub fn set_cache_size(&mut self, max_size: usize) {
@@ -151,97 +112,66 @@ impl GitWorker {
         self.run_continuous(1000).await
     }
 
-    /// Legacy run method for backward compatibility during migration
+    /// Simplified run method for shared state mode
     pub async fn run(&mut self) {
-        // Check if we have channels (legacy mode)
-        let has_channels = self.rx.is_some() && self.tx.is_some();
-        if !has_channels {
-            debug!("GitWorker running in shared state mode - use run_continuous() instead");
-            return;
-        }
-
-        // Extract channels to avoid borrowing issues
-        let mut rx = self.rx.take().unwrap();
-        let tx = self.tx.take().unwrap();
-
-        while let Some(command) = rx.recv().await {
-            match command {
-                GitWorkerCommand::Update => {
-                    let result = self.update();
-                    if tx.send(result).await.is_err() {
-                        // Channel closed, terminate worker
-                        break;
-                    }
-                }
-                GitWorkerCommand::GetCommitHistory(limit) => {
-                    let result = match self.get_commit_history(limit) {
-                        Ok(commits) => GitWorkerResult::CommitHistory(commits),
-                        Err(e) => GitWorkerResult::Error(e.to_string()),
-                    };
-                    if tx.send(result).await.is_err() {
-                        // Channel closed, terminate worker
-                        break;
-                    }
-                }
-                GitWorkerCommand::CacheSummary(commit_sha, summary) => {
-                    self.cache_summary(commit_sha, summary);
-                    let result = GitWorkerResult::SummaryCached;
-                    if tx.send(result).await.is_err() {
-                        // Channel closed, terminate worker
-                        break;
-                    }
-                }
-                GitWorkerCommand::GetCachedSummary(commit_sha) => {
-                    let cached_summary = self.get_cached_summary(&commit_sha);
-                    let result = GitWorkerResult::CachedSummary(cached_summary);
-                    if tx.send(result).await.is_err() {
-                        // Channel closed, terminate worker
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Put channels back (though they're consumed at this point)
-        self.rx = Some(rx);
-        self.tx = Some(tx);
+        debug!("GitWorker running in shared state mode - use run_continuous() for continuous operation");
+        // This method is now simplified since we're using shared state
+        // The actual work is done through direct method calls
+        // rather than message passing
     }
 
     /// Update method for shared state mode - updates shared state directly
     pub fn update_shared_state(&mut self) -> Result<()> {
         debug!("Starting git status update for repository: {:?}", self.path);
 
-        // Perform the update logic directly without borrowing issues
-        match self.update_internal_direct() {
-            Ok(_) => {
-                // Clear any previous errors
-                self.shared_state.clear_error("git_status");
-                
-                // Update shared state with the new git repo snapshot
-                let git_repo = self.create_git_repo_snapshot();
-                self.shared_state.update_repo(git_repo);
-                Ok(())
+        // Attempt update with retry logic for transient errors
+        let mut last_error = None;
+        for attempt in 1..=3 {
+            match self.update_internal_direct() {
+                Ok(_) => {
+                    // Clear any previous errors on success
+                    self.shared_state.clear_error("git_status");
+                    
+                    // Update shared state with the new git repo snapshot
+                    let git_repo = self.create_git_repo_snapshot();
+                    self.shared_state.update_repo(git_repo);
+                    return Ok(());
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                    
+                    // Check if this is a transient error that might benefit from retry
+                    let error_str = last_error.as_ref().unwrap().to_string();
+                    let is_transient = error_str.contains("lock") 
+                        || error_str.contains("busy") 
+                        || error_str.contains("temporary");
+                    
+                    if is_transient && attempt < 3 {
+                        debug!("Transient git error on attempt {}, retrying: {}", attempt, error_str);
+                        std::thread::sleep(std::time::Duration::from_millis(100 * attempt as u64));
+                        continue;
+                    } else {
+                        debug!("Git error on attempt {} (final): {}", attempt, error_str);
+                        break;
+                    }
+                }
             }
-            Err(e) => {
-                let error_msg = e.to_string();
-                self.shared_state.set_error("git_status".to_string(), error_msg.clone());
-                Err(e)
-            }
+        }
+
+        // If we get here, all attempts failed
+        if let Some(error) = last_error {
+            let error_msg = error.to_string();
+            self.shared_state.set_error("git_status".to_string(), error_msg);
+            Err(error)
+        } else {
+            // This shouldn't happen, but handle it gracefully
+            let error_msg = "Unknown git status error".to_string();
+            self.shared_state.set_error("git_status".to_string(), error_msg.clone());
+            Err(color_eyre::eyre::eyre!(error_msg))
         }
     }
 
-    /// Legacy update method for backward compatibility
-    fn update(&mut self) -> GitWorkerResult {
-        debug!("Starting git status update for repository: {:?}", self.path);
 
-        match self.update_internal_direct() {
-            Ok(_) => {
-                let git_repo = self.create_git_repo_snapshot();
-                GitWorkerResult::Update(git_repo)
-            }
-            Err(e) => GitWorkerResult::Error(e.to_string())
-        }
-    }
 
     /// Internal update logic that handles git status directly
     fn update_internal_direct(&mut self) -> Result<()> {
@@ -1222,7 +1152,6 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
-    use tokio::sync::mpsc;
 
     fn create_test_repo() -> Result<(TempDir, Repository, PathBuf)> {
         let temp_dir = TempDir::new()?;
@@ -1310,9 +1239,8 @@ mod tests {
         )?;
 
         // Create GitWorker
-        let (_tx, rx) = mpsc::channel(1);
-        let (result_tx, _result_rx) = mpsc::channel(1);
-        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+        let shared_state = Arc::new(GitSharedState::new());
+        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
 
         // Test get_commit_history
         let commits = git_worker.get_commit_history(10)?;
@@ -1353,9 +1281,8 @@ mod tests {
             )?;
         }
 
-        let (_tx, rx) = mpsc::channel(1);
-        let (result_tx, _result_rx) = mpsc::channel(1);
-        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+        let shared_state = Arc::new(GitSharedState::new());
+        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
 
         // Test with limit
         let commits = git_worker.get_commit_history(3)?;
@@ -1410,9 +1337,8 @@ mod tests {
             &[&parent_commit],
         )?;
 
-        let (_tx, rx) = mpsc::channel(1);
-        let (result_tx, _result_rx) = mpsc::channel(1);
-        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+        let shared_state = Arc::new(GitSharedState::new());
+        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
 
         // Test file changes for first commit (should show file1.txt as added)
         let changes1 = git_worker.get_commit_file_changes(&commit1_id.to_string())?;
@@ -1482,9 +1408,8 @@ mod tests {
             &[&parent_commit],
         )?;
 
-        let (_tx, rx) = mpsc::channel(1);
-        let (result_tx, _result_rx) = mpsc::channel(1);
-        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+        let shared_state = Arc::new(GitSharedState::new());
+        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
 
         // Test file changes for deletion commit
         let changes = git_worker.get_commit_file_changes(&commit3_id.to_string())?;
@@ -1499,9 +1424,8 @@ mod tests {
     async fn test_empty_repository() -> Result<()> {
         let (_temp_dir, _repo, repo_path) = create_test_repo()?;
 
-        let (_tx, rx) = mpsc::channel(1);
-        let (result_tx, _result_rx) = mpsc::channel(1);
-        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+        let shared_state = Arc::new(GitSharedState::new());
+        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
 
         // Test get_commit_history on empty repo
         let commits = git_worker.get_commit_history(10)?;
@@ -1517,9 +1441,8 @@ mod tests {
         // Create a commit first
         create_commit(&repo, &repo_path, "test.txt", "content", "Test commit")?;
 
-        let (_tx, rx) = mpsc::channel(1);
-        let (result_tx, _result_rx) = mpsc::channel(1);
-        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+        let shared_state = Arc::new(GitSharedState::new());
+        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
 
         // Test with invalid commit SHA
         let result = git_worker.get_commit_file_changes("invalid_sha");
@@ -1542,11 +1465,10 @@ mod tests {
         std::fs::write(repo_path.join(".git/HEAD"), "invalid content")?;
 
         // Attempt to create GitWorker with corrupted repository
-        let (_tx, rx) = mpsc::channel(1);
-        let (result_tx, _result_rx) = mpsc::channel(1);
+        let shared_state = Arc::new(GitSharedState::new());
 
         // This should fail gracefully
-        let result = GitWorker::new(repo_path, rx, result_tx);
+        let result = GitWorker::new(repo_path, shared_state);
         assert!(result.is_err());
 
         Ok(())
@@ -1561,10 +1483,8 @@ mod tests {
         create_commit(&repo, &repo_path, "file2.txt", "content2", "Second commit")?;
         create_commit(&repo, &repo_path, "file3.txt", "content3", "Third commit")?;
 
-        let (_tx, rx) = tokio::sync::mpsc::channel(1);
-        let (result_tx, _result_rx) = tokio::sync::mpsc::channel(1);
-
-        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+        let shared_state = Arc::new(GitSharedState::new());
+        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
 
         // First call should populate cache
         let commits1 = git_worker.get_commit_history(10)?;
@@ -1605,9 +1525,8 @@ mod tests {
         create_commit(&repo, &repo_path, "file1.txt", "content1", "Commit 1")?;
         create_commit(&repo, &repo_path, "file2.txt", "content2", "Commit 2")?;
 
-        let (_tx, rx) = mpsc::channel(1);
-        let (result_tx, _result_rx) = mpsc::channel(1);
-        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+        let shared_state = Arc::new(GitSharedState::new());
+        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
 
         // Test that we can still get commits even if some operations fail
         let commits = git_worker.get_commit_history(10)?;
@@ -1636,7 +1555,7 @@ mod tests {
         // Create shared state and GitWorker with new constructor
         let git_shared_state = Arc::new(crate::shared_state::GitSharedState::new());
         let llm_shared_state = Arc::new(crate::shared_state::LlmSharedState::new());
-        let mut git_worker = GitWorker::new_with_shared_state(repo_path, git_shared_state)?;
+        let mut git_worker = GitWorker::new(repo_path, git_shared_state)?;
 
         let commit1_sha = commit1_id.to_string();
         let commit2_sha = commit2_id.to_string();
@@ -1683,10 +1602,8 @@ mod tests {
             commit_ids.push(commit_id);
         }
 
-        let (_tx, rx) = tokio::sync::mpsc::channel(1);
-        let (result_tx, _result_rx) = tokio::sync::mpsc::channel(1);
-
-        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+        let shared_state = Arc::new(GitSharedState::new());
+        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
 
         // Set a small cache size to test eviction
         git_worker.set_cache_size(2);
@@ -1716,10 +1633,8 @@ mod tests {
         let commit1_id = create_commit(&repo, &repo_path, "file1.txt", "content1", "First commit")?;
         let commit2_id = create_commit(&repo, &repo_path, "file2.txt", "content2", "Second commit")?;
 
-        let (_tx, rx) = tokio::sync::mpsc::channel(1);
-        let (result_tx, _result_rx) = tokio::sync::mpsc::channel(1);
-
-        let mut git_worker = GitWorker::new(repo_path, rx, result_tx)?;
+        let shared_state = Arc::new(GitSharedState::new());
+        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
 
         let commit1_sha = commit1_id.to_string();
         let commit2_sha = commit2_id.to_string();
@@ -1753,7 +1668,7 @@ mod tests {
         // Create shared state and GitWorker with new constructor
         let git_shared_state = Arc::new(crate::shared_state::GitSharedState::new());
         let llm_shared_state = Arc::new(crate::shared_state::LlmSharedState::new());
-        let _git_worker = GitWorker::new_with_shared_state(repo_path, git_shared_state)?;
+        let _git_worker = GitWorker::new(repo_path, git_shared_state)?;
 
         // Test with invalid commit SHA using LLM shared state
         let invalid_sha = "invalid_commit_sha";
@@ -1788,7 +1703,7 @@ mod tests {
 
         // Create GitWorker with shared state
         let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new_with_shared_state(repo_path, shared_state.clone())?;
+        let mut git_worker = GitWorker::new(repo_path, shared_state.clone())?;
 
         // Test update_shared_state
         git_worker.update_shared_state()?;
@@ -1816,7 +1731,7 @@ mod tests {
         let invalid_path = PathBuf::from("/invalid/path/that/does/not/exist");
         
         // This should fail during GitWorker creation
-        let result = GitWorker::new_with_shared_state(invalid_path, invalid_shared_state.clone());
+        let result = GitWorker::new(invalid_path, invalid_shared_state.clone());
         assert!(result.is_err());
 
         Ok(())
@@ -1831,7 +1746,7 @@ mod tests {
 
         // Create GitWorker with shared state
         let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new_with_shared_state(repo_path.clone(), shared_state.clone())?;
+        let mut git_worker = GitWorker::new(repo_path.clone(), shared_state.clone())?;
 
         // Test that we can start the continuous run (we'll stop it quickly)
         let shared_state_clone = shared_state.clone();
@@ -1864,7 +1779,7 @@ mod tests {
 
         // Create GitWorker with shared state
         let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new_with_shared_state(repo_path, shared_state.clone())?;
+        let mut git_worker = GitWorker::new(repo_path, shared_state.clone())?;
 
         // Perform successful update first
         git_worker.update_shared_state()?;
@@ -1878,7 +1793,7 @@ mod tests {
         let invalid_path = PathBuf::from("/tmp/non_existent_repo_for_test");
         
         // Create a GitWorker that will fail
-        if let Ok(mut invalid_worker) = GitWorker::new_with_shared_state(invalid_path, invalid_shared_state.clone()) {
+        if let Ok(mut invalid_worker) = GitWorker::new(invalid_path, invalid_shared_state.clone()) {
             // This update should fail and set an error in shared state
             let result = invalid_worker.update_shared_state();
             assert!(result.is_err());
@@ -1903,7 +1818,7 @@ mod tests {
 
         // Create GitWorker with shared state
         let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new_with_shared_state(repo_path, shared_state.clone())?;
+        let mut git_worker = GitWorker::new(repo_path, shared_state.clone())?;
 
         // Test commit history retrieval and caching
         let commits1 = git_worker.get_commit_history(5)?;

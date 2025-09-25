@@ -26,7 +26,6 @@ use std::env;
 use std::sync::Arc;
 
 use config::{Args, Config};
-use git::AsyncGitRepo;
 use llm::{AsyncLLMCommand, LlmClient};
 use log::{debug, error, info};
 use monitor::AsyncMonitorCommand;
@@ -63,7 +62,7 @@ async fn main() -> Result<()> {
     info!("Shared state manager initialized successfully");
     
     // Create GitWorker with shared state and start it running continuously
-    let mut git_worker = crate::git_worker::GitWorker::new_with_shared_state(
+    let mut git_worker = crate::git_worker::GitWorker::new(
         repo_path.clone(), 
         Arc::clone(&shared_state_manager.git_state())
     )?;
@@ -75,9 +74,7 @@ async fn main() -> Result<()> {
         }
     });
     
-    // Keep a reference to the repo path for other uses
-    let repo_path_for_git_repo = repo_path.clone();
-    let mut git_repo = AsyncGitRepo::new(repo_path_for_git_repo, 500)?;
+
 
     let llm_client = if let Some(llm_config) = &final_config.llm {
         if llm_config.api_key.is_some() || env::var("OPENAI_API_KEY").is_ok() {
@@ -106,7 +103,7 @@ async fn main() -> Result<()> {
         Arc::clone(&shared_state_manager.llm_state()),
     );
 
-    // SummaryPreloader will use shared state instead of channels
+    // SummaryPreloader uses shared state for caching
 
     // Configure summary preloader from config
     let preload_config = final_config.get_summary_preload_config();
@@ -152,7 +149,6 @@ async fn main() -> Result<()> {
 
                 app.update_files(changed_files.clone());
                 app.update_tree(&tree);
-                git_repo.repo = Some(repo);
             }
             
             // Check for git errors in shared state
@@ -162,11 +158,6 @@ async fn main() -> Result<()> {
                 shared_state_manager.git_state().clear_error("git_status");
             }
         } else {
-            // Still update the git repo state for status bar, but don't override app files
-            if let Some(repo) = shared_state_manager.git_state().get_repo() {
-                git_repo.repo = Some(repo);
-            }
-            
             // Check for git errors in shared state
             if let Some(error) = shared_state_manager.git_state().get_error("git_status") {
                 error!("Git worker error: {error}");
@@ -210,7 +201,7 @@ async fn main() -> Result<()> {
             }
         }
 
-        // Poll for LLM advice responses from advice pane's own channel (for interactive conversations)
+        // Poll for LLM advice responses from advice pane (for interactive conversations)
         app.poll_llm_advice();
 
         // Poll for LLM commit summary responses from shared state
@@ -224,11 +215,9 @@ async fn main() -> Result<()> {
             }
         }
 
-        // Update llm command if it exists
-        if let Some(ref mut llm) = llm_command {
-            if let Some(repo) = &git_repo.repo {
-                let _ = llm.git_repo_tx.send(Some(repo.clone()));
-                // Trigger initial refresh when git repo is first available
+        // Trigger initial refresh when git repo is first available
+        if let Some(ref llm) = llm_command {
+            if shared_state_manager.git_state().get_repo().is_some() {
                 static INITIAL_REFRESH_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
                 if !INITIAL_REFRESH_DONE.load(std::sync::atomic::Ordering::Relaxed) {
                     log::debug!("Triggering initial LLM advice refresh");
@@ -249,6 +238,42 @@ async fn main() -> Result<()> {
             app.update_llm_advice(format!("❌ {}", error));
             // Clear the error after handling it
             shared_state_manager.llm_state().clear_error("advice_generation");
+        }
+
+        // Periodic error recovery check - clear stale errors every 30 seconds
+        static LAST_ERROR_CLEANUP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last_cleanup = LAST_ERROR_CLEANUP.load(std::sync::atomic::Ordering::Relaxed);
+        
+        if current_time.saturating_sub(last_cleanup) > 30 {
+            // Clear any stale errors that might have accumulated
+            if shared_state_manager.git_state().has_errors() 
+                || shared_state_manager.llm_state().has_errors() 
+                || shared_state_manager.monitor_state().has_errors() {
+                debug!("Performing periodic error cleanup");
+                
+                // Only clear errors that are not currently being displayed
+                // Git errors are cleared immediately after display, so any remaining are stale
+                let git_errors = shared_state_manager.git_state().get_all_errors();
+                for (key, _) in git_errors {
+                    if key != "git_status" { // Keep current git_status errors
+                        shared_state_manager.git_state().clear_error(&key);
+                    }
+                }
+                
+                // Clear old LLM summary errors (keep advice_generation for current display)
+                let llm_errors = shared_state_manager.llm_state().get_all_errors();
+                for (key, _) in llm_errors {
+                    if key.starts_with("summary_") && key != "advice_generation" {
+                        shared_state_manager.llm_state().clear_error(&key);
+                    }
+                }
+            }
+            
+            LAST_ERROR_CLEANUP.store(current_time, std::sync::atomic::Ordering::Relaxed);
         }
 
         // Calculate monitor visible height before rendering
@@ -332,7 +357,7 @@ async fn main() -> Result<()> {
                 app.current_diff_height = 20;
             }
 
-            if let Some(repo) = &git_repo.repo {
+            if let Some(repo) = &shared_state_manager.git_state().get_repo() {
                 ui::render::<CrosstermBackend<std::io::Stdout>>(f, &app, repo);
             }
         })?;
@@ -362,7 +387,7 @@ async fn main() -> Result<()> {
 
         if crossterm::event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = crossterm::event::read()? {
-                if handle_key_event(key, &mut app, &git_repo, &final_config, &shared_state_manager) {
+                if handle_key_event(key, &mut app, &final_config, &shared_state_manager) {
                     break;
                 }
             }
@@ -425,7 +450,6 @@ async fn main() -> Result<()> {
 fn handle_key_event(
     key: KeyEvent,
     app: &mut App,
-    git_repo: &AsyncGitRepo,
     config: &Config,
     shared_state_manager: &SharedStateManager,
 ) -> bool {
@@ -625,13 +649,13 @@ fn handle_key_event(
             debug!("User pressed Ctrl+P - activating commit picker");
             // Only activate commit picker when in appropriate diff mode
             if app.is_showing_diff_panel() && !app.is_in_commit_picker_mode() {
-                if let Some(repo) = &git_repo.repo {
+                if let Some(repo) = shared_state_manager.git_state().get_repo() {
                     // Enter commit picker mode first and show loading state
                     app.enter_commit_picker_mode();
                     app.set_commit_picker_loading();
 
                     // Create a temporary GitWorker to load commit history using shared state
-                    match crate::git_worker::GitWorker::new_with_shared_state(
+                    match crate::git_worker::GitWorker::new(
                         repo.path.clone(), 
                         Arc::clone(&shared_state_manager.git_state())
                     ) {
@@ -734,7 +758,7 @@ mod tests {
 
         // Handle the key event
         let dummy_shared_state = SharedStateManager::new();
-        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
+        let should_quit = handle_key_event(ctrl_p_key, &mut app, &Config::default(), &dummy_shared_state);
 
         // Should not quit
         assert!(!should_quit);
@@ -765,7 +789,7 @@ mod tests {
 
         // Handle the key event
         let dummy_shared_state = SharedStateManager::new();
-        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
+        let should_quit = handle_key_event(ctrl_p_key, &mut app, &Config::default(), &dummy_shared_state);
 
         // Should not quit
         assert!(!should_quit);
@@ -796,7 +820,7 @@ mod tests {
 
         // Handle the key event
         let dummy_shared_state = SharedStateManager::new();
-        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
+        let should_quit = handle_key_event(ctrl_p_key, &mut app, &Config::default(), &dummy_shared_state);
 
         // Should not quit
         assert!(!should_quit);
@@ -877,7 +901,7 @@ mod tests {
 
         // Handle the key event
         let dummy_shared_state = SharedStateManager::new();
-        let should_quit = handle_key_event(escape_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
+        let should_quit = handle_key_event(escape_key, &mut app, &Config::default(), &dummy_shared_state);
 
         // Should not quit
         assert!(!should_quit);
@@ -911,7 +935,7 @@ mod tests {
 
         // Handle the key event
         let dummy_shared_state = SharedStateManager::new();
-        let should_quit = handle_key_event(question_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
+        let should_quit = handle_key_event(question_key, &mut app, &Config::default(), &dummy_shared_state);
 
         // Should not quit
         assert!(!should_quit);
@@ -923,7 +947,7 @@ mod tests {
         assert!(app.is_showing_help());
 
         // Press '?' again to toggle help off
-        let should_quit2 = handle_key_event(question_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
+        let should_quit2 = handle_key_event(question_key, &mut app, &Config::default(), &dummy_shared_state);
         assert!(!should_quit2);
 
         // Help should now be hidden again
@@ -963,9 +987,21 @@ mod tests {
 
         // Test that rendering works without panicking when help is shown in commit picker mode
         let render_result = terminal.draw(|f| {
-            if let Some(repo) = &git_repo.repo {
-                ui::render::<TestBackend>(f, &app, repo);
-            }
+            // Create a mock GitRepo for testing
+            let mock_repo = crate::git::GitRepo {
+                path: repo_path.clone(),
+                changed_files: Vec::new(),
+                staged_files: Vec::new(),
+                dirty_directory_files: Vec::new(),
+                last_commit_files: Vec::new(),
+                last_commit_id: None,
+                current_view_mode: crate::git::ViewMode::WorkingTree,
+                repo_name: "test".to_string(),
+                branch_name: "main".to_string(),
+                commit_info: ("".to_string(), "".to_string()),
+                total_stats: (0, 0, 0),
+            };
+            ui::render::<TestBackend>(f, &app, &mock_repo);
         });
 
         // Should render successfully
@@ -1044,7 +1080,7 @@ mod tests {
 
         // Handle the key event
         let dummy_shared_state = SharedStateManager::new();
-        let should_quit = handle_key_event(ctrl_w_key, &mut app, &git_repo, &Config::default(), &dummy_shared_state);
+        let should_quit = handle_key_event(ctrl_w_key, &mut app, &Config::default(), &dummy_shared_state);
 
         // Should not quit
         assert!(!should_quit);

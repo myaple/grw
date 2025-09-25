@@ -12,11 +12,7 @@ pub struct AsyncMonitorCommand {
     last_run: std::sync::Arc<std::sync::RwLock<Option<std::time::Instant>>>,
 }
 
-#[derive(Debug, Clone)]
-pub enum MonitorResult {
-    Success(String),
-    Error(String),
-}
+
 
 impl AsyncMonitorCommand {
     pub fn new(command: String, interval: u64, shared_state: Arc<MonitorSharedState>) -> Self {
@@ -117,18 +113,12 @@ impl AsyncMonitorCommand {
         }
     }
 
-    pub fn try_get_result(&mut self) -> Option<MonitorResult> {
-        // Check if there's new output in shared state
-        if let Some(output) = self.shared_state.get_output(&self.command_key) {
-            // Check if there's an error for this command
-            if let Some(_error) = self.shared_state.get_error(&self.command_key) {
-                Some(MonitorResult::Error(output))
-            } else {
-                Some(MonitorResult::Success(output))
-            }
-        } else {
-            None
-        }
+    pub fn get_output(&self) -> Option<String> {
+        self.shared_state.get_output(&self.command_key)
+    }
+
+    pub fn has_error(&self) -> bool {
+        self.shared_state.get_error(&self.command_key).is_some()
     }
 
     pub fn get_elapsed_since_last_run(&self) -> Option<Duration> {
@@ -181,19 +171,5 @@ impl AsyncMonitorCommand {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_monitor_result_types() {
-        let success = MonitorResult::Success("test output".to_string());
-        let error = MonitorResult::Error("error output".to_string());
 
-        match success {
-            MonitorResult::Success(output) => assert_eq!(output, "test output"),
-            MonitorResult::Error(_) => panic!("Expected success"),
-        }
-
-        match error {
-            MonitorResult::Success(_) => panic!("Expected error"),
-            MonitorResult::Error(output) => assert_eq!(output, "error output"),
-        }
-    }
 }

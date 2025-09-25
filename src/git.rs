@@ -1,13 +1,13 @@
-use crate::git_worker::GitWorker;
+
 use crate::shared_state::LlmSharedState;
-use color_eyre::eyre::Result;
+
 use git2::Status;
 use log::debug;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
-use tokio::sync::mpsc;
+
+
 
 #[derive(Debug, Clone)]
 pub struct FileDiff {
@@ -94,29 +94,9 @@ pub enum ViewMode {
     LastCommit,
 }
 
-pub enum GitWorkerCommand {
-    Update,
-    GetCommitHistory(usize), // limit
-    CacheSummary(String, String), // commit_sha, summary
-    GetCachedSummary(String), // commit_sha
-}
 
-#[allow(clippy::large_enum_variant)]
-pub enum GitWorkerResult {
-    Update(GitRepo),
-    CommitHistory(Vec<CommitInfo>),
-    CachedSummary(Option<String>),
-    SummaryCached,
-    Error(String),
-}
 
-pub struct AsyncGitRepo {
-    tx: mpsc::Sender<GitWorkerCommand>,
-    rx: mpsc::Receiver<GitWorkerResult>,
-    last_update: Instant,
-    update_interval: Duration,
-    pub repo: Option<GitRepo>,
-}
+
 
 impl GitRepo {
     pub fn get_display_files(&self) -> Vec<FileDiff> {
@@ -211,42 +191,7 @@ impl GitRepo {
     }
 }
 
-impl AsyncGitRepo {
-    pub fn new(path: PathBuf, update_interval_ms: u64) -> Result<Self> {
-        let (worker_tx, worker_rx) = mpsc::channel(1);
-        let (result_tx, result_rx) = mpsc::channel(1);
 
-        let mut worker = GitWorker::new(path.clone(), worker_rx, result_tx)?;
-        tokio::spawn(async move {
-            worker.run().await;
-        });
-
-        Ok(Self {
-            tx: worker_tx,
-            rx: result_rx,
-            last_update: Instant::now(),
-            update_interval: Duration::from_millis(update_interval_ms),
-            repo: None,
-        })
-    }
-
-    pub fn update(&mut self) {
-        if self.last_update.elapsed() >= self.update_interval {
-            debug!("Requesting git update");
-            if self.tx.try_send(GitWorkerCommand::Update).is_ok() {
-                self.last_update = Instant::now();
-            }
-        }
-    }
-
-    pub fn try_get_result(&mut self) -> Option<GitWorkerResult> {
-        self.rx.try_recv().ok()
-    }
-
-    pub fn get_git_worker_tx(&self) -> mpsc::Sender<GitWorkerCommand> {
-        self.tx.clone()
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct PreloadConfig {
