@@ -134,6 +134,31 @@ impl Config {
         }
     }
 
+    /// Get shared state configuration settings
+    pub fn get_shared_state_config(&self) -> SharedStateConfig {
+        SharedStateConfig {
+            commit_cache_size: self.get_commit_cache_size(),
+            commit_history_limit: self.get_commit_history_limit(),
+            summary_preload_enabled: self.summary_preload_enabled.unwrap_or(true),
+            summary_preload_count: self.summary_preload_count.unwrap_or(5),
+            cache_cleanup_interval: 300, // 5 minutes
+            stale_task_threshold: 3600,  // 1 hour
+        }
+    }
+}
+
+/// Configuration for shared state components
+#[derive(Debug, Clone)]
+pub struct SharedStateConfig {
+    pub commit_cache_size: usize,
+    pub commit_history_limit: usize,
+    pub summary_preload_enabled: bool,
+    pub summary_preload_count: usize,
+    pub cache_cleanup_interval: u64,
+    pub stale_task_threshold: u64,
+}
+
+impl Config {
     fn get_config_path() -> PathBuf {
         config_dir()
             .unwrap_or_else(|| PathBuf::from("."))

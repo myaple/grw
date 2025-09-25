@@ -687,12 +687,26 @@ impl SharedStateManager {
         &self.monitor_state
     }
 
-    /// Initialize all shared state components with default values and configuration
-    pub fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Initialize default configuration for monitor state
+    /// Initialize all shared state components with configuration
+    pub fn initialize(&self, config: Option<&crate::config::SharedStateConfig>) -> Result<(), Box<dyn std::error::Error>> {
+        let default_config = crate::config::SharedStateConfig {
+            commit_cache_size: 200,
+            commit_history_limit: 100,
+            summary_preload_enabled: true,
+            summary_preload_count: 5,
+            cache_cleanup_interval: 300,
+            stale_task_threshold: 3600,
+        };
+        
+        let config = config.unwrap_or(&default_config);
+        
+        // Initialize monitor state configuration
         self.monitor_state.set_config("update_interval".to_string(), "1000".to_string());
         self.monitor_state.set_config("max_output_size".to_string(), "10485760".to_string()); // 10MB
-        self.monitor_state.set_config("cleanup_interval".to_string(), "300".to_string()); // 5 minutes
+        self.monitor_state.set_config("cleanup_interval".to_string(), config.cache_cleanup_interval.to_string());
+        self.monitor_state.set_config("commit_cache_size".to_string(), config.commit_cache_size.to_string());
+        self.monitor_state.set_config("commit_history_limit".to_string(), config.commit_history_limit.to_string());
+        self.monitor_state.set_config("stale_task_threshold".to_string(), config.stale_task_threshold.to_string());
         
         // Initialize git state with default view mode
         self.git_state.set_view_mode(0); // Default to WorkingTree view
@@ -825,7 +839,7 @@ mod tests {
     #[test]
     fn test_shared_state_manager_initialization() {
         let manager = SharedStateManager::new();
-        let result = manager.initialize();
+        let result = manager.initialize(None);
         assert!(result.is_ok());
         
         // Verify default configuration was set
@@ -1637,7 +1651,7 @@ mod tests {
     #[tokio::test]
     async fn test_error_recovery_mechanisms() {
         let manager = SharedStateManager::new();
-        manager.initialize().unwrap();
+        manager.initialize(None).unwrap();
         
         // Test error accumulation and cleanup
         manager.git_state().set_error("test_error_1".to_string(), "Error 1".to_string());
