@@ -137,17 +137,30 @@ mod tests {
 
     #[test]
     fn test_llm_client_new_no_api_key() {
+        // Temporarily remove the environment variable for this test
+        let original_key = std::env::var("OPENAI_API_KEY").ok();
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+
         let config = LlmConfig::default();
         let result = LlmClient::new(config);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "No API key provided");
+        assert!(result.unwrap_err().contains("OpenAI API key not found"));
+
+        // Restore the original environment variable
+        if let Some(key) = original_key {
+            unsafe {
+                std::env::set_var("OPENAI_API_KEY", key);
+            }
+        }
     }
 
     #[test]
     fn test_llm_client_new_with_api_key() {
         let mut config = LlmConfig::default();
         config.api_key = Some("test-key".to_string());
-        let result = LlmClient::new(config);
+        let _result = LlmClient::new(config);
         // This might fail due to network issues, but should at least get past the API key check
         // In a real test, you'd mock the HTTP client
     }

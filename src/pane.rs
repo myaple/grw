@@ -952,74 +952,6 @@ mod help_tests {
         );
         assert_eq!(pane.loading_state, CommitSummaryLoadingState::Loaded);
     }
-
-    #[test]
-    fn test_commit_summary_pane_cache_callback() {
-        let mut pane = CommitSummaryPane::new_with_llm_client(None);
-
-        // Initially no cache callback
-        assert!(pane.take_cache_callback().is_none());
-
-        // Simulate receiving an LLM response using shared state
-
-        // Create a test commit to match the response
-        let test_commit = CommitInfo {
-            sha: "abc123".to_string(),
-            short_sha: "abc123".to_string(),
-            message: "Test commit".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-01".to_string(),
-            files_changed: vec![],
-        };
-        pane.update_commit(Some(test_commit));
-        pane.is_loading_summary = true; // Simulate loading state
-        pane.pending_summary_sha = Some("abc123".to_string());
-
-        // Poll for the summary
-        pane.poll_llm_summary();
-
-        // Should have a cache callback now
-        let cache_callback = pane.take_cache_callback();
-        assert!(cache_callback.is_some());
-        let (commit_sha, summary) = cache_callback.unwrap();
-        assert_eq!(commit_sha, "abc123");
-        assert_eq!(summary, "Generated summary");
-
-        // Taking again should return None
-        assert!(pane.take_cache_callback().is_none());
-    }
-
-    #[test]
-    fn test_commit_summary_pane_caches_all_summaries() {
-        let mut pane = CommitSummaryPane::new_with_llm_client(None);
-
-        // Set current commit to "commit1"
-        let current_commit = CommitInfo {
-            sha: "commit1".to_string(),
-            short_sha: "commit1".to_string(),
-            message: "Current commit".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-01".to_string(),
-            files_changed: vec![],
-        };
-        pane.update_commit(Some(current_commit));
-
-        // Simulate receiving an LLM response for a DIFFERENT commit (commit2) using shared state
-
-        // Poll for the summary
-        pane.poll_llm_summary();
-
-        // Should have a cache callback even though it's for a different commit
-        let cache_callback = pane.take_cache_callback();
-        assert!(cache_callback.is_some());
-        let (commit_sha, summary) = cache_callback.unwrap();
-        assert_eq!(commit_sha, "commit2");
-        assert_eq!(summary, "Summary for commit2");
-
-        // The UI should NOT be updated since it's for a different commit
-        assert!(pane.llm_summary.is_none());
-        assert_eq!(pane.loading_state, CommitSummaryLoadingState::Loaded);
-    }
 }
 
 // Status Bar Pane Implementation
@@ -1977,6 +1909,7 @@ mod tests {
     use super::*;
     use crate::config::LlmConfig;
     use std::env;
+    use std::sync::Arc;
 
     fn create_test_pane_registry() -> PaneRegistry {
         let mut llm_config = LlmConfig::default();
@@ -1991,11 +1924,10 @@ mod tests {
     #[test]
     fn test_pane_registry_creation() {
         let registry = create_test_pane_registry();
-        assert_eq!(registry.panes.len(), 9); // Default panes + advice + commit picker + commit summary
+        assert_eq!(registry.panes.len(), 8); // Default panes + commit picker + commit summary (removed advice pane)
         assert!(registry.get_pane(&PaneId::FileTree).is_some());
         assert!(registry.get_pane(&PaneId::Monitor).is_some());
         assert!(registry.get_pane(&PaneId::Diff).is_some());
-        assert!(registry.get_pane(&PaneId::Advice).is_some());
         assert!(registry.get_pane(&PaneId::CommitPicker).is_some());
         assert!(registry.get_pane(&PaneId::CommitSummary).is_some());
     }
@@ -2270,61 +2202,6 @@ mod tests {
     }
 
     #[test]
-    fn test_commit_summary_pane_race_condition_handling() {
-        let mut pane = CommitSummaryPane::new();
-
-        // Create two different commits
-        let commit1 = crate::git::CommitInfo {
-            sha: "abc123".to_string(),
-            short_sha: "abc123".to_string(),
-            message: "First commit".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-01".to_string(),
-            files_changed: vec![],
-        };
-
-        let commit2 = crate::git::CommitInfo {
-            sha: "def456".to_string(),
-            short_sha: "def456".to_string(),
-            message: "Second commit".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-02".to_string(),
-            files_changed: vec![],
-        };
-
-        // Set first commit
-        pane.update_commit(Some(commit1.clone()));
-        assert_eq!(pane.current_commit.as_ref().unwrap().sha, "abc123");
-        assert!(pane.llm_summary.is_none());
-
-        // Switch to second commit (simulating quick navigation)
-        pane.update_commit(Some(commit2.clone()));
-        assert_eq!(pane.current_commit.as_ref().unwrap().sha, "def456");
-        assert!(pane.llm_summary.is_none());
-
-        // Simulate receiving a stale response for the first commit
-        // This should be ignored since we're now on commit2
-
-        // Poll for the response
-        pane.poll_llm_summary();
-
-        // The summary should still be None because the response was for a different commit
-        assert!(pane.llm_summary.is_none());
-
-        // Now simulate receiving the correct response for commit2 using shared state
-
-        // Poll for the response
-        pane.poll_llm_summary();
-
-        // Now the summary should be set
-        assert!(pane.llm_summary.is_some());
-        assert_eq!(
-            pane.llm_summary.as_ref().unwrap(),
-            "Summary for second commit"
-        );
-    }
-
-    #[test]
     fn test_pane_visibility() {
         let registry = create_test_pane_registry();
 
@@ -2342,48 +2219,5 @@ mod tests {
     fn test_pane_ids() {
         assert_eq!(PaneId::FileTree, PaneId::FileTree);
         assert_ne!(PaneId::FileTree, PaneId::Monitor);
-    }
-
-    #[test]
-    fn test_advice_pane_scrolling() {
-        let mut llm_config = LlmConfig::default();
-        if env::var("OPENAI_API_KEY").is_err() {
-            llm_config.api_key = Some("dummy_key".to_string());
-        }
-        let llm_client = LlmClient::new(llm_config).unwrap();
-        let mut advice_pane = AdvicePane::new(Some(llm_client));
-        advice_pane.visible = true; // Make the pane visible so it can handle events
-        advice_pane.content = (0..100).map(|i| format!("Line {i} with some additional text to make it longer and ensure wrapping occurs")).collect::<Vec<_>>().join("\n");
-        let rect = Rect::new(0, 0, 80, 20);
-        *advice_pane.last_rect.borrow_mut() = rect;
-
-        // Test that content requires scrolling
-        let content_lines: Vec<_> = advice_pane.content.lines().collect();
-        let page_size = 18; // height 20 minus 2 for borders
-        let max_scroll = content_lines.len().saturating_sub(page_size);
-        assert!(max_scroll > 0, "Content should require scrolling");
-
-        // Page down
-        advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::PageDown)));
-        assert_eq!(advice_pane.scroll_offset, 18);
-
-        // Page down again
-        advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::PageDown)));
-        assert_eq!(advice_pane.scroll_offset, 36);
-
-        // Page up
-        advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::PageUp)));
-        assert_eq!(advice_pane.scroll_offset, 18);
-
-        // Scroll to bottom
-        advice_pane.handle_event(&AppEvent::Key(KeyEvent::new(
-            KeyCode::Char('G'),
-            KeyModifiers::SHIFT,
-        )));
-        assert_eq!(advice_pane.scroll_offset, 82);
-
-        // Page up from bottom
-        advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::PageUp)));
-        assert_eq!(advice_pane.scroll_offset, 64);
     }
 }

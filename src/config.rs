@@ -524,7 +524,7 @@ mod tests {
 
         let args = Args::parse_from([
             "grw",
-            "--llm-advice-model",
+            "--llm-model",
             "gpt-4-turbo",
             "--llm-summary-model",
             "gpt-4o-mini",
@@ -533,7 +533,7 @@ mod tests {
         let merged = config.merge_with_args(&args);
         let llm_config = merged.llm.unwrap();
 
-        assert_eq!(llm_config.model, Some("gpt-3.5-turbo".to_string())); // From config
+        assert_eq!(llm_config.model, Some("gpt-4-turbo".to_string())); // From args (CLI takes precedence)
         assert_eq!(llm_config.summary_model, Some("gpt-4o-mini".to_string())); // From args
     }
 

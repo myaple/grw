@@ -456,8 +456,8 @@ mod tests {
             enabled: false,
             count: 10,
         };
-        let preloader =
-            SummaryPreloader::new_with_config(None, config.clone(), create_test_llm_state());
+        let mut preloader = SummaryPreloader::new(None, create_test_llm_state());
+        preloader.set_config(config.clone());
         assert_eq!(preloader.config.enabled, false);
         assert_eq!(preloader.config.count, 10);
     }
@@ -468,8 +468,8 @@ mod tests {
             enabled: false,
             count: 5,
         };
-        let mut preloader =
-            SummaryPreloader::new_with_config(None, config, create_test_llm_state());
+        let mut preloader = SummaryPreloader::new(None, create_test_llm_state());
+        preloader.set_config(config);
 
         let commits = vec![CommitInfo {
             sha: "abc123".to_string(),
