@@ -52,30 +52,34 @@ async fn main() -> Result<()> {
     let repo_path = std::env::current_dir()?;
     log::info!("Starting grw in directory: {repo_path:?}");
     log::debug!("Debug mode enabled");
-    
+
     // Initialize shared state manager
     let shared_state_manager = SharedStateManager::new();
     let shared_state_config = config.get_shared_state_config();
     if let Err(e) = shared_state_manager.initialize(Some(&shared_state_config)) {
-        error!("Failed to initialize shared state with configuration: {}", e);
-        return Err(color_eyre::eyre::eyre!("Failed to initialize shared state: {}", e));
+        error!(
+            "Failed to initialize shared state with configuration: {}",
+            e
+        );
+        return Err(color_eyre::eyre::eyre!(
+            "Failed to initialize shared state: {}",
+            e
+        ));
     }
     info!("Shared state manager initialized successfully");
-    
+
     // Create GitWorker with shared state and start it running continuously
     let mut git_worker = crate::git_worker::GitWorker::new(
-        repo_path.clone(), 
-        Arc::clone(&shared_state_manager.git_state())
+        repo_path.clone(),
+        Arc::clone(&shared_state_manager.git_state()),
     )?;
-    
+
     // Start the GitWorker in a background task
     tokio::spawn(async move {
         if let Err(e) = git_worker.run_continuous(500).await {
             error!("GitWorker continuous run failed: {}", e);
         }
     });
-    
-
 
     let llm_client = if let Some(llm_config) = &final_config.llm {
         if llm_config.api_key.is_some() || env::var("OPENAI_API_KEY").is_ok() {
@@ -111,10 +115,8 @@ async fn main() -> Result<()> {
     app.set_preload_config(preload_config);
 
     let (mut monitor_command, mut monitor_rx) = if let Some(cmd) = &final_config.monitor_command {
-        let (cmd, rx) = AsyncMonitorCommand::new(
-            cmd.clone(),
-            final_config.monitor_interval.unwrap_or(5),
-        );
+        let (cmd, rx) =
+            AsyncMonitorCommand::new(cmd.clone(), final_config.monitor_interval.unwrap_or(5));
         (Some(cmd), Some(rx))
     } else {
         (None, None)
@@ -126,7 +128,6 @@ async fn main() -> Result<()> {
         app.set_monitor_command_configured(true);
     }
 
-    
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     let _ = terminal.clear();
@@ -145,7 +146,7 @@ async fn main() -> Result<()> {
                 app.update_files(changed_files.clone());
                 app.update_tree(&tree);
             }
-            
+
             // Check for git errors in shared state
             if let Some(error) = shared_state_manager.git_state().get_error("git_status") {
                 error!("Git shared state error: {error}");
@@ -179,14 +180,18 @@ async fn main() -> Result<()> {
 
         // Check shared state for cached summaries
         if let Some(current_commit) = app.get_current_selected_commit_from_picker() {
-            if let Some(cached_summary) = shared_state_manager.llm_state().get_cached_summary(&current_commit.sha) {
+            if let Some(cached_summary) = shared_state_manager
+                .llm_state()
+                .get_cached_summary(&current_commit.sha)
+            {
                 // Handle cached summary from shared state
                 app.handle_cached_summary_result(Some(cached_summary), &current_commit.sha);
             }
         }
 
         // Periodic error recovery check - clear stale errors every 30 seconds
-        static LAST_ERROR_CLEANUP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static LAST_ERROR_CLEANUP: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
         let current_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -196,14 +201,16 @@ async fn main() -> Result<()> {
         if current_time.saturating_sub(last_cleanup) > 30 {
             // Clear any stale errors that might have accumulated
             if shared_state_manager.git_state().has_errors()
-                || shared_state_manager.llm_state().has_errors() {
+                || shared_state_manager.llm_state().has_errors()
+            {
                 debug!("Performing periodic error cleanup");
 
                 // Only clear errors that are not currently being displayed
                 // Git errors are cleared immediately after display, so any remaining are stale
                 let git_errors = shared_state_manager.git_state().get_all_errors();
                 for (key, _) in git_errors {
-                    if key != "git_status" { // Keep current git_status errors
+                    if key != "git_status" {
+                        // Keep current git_status errors
                         shared_state_manager.git_state().clear_error(&key);
                     }
                 }
@@ -314,7 +321,7 @@ async fn main() -> Result<()> {
         // Update commit summary pane with current selection from commit picker
         if app.is_in_commit_picker_mode() {
             app.update_commit_summary_with_current_selection(shared_state_manager.llm_state());
-            
+
             // Trigger continuous pre-loading as user navigates
             if let Some((commits, current_index)) = app.get_commit_picker_state() {
                 if !commits.is_empty() {
@@ -572,7 +579,7 @@ fn handle_key_event(
             debug!("Monitor pane is now: {}", app.is_showing_monitor_pane());
             false
         }
-                KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             debug!("User pressed Ctrl+W - returning to working directory view");
             app.clear_selected_commit();
             false
@@ -588,8 +595,8 @@ fn handle_key_event(
 
                     // Create a temporary GitWorker to load commit history using shared state
                     match crate::git_worker::GitWorker::new(
-                        repo.path.clone(), 
-                        Arc::clone(&shared_state_manager.git_state())
+                        repo.path.clone(),
+                        Arc::clone(&shared_state_manager.git_state()),
                     ) {
                         Ok(mut git_worker) => {
                             // Configure cache size from config
@@ -601,13 +608,16 @@ fn handle_key_event(
                                 Ok(commits) => {
                                     debug!("Successfully loaded {} commits", commits.len());
                                     app.update_commit_picker_commits(commits.clone());
-                                    
+
                                     // Configure and trigger summary pre-loading
                                     let preload_config = config.get_summary_preload_config();
                                     app.set_preload_config(preload_config);
-                                    
+
                                     // Start pre-loading summaries for the first few commits
-                                    debug!("Starting summary pre-loading for {} commits", commits.len());
+                                    debug!(
+                                        "Starting summary pre-loading for {} commits",
+                                        commits.len()
+                                    );
                                     app.preload_summaries(&commits);
                                 }
                                 Err(e) => {
@@ -653,7 +663,7 @@ fn handle_key_event(
             }
             false
         }
-        _ => false
+        _ => false,
     }
 }
 

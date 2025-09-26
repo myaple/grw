@@ -1,13 +1,9 @@
-
 use crate::shared_state::LlmSharedState;
 
 use git2::Status;
 use log::debug;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-
-
 
 #[derive(Debug, Clone)]
 pub struct FileDiff {
@@ -93,10 +89,6 @@ pub enum ViewMode {
     DirtyDirectory,
     LastCommit,
 }
-
-
-
-
 
 impl GitRepo {
     pub fn get_display_files(&self) -> Vec<FileDiff> {
@@ -191,8 +183,6 @@ impl GitRepo {
     }
 }
 
-
-
 #[derive(Debug, Clone)]
 pub struct PreloadConfig {
     pub enabled: bool,
@@ -233,15 +223,17 @@ impl SummaryPreloader {
         }
     }
 
-    pub fn new_with_config(llm_client: Option<crate::llm::LlmClient>, config: PreloadConfig, llm_state: Arc<LlmSharedState>) -> Self {
+    pub fn new_with_config(
+        llm_client: Option<crate::llm::LlmClient>,
+        config: PreloadConfig,
+        llm_state: Arc<LlmSharedState>,
+    ) -> Self {
         Self {
             llm_client,
             config,
             llm_state,
         }
     }
-
-
 
     /// Pre-load summaries for a configurable number of commits starting from the beginning
     pub fn preload_summaries(&mut self, commits: &[CommitInfo]) {
@@ -265,7 +257,11 @@ impl SummaryPreloader {
         let start_index = current_index.saturating_sub(half_count);
         let end_index = (current_index + half_count + 1).min(commits.len());
 
-        for commit in commits.iter().skip(start_index).take(end_index - start_index) {
+        for commit in commits
+            .iter()
+            .skip(start_index)
+            .take(end_index - start_index)
+        {
             self.preload_single_summary(&commit.sha);
         }
     }
@@ -284,14 +280,17 @@ impl SummaryPreloader {
 
         // Check if summary is already cached
         if self.llm_state.get_cached_summary(commit_sha).is_some() {
-            debug!("Summary for commit {} already cached, skipping preload", commit_sha);
+            debug!(
+                "Summary for commit {} already cached, skipping preload",
+                commit_sha
+            );
             return;
         }
 
         let sha = commit_sha.to_string();
         let llm_client = self.llm_client.clone();
         let llm_state = Arc::clone(&self.llm_state);
-        
+
         // Mark as active in shared state
         self.llm_state.start_summary_task(sha.clone());
 
@@ -332,29 +331,43 @@ impl SummaryPreloader {
                     // Git command failed, log error but continue
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     debug!("Git show failed for commit {}: {}", commit_sha, stderr);
-                    llm_state.set_error(format!("summary_{}", commit_sha), format!("Git show failed: {}", stderr));
+                    llm_state.set_error(
+                        format!("summary_{}", commit_sha),
+                        format!("Git show failed: {}", stderr),
+                    );
                     llm_state.complete_summary_task(&commit_sha);
                     return;
                 }
                 Ok(Err(e)) => {
                     // Failed to execute git command
-                    debug!("Failed to execute git show for commit {}: {}", commit_sha, e);
-                    llm_state.set_error(format!("summary_{}", commit_sha), format!("Failed to execute git show: {}", e));
+                    debug!(
+                        "Failed to execute git show for commit {}: {}",
+                        commit_sha, e
+                    );
+                    llm_state.set_error(
+                        format!("summary_{}", commit_sha),
+                        format!("Failed to execute git show: {}", e),
+                    );
                     llm_state.complete_summary_task(&commit_sha);
                     return;
                 }
                 Err(e) => {
                     // Task execution failed
                     debug!("Task execution failed for commit {}: {}", commit_sha, e);
-                    llm_state.set_error(format!("summary_{}", commit_sha), format!("Task execution failed: {}", e));
+                    llm_state.set_error(
+                        format!("summary_{}", commit_sha),
+                        format!("Task execution failed: {}", e),
+                    );
                     llm_state.complete_summary_task(&commit_sha);
                     return;
                 }
             };
 
             // Create a prompt with the full diff content
-            let mut prompt = "Please provide a brief, 2-sentence summary of what this commit changes:\n\n".to_string();
-            
+            let mut prompt =
+                "Please provide a brief, 2-sentence summary of what this commit changes:\n\n"
+                    .to_string();
+
             if full_diff.trim().is_empty() {
                 prompt.push_str("No diff content available (this might be a merge commit or have parsing issues).\n");
             } else {
@@ -378,19 +391,35 @@ impl SummaryPreloader {
                 Ok(summary_result) => {
                     if !summary_result.has_error {
                         // Cache the summary in shared state
-                        let sanitized_summary = summary_result.content.chars().take(1000).collect::<String>();
+                        let sanitized_summary = summary_result
+                            .content
+                            .chars()
+                            .take(1000)
+                            .collect::<String>();
                         llm_state.cache_summary(commit_sha.clone(), sanitized_summary);
                         debug!("Successfully pre-loaded summary for commit {}", commit_sha);
                     } else {
                         // Store error in shared state
-                        debug!("Failed to generate summary for commit {}: {}", commit_sha, summary_result.content);
-                        llm_state.set_error(format!("summary_{}", commit_sha), format!("Failed to generate summary: {}", summary_result.content));
+                        debug!(
+                            "Failed to generate summary for commit {}: {}",
+                            commit_sha, summary_result.content
+                        );
+                        llm_state.set_error(
+                            format!("summary_{}", commit_sha),
+                            format!("Failed to generate summary: {}", summary_result.content),
+                        );
                     }
                 }
                 Err(e) => {
                     // Store error in shared state
-                    debug!("Failed to generate summary for commit {}: {}", commit_sha, e);
-                    llm_state.set_error(format!("summary_{}", commit_sha), format!("Failed to generate summary: {}", e));
+                    debug!(
+                        "Failed to generate summary for commit {}: {}",
+                        commit_sha, e
+                    );
+                    llm_state.set_error(
+                        format!("summary_{}", commit_sha),
+                        format!("Failed to generate summary: {}", e),
+                    );
                 }
             }
 
@@ -398,7 +427,10 @@ impl SummaryPreloader {
             llm_state.complete_summary_task(&commit_sha);
         } else {
             // No LLM client available
-            llm_state.set_error(format!("summary_{}", commit_sha), "No LLM client available".to_string());
+            llm_state.set_error(
+                format!("summary_{}", commit_sha),
+                "No LLM client available".to_string(),
+            );
             llm_state.complete_summary_task(&commit_sha);
         }
     }
@@ -422,7 +454,7 @@ impl SummaryPreloader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn create_test_llm_state() -> Arc<LlmSharedState> {
         Arc::new(LlmSharedState::new())
     }
@@ -448,7 +480,8 @@ mod tests {
             enabled: false,
             count: 10,
         };
-        let preloader = SummaryPreloader::new_with_config(None, config.clone(), create_test_llm_state());
+        let preloader =
+            SummaryPreloader::new_with_config(None, config.clone(), create_test_llm_state());
         assert_eq!(preloader.config.enabled, false);
         assert_eq!(preloader.config.count, 10);
     }
@@ -459,8 +492,9 @@ mod tests {
             enabled: false,
             count: 5,
         };
-        let mut preloader = SummaryPreloader::new_with_config(None, config, create_test_llm_state());
-        
+        let mut preloader =
+            SummaryPreloader::new_with_config(None, config, create_test_llm_state());
+
         let commits = vec![CommitInfo {
             sha: "abc123".to_string(),
             short_sha: "abc123".to_string(),
@@ -479,7 +513,7 @@ mod tests {
     #[test]
     fn test_preload_summaries_no_llm_client() {
         let mut preloader = SummaryPreloader::new(None, create_test_llm_state());
-        
+
         let commits = vec![CommitInfo {
             sha: "abc123".to_string(),
             short_sha: "abc123".to_string(),
@@ -498,7 +532,7 @@ mod tests {
     #[test]
     fn test_preload_around_index() {
         let mut preloader = SummaryPreloader::new(None, create_test_llm_state());
-        
+
         let commits = vec![
             CommitInfo {
                 sha: "abc123".to_string(),
@@ -528,10 +562,10 @@ mod tests {
     #[test]
     fn test_is_loading() {
         let preloader = SummaryPreloader::new(None, create_test_llm_state());
-        
+
         // Initially nothing is loading
         assert!(!preloader.is_loading("abc123"));
-        
+
         // Manually add to active tasks for testing using shared state
         preloader.llm_state.start_summary_task("abc123".to_string());
         assert!(preloader.is_loading("abc123"));
@@ -541,12 +575,12 @@ mod tests {
     #[test]
     fn test_clear_active_tasks() {
         let preloader = SummaryPreloader::new(None, create_test_llm_state());
-        
+
         // Add some active tasks using shared state
         preloader.llm_state.start_summary_task("abc123".to_string());
         preloader.llm_state.start_summary_task("def456".to_string());
         assert_eq!(preloader.llm_state.active_summary_task_count(), 2);
-        
+
         // Clear all tasks
         preloader.clear_active_tasks();
         assert_eq!(preloader.llm_state.active_summary_task_count(), 0);

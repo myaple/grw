@@ -66,10 +66,9 @@ pub struct LlmConfig {
     pub summary_model: Option<String>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
-  }
+}
 
 impl LlmConfig {
-
     /// Get the model to use for summary generation, falling back to default model
     pub fn get_summary_model(&self) -> String {
         self.summary_model
@@ -183,10 +182,12 @@ impl Config {
                 summary_model: args.llm_summary_model.clone().or(llm_config.summary_model),
                 api_key: args.llm_api_key.clone().or(llm_config.api_key),
                 base_url: args.llm_base_url.clone().or(llm_config.base_url),
-              }),
+            }),
             commit_history_limit: args.commit_history_limit.or(self.commit_history_limit),
             commit_cache_size: args.commit_cache_size.or(self.commit_cache_size),
-            summary_preload_enabled: args.summary_preload_enabled.or(self.summary_preload_enabled),
+            summary_preload_enabled: args
+                .summary_preload_enabled
+                .or(self.summary_preload_enabled),
             summary_preload_count: args.summary_preload_count.or(self.summary_preload_count),
         }
     }
@@ -221,8 +222,10 @@ pub struct Args {
     #[arg(long, help = "LLM model to use for advice")]
     pub llm_model: Option<String>,
 
-
-    #[arg(long, help = "LLM model to use specifically for commit summary generation")]
+    #[arg(
+        long,
+        help = "LLM model to use specifically for commit summary generation"
+    )]
     pub llm_summary_model: Option<String>,
 
     #[arg(long, help = "API key for the LLM provider")]
@@ -230,7 +233,6 @@ pub struct Args {
 
     #[arg(long, help = "Base URL for the LLM provider")]
     pub llm_base_url: Option<String>,
-
 
     #[arg(
         long,
@@ -489,7 +491,6 @@ mod tests {
 
     #[test]
     fn test_llm_config_model_fallback() {
-
         // Test summary model fallback to general model
         let config = LlmConfig {
             model: Some("gpt-3.5-turbo".to_string()),

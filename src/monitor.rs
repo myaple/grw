@@ -19,8 +19,6 @@ pub struct AsyncMonitorCommand {
     last_run: std::sync::Arc<std::sync::RwLock<Option<Instant>>>,
 }
 
-
-
 impl AsyncMonitorCommand {
     pub fn new(command: String, interval: u64) -> (Self, mpsc::Receiver<MonitorOutput>) {
         let (output_tx, output_rx) = mpsc::channel(32);
@@ -199,7 +197,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_monitor_command_error_handling() {
-        let (_monitor, mut rx) = AsyncMonitorCommand::new("nonexistent_command_12345".to_string(), 1);
+        let (_monitor, mut rx) =
+            AsyncMonitorCommand::new("nonexistent_command_12345".to_string(), 1);
 
         // Wait for the command to fail
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -275,7 +274,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_monitor_command_with_stderr() {
-        let (_monitor, mut rx) = AsyncMonitorCommand::new("sh -c 'echo stdout; echo stderr >&2'".to_string(), 1);
+        let (_monitor, mut rx) =
+            AsyncMonitorCommand::new("sh -c 'echo stdout; echo stderr >&2'".to_string(), 1);
 
         // Wait for execution
         tokio::time::sleep(Duration::from_secs(2)).await;

@@ -8,11 +8,10 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-
 use crate::git::GitRepo;
 use crate::llm::LlmClient;
-use crate::ui::{ActivePane, App, Theme};
 use crate::shared_state::LlmSharedState;
+use crate::ui::{ActivePane, App, Theme};
 use std::sync::Arc;
 
 pub trait Pane {
@@ -86,7 +85,11 @@ impl PaneRegistry {
         registry
     }
 
-    fn register_default_panes(&mut self, llm_client: LlmClient, llm_shared_state: Arc<LlmSharedState>) {
+    fn register_default_panes(
+        &mut self,
+        llm_client: LlmClient,
+        llm_shared_state: Arc<LlmSharedState>,
+    ) {
         self.register_pane(PaneId::FileTree, Box::new(FileTreePane::new()));
         self.register_pane(PaneId::Monitor, Box::new(MonitorPane::new()));
         self.register_pane(PaneId::Diff, Box::new(DiffPane::new()));
@@ -96,10 +99,7 @@ impl PaneRegistry {
         self.register_pane(PaneId::CommitPicker, Box::new(CommitPickerPane::new()));
         let mut commit_summary_pane = CommitSummaryPane::new_with_llm_client(Some(llm_client));
         commit_summary_pane.set_shared_state(llm_shared_state);
-        self.register_pane(
-            PaneId::CommitSummary,
-            Box::new(commit_summary_pane),
-        );
+        self.register_pane(PaneId::CommitSummary, Box::new(commit_summary_pane));
     }
 
     pub fn register_pane(&mut self, id: PaneId, pane: Box<dyn Pane>) {
@@ -743,10 +743,7 @@ impl Pane for HelpPane {
                         "  Shift+G           - Go to bottom",
                     ],
                 ),
-                _ => (
-                    "Unknown",
-                    vec![],
-                ),
+                _ => ("Unknown", vec![]),
             }
         };
 
@@ -845,7 +842,7 @@ mod help_tests {
     use super::*;
     use crate::ui::{App, Theme};
     use std::sync::Arc;
-    
+
     fn create_test_llm_state() -> Arc<crate::shared_state::LlmSharedState> {
         Arc::new(crate::shared_state::LlmSharedState::new())
     }
@@ -854,14 +851,14 @@ mod help_tests {
     #[test]
     fn test_help_detects_commit_picker_mode() {
         let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
-        
+
         // Test normal mode
         assert!(!app.is_in_commit_picker_mode());
-        
+
         // Enter commit picker mode
         app.enter_commit_picker_mode();
         assert!(app.is_in_commit_picker_mode());
-        
+
         // Exit commit picker mode
         app.exit_commit_picker_mode();
         assert!(!app.is_in_commit_picker_mode());
@@ -870,10 +867,10 @@ mod help_tests {
     #[test]
     fn test_help_detects_selected_commit() {
         let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
-        
+
         // Initially no commit selected
         assert!(app.get_selected_commit().is_none());
-        
+
         // Create a test commit and select it
         let test_commit = CommitInfo {
             sha: "abc123".to_string(),
@@ -884,10 +881,10 @@ mod help_tests {
             files_changed: vec![],
         };
         app.select_commit(test_commit);
-        
+
         // Now should have a selected commit
         assert!(app.get_selected_commit().is_some());
-        
+
         // Clear the selected commit
         app.clear_selected_commit();
         assert!(app.get_selected_commit().is_none());
@@ -896,7 +893,7 @@ mod help_tests {
     #[test]
     fn test_commit_summary_pane_cached_summary() {
         let mut pane = CommitSummaryPane::new_with_llm_client(None);
-        
+
         // Create a test commit
         let test_commit = CommitInfo {
             sha: "abc123".to_string(),
@@ -906,32 +903,35 @@ mod help_tests {
             date: "2023-01-01".to_string(),
             files_changed: vec![],
         };
-        
+
         // Update with commit
         pane.update_commit(Some(test_commit));
-        
+
         // Initially should need summary
         assert!(pane.needs_summary());
         assert!(pane.llm_summary.is_none());
-        
+
         // Set a cached summary
         pane.set_cached_summary("abc123", "This is a cached summary".to_string());
-        
+
         // Should no longer need summary and should have the cached one
         assert!(!pane.needs_summary());
-        assert_eq!(pane.llm_summary, Some("This is a cached summary".to_string()));
+        assert_eq!(
+            pane.llm_summary,
+            Some("This is a cached summary".to_string())
+        );
         assert_eq!(pane.loading_state, CommitSummaryLoadingState::Loaded);
     }
 
     #[test]
     fn test_commit_summary_pane_cache_callback() {
         let mut pane = CommitSummaryPane::new_with_llm_client(None);
-        
+
         // Initially no cache callback
         assert!(pane.take_cache_callback().is_none());
-        
+
         // Simulate receiving an LLM response using shared state
-        
+
         // Create a test commit to match the response
         let test_commit = CommitInfo {
             sha: "abc123".to_string(),
@@ -944,17 +944,17 @@ mod help_tests {
         pane.update_commit(Some(test_commit));
         pane.is_loading_summary = true; // Simulate loading state
         pane.pending_summary_sha = Some("abc123".to_string());
-        
+
         // Poll for the summary
         pane.poll_llm_summary();
-        
+
         // Should have a cache callback now
         let cache_callback = pane.take_cache_callback();
         assert!(cache_callback.is_some());
         let (commit_sha, summary) = cache_callback.unwrap();
         assert_eq!(commit_sha, "abc123");
         assert_eq!(summary, "Generated summary");
-        
+
         // Taking again should return None
         assert!(pane.take_cache_callback().is_none());
     }
@@ -962,7 +962,7 @@ mod help_tests {
     #[test]
     fn test_commit_summary_pane_caches_all_summaries() {
         let mut pane = CommitSummaryPane::new_with_llm_client(None);
-        
+
         // Set current commit to "commit1"
         let current_commit = CommitInfo {
             sha: "commit1".to_string(),
@@ -973,19 +973,19 @@ mod help_tests {
             files_changed: vec![],
         };
         pane.update_commit(Some(current_commit));
-        
+
         // Simulate receiving an LLM response for a DIFFERENT commit (commit2) using shared state
-        
+
         // Poll for the summary
         pane.poll_llm_summary();
-        
+
         // Should have a cache callback even though it's for a different commit
         let cache_callback = pane.take_cache_callback();
         assert!(cache_callback.is_some());
         let (commit_sha, summary) = cache_callback.unwrap();
         assert_eq!(commit_sha, "commit2");
         assert_eq!(summary, "Summary for commit2");
-        
+
         // The UI should NOT be updated since it's for a different commit
         assert!(pane.llm_summary.is_none());
         assert_eq!(pane.loading_state, CommitSummaryLoadingState::Loaded);
@@ -1476,7 +1476,6 @@ impl Pane for CommitPickerPane {
     }
 }
 
-
 // Commit Summary Pane Implementation
 pub struct CommitSummaryPane {
     visible: bool,
@@ -1592,7 +1591,8 @@ impl CommitSummaryPane {
         if let Some(_commit) = &self.current_commit {
             // TODO: Implement LLM summary generation using shared state
             self.loading_state = CommitSummaryLoadingState::Loaded;
-            self.llm_summary = Some("LLM summary generation not yet implemented with shared state".to_string());
+            self.llm_summary =
+                Some("LLM summary generation not yet implemented with shared state".to_string());
         }
     }
 
@@ -2163,7 +2163,7 @@ mod tests {
     #[test]
     fn test_commit_files_display_immediately() {
         let mut pane = CommitSummaryPane::new();
-        
+
         // Create a commit with file changes (simulating data from get_commit_history)
         let commit = crate::git::CommitInfo {
             sha: "abc123".to_string(),
@@ -2192,17 +2192,23 @@ mod tests {
 
         // Verify that the pane is immediately in Loaded state (not LoadingFiles)
         assert_eq!(pane.loading_state, CommitSummaryLoadingState::Loaded);
-        
+
         // Verify that the commit data is available
         assert!(pane.current_commit.is_some());
         let current_commit = pane.current_commit.as_ref().unwrap();
         assert_eq!(current_commit.files_changed.len(), 2);
-        assert_eq!(current_commit.files_changed[0].path, std::path::PathBuf::from("src/main.rs"));
-        assert_eq!(current_commit.files_changed[1].path, std::path::PathBuf::from("src/lib.rs"));
-        
+        assert_eq!(
+            current_commit.files_changed[0].path,
+            std::path::PathBuf::from("src/main.rs")
+        );
+        assert_eq!(
+            current_commit.files_changed[1].path,
+            std::path::PathBuf::from("src/lib.rs")
+        );
+
         // LLM summary should still be None (not loaded yet)
         assert!(pane.llm_summary.is_none());
-        
+
         // But the files should be immediately available for display
         // (This would be verified in the render method, which would show files immediately)
     }
@@ -2325,4 +2331,3 @@ mod tests {
         assert_eq!(advice_pane.scroll_offset, 64);
     }
 }
-

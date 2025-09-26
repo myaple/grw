@@ -1,4 +1,4 @@
-use crate::git::{CommitInfo, FileDiff, GitRepo, TreeNode, SummaryPreloader, PreloadConfig};
+use crate::git::{CommitInfo, FileDiff, GitRepo, PreloadConfig, SummaryPreloader, TreeNode};
 use crate::llm::LlmClient;
 use crate::pane::{PaneId, PaneRegistry};
 use crossterm::event::KeyEvent;
@@ -648,7 +648,6 @@ impl App {
         self.show_monitor_pane
     }
 
-  
     pub fn forward_key_to_panes(&mut self, key: KeyEvent) -> bool {
         let mut handled = false;
 
@@ -677,7 +676,6 @@ impl App {
             }
         }
 
-        
         handled
     }
 
@@ -718,8 +716,6 @@ impl App {
         self.pane_registry.set_theme(self.theme);
     }
 
-    
-    
     // Public getters for private fields needed by panes
     pub fn get_tree_nodes(&self) -> &Vec<(TreeNode, usize)> {
         &self.tree_nodes
@@ -765,8 +761,6 @@ impl App {
         self.last_active_pane
     }
 
-    
-    
     pub fn poll_llm_summaries(&mut self) {
         self.pane_registry
             .with_pane_mut(&PaneId::CommitSummary, |pane| {
@@ -776,7 +770,6 @@ impl App {
             });
     }
 
-    
     // Commit picker mode state management methods
     pub fn enter_commit_picker_mode(&mut self) {
         // Validate that we can enter commit picker mode
@@ -813,7 +806,7 @@ impl App {
             .with_pane_mut(&PaneId::SideBySideDiff, |pane| {
                 pane.set_visible(false);
             });
-                self.pane_registry.with_pane_mut(&PaneId::Help, |pane| {
+        self.pane_registry.with_pane_mut(&PaneId::Help, |pane| {
             pane.set_visible(false);
         });
     }
@@ -956,10 +949,13 @@ impl App {
             .unwrap_or(false)
     }
 
-    pub fn update_commit_summary_with_current_selection(&mut self, llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>) {
+    pub fn update_commit_summary_with_current_selection(
+        &mut self,
+        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>,
+    ) {
         if let Some(current_commit) = self.get_current_selected_commit_from_picker() {
             let commit_sha = current_commit.sha.clone();
-            
+
             // First update the commit in the pane
             self.pane_registry
                 .with_pane_mut(&PaneId::CommitSummary, |pane| {
@@ -967,14 +963,18 @@ impl App {
                         commit_summary.update_commit(Some(current_commit));
                     }
                 });
-            
+
             // Then check if we have a cached summary and set it if available
             self.check_and_set_cached_summary(&commit_sha, llm_state);
         }
     }
 
     /// Check shared state cache for summary and set it in CommitSummaryPane if available
-    pub fn check_and_set_cached_summary(&mut self, commit_sha: &str, llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>) {
+    pub fn check_and_set_cached_summary(
+        &mut self,
+        commit_sha: &str,
+        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>,
+    ) {
         // Check shared state cache directly
         if let Some(summary) = llm_state.get_cached_summary(commit_sha) {
             self.pane_registry
@@ -986,10 +986,12 @@ impl App {
         }
     }
 
-
-
     /// Handle cached summary result from GitWorker
-    pub fn handle_cached_summary_result(&mut self, cached_summary: Option<String>, commit_sha: &str) {
+    pub fn handle_cached_summary_result(
+        &mut self,
+        cached_summary: Option<String>,
+        commit_sha: &str,
+    ) {
         if let Some(summary) = cached_summary {
             // Set the cached summary in the CommitSummaryPane
             self.pane_registry
@@ -1012,16 +1014,23 @@ impl App {
     }
 
     /// Cache a newly generated summary in shared state
-    pub fn cache_generated_summary(&mut self, commit_sha: String, summary: String, llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>) {
+    pub fn cache_generated_summary(
+        &mut self,
+        commit_sha: String,
+        summary: String,
+        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>,
+    ) {
         // Cache directly in shared state
         llm_state.cache_summary(commit_sha, summary);
     }
 
-
-
     /// Handle cache callbacks from CommitSummaryPane
-    pub fn handle_commit_summary_cache_callbacks(&mut self, llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>) {
-        if let Some(cache_callback) = self.pane_registry
+    pub fn handle_commit_summary_cache_callbacks(
+        &mut self,
+        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>,
+    ) {
+        if let Some(cache_callback) = self
+            .pane_registry
             .with_pane_mut(&PaneId::CommitSummary, |pane| {
                 pane.as_commit_summary_pane_mut()
                     .and_then(|commit_summary| commit_summary.take_cache_callback())
@@ -1202,7 +1211,8 @@ impl App {
     }
 
     pub fn preload_summaries_around_index(&mut self, commits: &[CommitInfo], current_index: usize) {
-        self.summary_preloader.preload_around_index(commits, current_index);
+        self.summary_preloader
+            .preload_around_index(commits, current_index);
     }
 
     pub fn is_summary_loading(&self, commit_sha: &str) -> bool {
@@ -1221,9 +1231,11 @@ impl App {
         self.summary_preloader.clear_active_tasks();
     }
 
-    
     pub fn get_commit_picker_state(&self) -> Option<(Vec<CommitInfo>, usize)> {
-        if let Some(pane) = self.pane_registry.get_pane(&crate::pane::PaneId::CommitPicker) {
+        if let Some(pane) = self
+            .pane_registry
+            .get_pane(&crate::pane::PaneId::CommitPicker)
+        {
             if let Some(commit_picker) = pane.as_commit_picker_pane() {
                 let commits = commit_picker.get_commits();
                 let current_index = commit_picker.get_current_index();
@@ -1538,7 +1550,13 @@ mod tests {
         }
         let llm_client = LlmClient::new(llm_config).ok();
         let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
-        App::new_with_config(show_diff_panel, show_changed_files_pane, theme, llm_client, llm_state)
+        App::new_with_config(
+            show_diff_panel,
+            show_changed_files_pane,
+            theme,
+            llm_client,
+            llm_state,
+        )
     }
 
     #[test]

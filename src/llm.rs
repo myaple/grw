@@ -1,7 +1,7 @@
 use crate::config::LlmConfig;
 use log::debug;
 use openai_api_rs::v1::api::OpenAIClient;
-use openai_api_rs::v1::chat_completion::{self, ChatCompletionRequest, ChatCompletionMessage};
+use openai_api_rs::v1::chat_completion::{self, ChatCompletionMessage, ChatCompletionRequest};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
@@ -23,7 +23,10 @@ pub struct LlmClient {
 
 impl LlmClient {
     pub fn new(config: LlmConfig) -> Result<Self, String> {
-        debug!("🤖 LLM_CLIENT: Creating new client with config: {:?}", config);
+        debug!(
+            "🤖 LLM_CLIENT: Creating new client with config: {:?}",
+            config
+        );
 
         let api_key = config
             .api_key
@@ -44,7 +47,6 @@ impl LlmClient {
 
         Ok(Self { client, config })
     }
-
 
     pub async fn get_llm_summary(
         &self,
@@ -78,26 +80,24 @@ impl LlmClient {
             },
         ];
 
-        let result = self.make_llm_request(self.config.get_summary_model(), messages).await;
+        let result = self
+            .make_llm_request(self.config.get_summary_model(), messages)
+            .await;
         let execution_time = start_time.elapsed();
 
         match result {
-            Ok(content) => {
-                Ok(LlmAdviceResult {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    content,
-                    execution_time,
-                    has_error: false,
-                })
-            }
-            Err(error) => {
-                Ok(LlmAdviceResult {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    content: format!("❌ Failed to generate summary: {}", error),
-                    execution_time,
-                    has_error: true,
-                })
-            }
+            Ok(content) => Ok(LlmAdviceResult {
+                id: uuid::Uuid::new_v4().to_string(),
+                content,
+                execution_time,
+                has_error: false,
+            }),
+            Err(error) => Ok(LlmAdviceResult {
+                id: uuid::Uuid::new_v4().to_string(),
+                content: format!("❌ Failed to generate summary: {}", error),
+                execution_time,
+                has_error: true,
+            }),
         }
     }
 
@@ -106,7 +106,11 @@ impl LlmClient {
         model: String,
         messages: Vec<ChatCompletionMessage>,
     ) -> Result<String, String> {
-        debug!("🤖 LLM_CLIENT: Making request to model: {} ({} messages)", model, messages.len());
+        debug!(
+            "🤖 LLM_CLIENT: Making request to model: {} ({} messages)",
+            model,
+            messages.len()
+        );
 
         let req = ChatCompletionRequest::new(model, messages);
 

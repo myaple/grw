@@ -1,6 +1,4 @@
-use crate::git::{
-    CommitFileChange, CommitInfo, FileChangeStatus, FileDiff, GitRepo, ViewMode,
-};
+use crate::git::{CommitFileChange, CommitInfo, FileChangeStatus, FileDiff, GitRepo, ViewMode};
 use crate::shared_state::GitSharedState;
 use color_eyre::eyre::Result;
 use git2::{DiffOptions, Repository, Status, StatusOptions};
@@ -23,10 +21,7 @@ pub struct GitWorker {
 
 impl GitWorker {
     /// Create a new GitWorker with shared state
-    pub fn new(
-        path: PathBuf,
-        shared_state: Arc<GitSharedState>,
-    ) -> Result<Self> {
+    pub fn new(path: PathBuf, shared_state: Arc<GitSharedState>) -> Result<Self> {
         let repo = Repository::open(&path)?;
 
         let last_commit_id = repo
@@ -49,14 +44,15 @@ impl GitWorker {
         })
     }
 
-
-
     /// Set the maximum cache size for commit data
     pub fn set_cache_size(&mut self, max_size: usize) {
         self.cache_max_size = max_size;
         // Note: Cache eviction is now handled by shared state
         // Individual cache clearing is not supported in shared state architecture
-        debug!("Cache size set to {}, shared state manages eviction automatically", max_size);
+        debug!(
+            "Cache size set to {}, shared state manages eviction automatically",
+            max_size
+        );
     }
 
     /// Clear all cached commit data (now clears shared state caches)
@@ -69,7 +65,10 @@ impl GitWorker {
     /// Get cached LLM summary for a commit (deprecated - use LlmSharedState)
     /// Returns None as LLM summaries are now handled by LlmSharedState
     pub fn get_cached_summary(&self, commit_sha: &str) -> Option<String> {
-        debug!("GitWorker.get_cached_summary is deprecated - use LlmSharedState.get_cached_summary instead for commit: {}", commit_sha);
+        debug!(
+            "GitWorker.get_cached_summary is deprecated - use LlmSharedState.get_cached_summary instead for commit: {}",
+            commit_sha
+        );
         // LLM summaries are now handled by LlmSharedState, not GitWorker
         None
     }
@@ -77,23 +76,31 @@ impl GitWorker {
     /// Cache an LLM summary for a commit (deprecated - use LlmSharedState)
     /// This method is now a no-op as LLM summaries are handled by LlmSharedState
     pub fn cache_summary(&mut self, commit_sha: String, _summary: String) {
-        debug!("GitWorker.cache_summary is deprecated - use LlmSharedState.cache_summary instead for commit: {}", commit_sha);
+        debug!(
+            "GitWorker.cache_summary is deprecated - use LlmSharedState.cache_summary instead for commit: {}",
+            commit_sha
+        );
         // LLM summaries are now handled by LlmSharedState, not GitWorker
     }
 
     /// Clear only the LLM summary cache (deprecated - use LlmSharedState)
     /// This method is now a no-op as LLM summaries are handled by LlmSharedState
     pub fn clear_summary_cache(&mut self) {
-        debug!("GitWorker.clear_summary_cache is deprecated - use LlmSharedState.clear_all_errors instead");
+        debug!(
+            "GitWorker.clear_summary_cache is deprecated - use LlmSharedState.clear_all_errors instead"
+        );
         // LLM summaries are now handled by LlmSharedState, not GitWorker
     }
 
     /// Continuous run loop for shared state mode
     pub async fn run_continuous(&mut self, update_interval_ms: u64) -> Result<()> {
-        debug!("Starting GitWorker continuous run loop with {}ms interval", update_interval_ms);
-        
+        debug!(
+            "Starting GitWorker continuous run loop with {}ms interval",
+            update_interval_ms
+        );
+
         let update_interval = tokio::time::Duration::from_millis(update_interval_ms);
-        
+
         loop {
             // Perform git status update
             if let Err(e) = self.update_shared_state() {
@@ -101,7 +108,7 @@ impl GitWorker {
                 // Error is already stored in shared state by update_shared_state()
                 // Continue running despite errors
             }
-            
+
             // Sleep for the configured interval
             tokio::time::sleep(update_interval).await;
         }
@@ -114,7 +121,9 @@ impl GitWorker {
 
     /// Simplified run method for shared state mode
     pub async fn run(&mut self) {
-        debug!("GitWorker running in shared state mode - use run_continuous() for continuous operation");
+        debug!(
+            "GitWorker running in shared state mode - use run_continuous() for continuous operation"
+        );
         // This method is now simplified since we're using shared state
         // The actual work is done through direct method calls
         // rather than message passing
@@ -131,7 +140,7 @@ impl GitWorker {
                 Ok(_) => {
                     // Clear any previous errors on success
                     self.shared_state.clear_error("git_status");
-                    
+
                     // Update shared state with the new git repo snapshot
                     let git_repo = self.create_git_repo_snapshot();
                     self.shared_state.update_repo(git_repo);
@@ -139,15 +148,18 @@ impl GitWorker {
                 }
                 Err(e) => {
                     last_error = Some(e);
-                    
+
                     // Check if this is a transient error that might benefit from retry
                     let error_str = last_error.as_ref().unwrap().to_string();
-                    let is_transient = error_str.contains("lock") 
-                        || error_str.contains("busy") 
+                    let is_transient = error_str.contains("lock")
+                        || error_str.contains("busy")
                         || error_str.contains("temporary");
-                    
+
                     if is_transient && attempt < 3 {
-                        debug!("Transient git error on attempt {}, retrying: {}", attempt, error_str);
+                        debug!(
+                            "Transient git error on attempt {}, retrying: {}",
+                            attempt, error_str
+                        );
                         std::thread::sleep(std::time::Duration::from_millis(100 * attempt as u64));
                         continue;
                     } else {
@@ -161,17 +173,17 @@ impl GitWorker {
         // If we get here, all attempts failed
         if let Some(error) = last_error {
             let error_msg = error.to_string();
-            self.shared_state.set_error("git_status".to_string(), error_msg);
+            self.shared_state
+                .set_error("git_status".to_string(), error_msg);
             Err(error)
         } else {
             // This shouldn't happen, but handle it gracefully
             let error_msg = "Unknown git status error".to_string();
-            self.shared_state.set_error("git_status".to_string(), error_msg.clone());
+            self.shared_state
+                .set_error("git_status".to_string(), error_msg.clone());
             Err(color_eyre::eyre::eyre!(error_msg))
         }
     }
-
-
 
     /// Internal update logic that handles git status directly
     fn update_internal_direct(&mut self) -> Result<()> {
@@ -876,14 +888,17 @@ impl GitWorker {
         if let Some(cached_diffs) = self.shared_state.get_cached_file_diff(&cache_key) {
             debug!("Using cached file changes for commit: {}", commit_sha);
             // Convert FileDiff to CommitFileChange (simplified for now)
-            let file_changes: Vec<CommitFileChange> = cached_diffs.into_iter().map(|diff| {
-                CommitFileChange {
-                    path: diff.path,
-                    status: FileChangeStatus::Modified, // Simplified mapping
-                    additions: diff.additions,
-                    deletions: diff.deletions,
-                }
-            }).collect();
+            let file_changes: Vec<CommitFileChange> = cached_diffs
+                .into_iter()
+                .map(|diff| {
+                    CommitFileChange {
+                        path: diff.path,
+                        status: FileChangeStatus::Modified, // Simplified mapping
+                        additions: diff.additions,
+                        deletions: diff.deletions,
+                    }
+                })
+                .collect();
             return Ok(file_changes);
         }
 
@@ -1035,15 +1050,18 @@ impl GitWorker {
 
         // Cache the file changes in shared state for future use
         let cache_key = format!("commit_changes_{}", commit_sha);
-        let file_diffs: Vec<FileDiff> = file_changes.iter().map(|change| {
-            FileDiff {
-                path: change.path.clone(),
-                status: git2::Status::from_bits_truncate(4), // INDEX_MODIFIED
-                line_strings: vec![], // Simplified for caching
-                additions: change.additions,
-                deletions: change.deletions,
-            }
-        }).collect();
+        let file_diffs: Vec<FileDiff> = file_changes
+            .iter()
+            .map(|change| {
+                FileDiff {
+                    path: change.path.clone(),
+                    status: git2::Status::from_bits_truncate(4), // INDEX_MODIFIED
+                    line_strings: vec![],                        // Simplified for caching
+                    additions: change.additions,
+                    deletions: change.deletions,
+                }
+            })
+            .collect();
         self.shared_state.cache_file_diff(cache_key, file_diffs);
 
         Ok(file_changes)
@@ -1550,7 +1568,8 @@ mod tests {
 
         // Create some commits
         let commit1_id = create_commit(&repo, &repo_path, "file1.txt", "content1", "First commit")?;
-        let commit2_id = create_commit(&repo, &repo_path, "file2.txt", "content2", "Second commit")?;
+        let commit2_id =
+            create_commit(&repo, &repo_path, "file2.txt", "content2", "Second commit")?;
 
         // Create shared state and GitWorker with new constructor
         let git_shared_state = Arc::new(crate::shared_state::GitSharedState::new());
@@ -1572,12 +1591,18 @@ mod tests {
         llm_shared_state.cache_summary(commit2_sha.clone(), summary2.clone());
 
         // Verify summaries are cached in LLM shared state
-        assert_eq!(llm_shared_state.get_cached_summary(&commit1_sha), Some(summary1.clone()));
-        assert_eq!(llm_shared_state.get_cached_summary(&commit2_sha), Some(summary2.clone()));
+        assert_eq!(
+            llm_shared_state.get_cached_summary(&commit1_sha),
+            Some(summary1.clone())
+        );
+        assert_eq!(
+            llm_shared_state.get_cached_summary(&commit2_sha),
+            Some(summary2.clone())
+        );
 
         // Test cache clearing (LLM shared state doesn't have a clear method, so we test individual removal)
         // Note: LlmSharedState doesn't have a clear_all method, so we verify the cache works as expected
-        
+
         // Verify git worker still works for commit data
         let commits = git_worker.get_commit_history(10)?;
         assert!(!commits.is_empty()); // Should still have commit data
@@ -1619,8 +1644,11 @@ mod tests {
             .iter()
             .filter(|id| git_worker.get_cached_summary(&id.to_string()).is_some())
             .count();
-        
-        assert!(cached_count <= 2, "Cache should be limited by eviction policy");
+
+        assert!(
+            cached_count <= 2,
+            "Cache should be limited by eviction policy"
+        );
 
         Ok(())
     }
@@ -1631,7 +1659,8 @@ mod tests {
 
         // Create commits
         let commit1_id = create_commit(&repo, &repo_path, "file1.txt", "content1", "First commit")?;
-        let commit2_id = create_commit(&repo, &repo_path, "file2.txt", "content2", "Second commit")?;
+        let commit2_id =
+            create_commit(&repo, &repo_path, "file2.txt", "content2", "Second commit")?;
 
         let shared_state = Arc::new(GitSharedState::new());
         let mut git_worker = GitWorker::new(repo_path, shared_state)?;
@@ -1729,7 +1758,7 @@ mod tests {
         // Simulate an error by using an invalid path
         let invalid_shared_state = Arc::new(GitSharedState::new());
         let invalid_path = PathBuf::from("/invalid/path/that/does/not/exist");
-        
+
         // This should fail during GitWorker creation
         let result = GitWorker::new(invalid_path, invalid_shared_state.clone());
         assert!(result.is_err());
@@ -1742,7 +1771,13 @@ mod tests {
         let (_temp_dir, _repo, repo_path) = create_test_repo()?;
 
         // Create initial commit
-        create_commit(&_repo, &repo_path, "file1.txt", "initial content", "Initial commit")?;
+        create_commit(
+            &_repo,
+            &repo_path,
+            "file1.txt",
+            "initial content",
+            "Initial commit",
+        )?;
 
         // Create GitWorker with shared state
         let shared_state = Arc::new(GitSharedState::new());
@@ -1754,14 +1789,15 @@ mod tests {
             // Run for a very short time
             tokio::time::timeout(
                 tokio::time::Duration::from_millis(100),
-                git_worker.run_continuous(50)
-            ).await
+                git_worker.run_continuous(50),
+            )
+            .await
         });
 
         // Wait for the task to timeout (which is expected)
         let result = run_task.await;
         assert!(result.is_ok()); // The task completed (timed out)
-        
+
         // The timeout result should be an error (timeout)
         let timeout_result = result.unwrap();
         assert!(timeout_result.is_err()); // Should be timeout error
@@ -1791,7 +1827,7 @@ mod tests {
         // We'll simulate this by trying to access a non-existent repository
         let invalid_shared_state = Arc::new(GitSharedState::new());
         let invalid_path = PathBuf::from("/tmp/non_existent_repo_for_test");
-        
+
         // Create a GitWorker that will fail
         if let Ok(mut invalid_worker) = GitWorker::new(invalid_path, invalid_shared_state.clone()) {
             // This update should fail and set an error in shared state
@@ -1839,7 +1875,7 @@ mod tests {
         // Test file diff caching
         let commit_sha = &commits1[0].sha;
         let file_changes = git_worker.get_commit_file_changes(commit_sha)?;
-        
+
         // Verify file changes were cached in shared state
         let cache_key = format!("commit_changes_{}", commit_sha);
         let cached_diffs = shared_state.get_cached_file_diff(&cache_key);
