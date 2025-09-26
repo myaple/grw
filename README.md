@@ -31,7 +31,6 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 ### Pane Modes
 - `Ctrl+d` - Switch to inline diff view
 - `Ctrl+s` - Switch to side-by-side diff view
-- `Ctrl+l` - Switch to LLM advice pane
 
 ### File Tree
 - `Tab` / `g t` - Next file
@@ -48,13 +47,6 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 ### Monitor
 - `Alt+j` / `Alt+Down` - Scroll down
 - `Alt+k` / `Alt+Up` - Scroll up
-
-### LLM Advice
-- `j` / `k` - Scroll up/down
-- `/` - Enter input mode to ask a question
-- `Enter` - Submit the question to the LLM
-- `Esc` - Exit input mode
-- `Ctrl+r` - Refresh LLM advice
 
 ### Commit Picker
 - `j` / `k` / `↑` / `↓` - Navigate commits
@@ -96,11 +88,10 @@ grw
 - `--monitor-command <COMMAND>` - Command to run in monitor pane
 - `--monitor-interval <SECONDS>` - Interval in seconds for monitor command refresh
 - `--theme <THEME>` - Set initial theme (light or dark)
-- `--llm-provider <PROVIDER>` - LLM provider to use for advice (e.g., openai)
-- `--llm-model <MODEL>` - LLM model to use for advice
+- `--llm-provider <PROVIDER>` - LLM provider to use for commit summaries (e.g., openai)
+- `--llm-model <MODEL>` - LLM model to use for commit summaries
 - `--llm-api-key <KEY>` - API key for the LLM provider
 - `--llm-base-url <URL>` - Base URL for the LLM provider
-- `--llm-prompt <PROMPT>` - Prompt to use for LLM advice
 
 ### Examples
 
@@ -159,14 +150,18 @@ Configuration options:
 - `monitor_command` (string): Command to run in monitor pane (optional)
 - `monitor_interval` (number): Interval in seconds for monitor command refresh (optional)
 - `theme` (string): Initial theme setting (light or dark) (optional)
+- `commit_history_limit` (number): Maximum number of commits to load in commit picker (optional, default: 100)
+- `commit_cache_size` (number): Maximum number of commits to cache in shared state (optional, default: 200)
+- `summary_preload_enabled` (boolean): Enable automatic summary preloading (optional, default: true)
+- `summary_preload_count` (number): Number of summaries to preload ahead (optional, default: 5)
 - `llm` (object): LLM provider configuration (optional)
   - `provider` (string): LLM provider (e.g., "openai")
   - `model` (string): LLM model name
+  - `summary_model` (string): Specific model for commit summaries (optional)
   - `api_key` (string): API key for the LLM provider
   - `base_url` (string): Base URL for the LLM provider
-  - `prompt` (string): Prompt to use for LLM advice
 
-A full configuration with LLM settings might look like this:
+A full configuration with LLM settings and shared state tuning might look like this:
 
 ```json
 {
@@ -175,9 +170,14 @@ A full configuration with LLM settings might look like this:
   "monitor_command": "git status --short",
   "monitor_interval": 5,
   "theme": "dark",
+  "commit_history_limit": 150,
+  "commit_cache_size": 300,
+  "summary_preload_enabled": true,
+  "summary_preload_count": 8,
   "llm": {
     "provider": "openai",
-    "model": "gpt-4",
+    "model": "gpt-4o-mini",
+    "summary_model": "gpt-4o-mini",
     "api_key": "your-api-key-here",
     "base_url": "https://api.openai.com/v1"
   }
@@ -236,6 +236,31 @@ Debug logs include:
 - Render timing information
 - File change detection details
 - UI state changes
+
+## Architecture
+
+GRW uses a modern shared state architecture built on lock-free concurrent data structures from the `scc` crate. This design provides better performance and lower latency compared to traditional channel-based communication.
+
+### Shared State Components
+
+- **GitSharedState**: Manages repository data, commit cache, and file diffs using concurrent HashMap structures
+- **LlmSharedState**: Handles LLM summary and advice caching with active task tracking
+- **MonitorSharedState**: Stores monitor command output and timing information
+- **SharedStateManager**: Central coordinator for all shared state components
+
+### Key Benefits
+
+- **Lock-free operations**: All data structures use atomic operations for thread-safe access
+- **Better cache locality**: Shared memory reduces overhead compared to message passing
+- **Direct access**: Main thread can read data directly without waiting for channel messages
+- **Concurrent caching**: Multiple workers can update caches simultaneously without blocking
+
+### Performance Characteristics
+
+- Real-time git status updates with minimal overhead
+- Efficient LLM summary caching and preloading
+- Responsive UI updates through direct shared state access
+- Automatic cleanup of stale tasks and cached data
 
 ## Development
 

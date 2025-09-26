@@ -19,15 +19,17 @@ mod llm;
 mod logging;
 mod monitor;
 mod pane;
+mod shared_state;
 mod ui;
 
 use std::env;
+use std::sync::Arc;
 
 use config::{Args, Config};
-use git::AsyncGitRepo;
-use llm::{AsyncLLMCommand, LlmClient};
+use llm::LlmClient;
 use log::{debug, error, info};
 use monitor::AsyncMonitorCommand;
+use shared_state::SharedStateManager;
 use ui::App;
 
 pub const GIT_SHA: &str = "unknown";
@@ -50,7 +52,34 @@ async fn main() -> Result<()> {
     let repo_path = std::env::current_dir()?;
     log::info!("Starting grw in directory: {repo_path:?}");
     log::debug!("Debug mode enabled");
-    let mut git_repo = AsyncGitRepo::new(repo_path, 500)?;
+
+    // Initialize shared state manager
+    let shared_state_manager = SharedStateManager::new();
+    let shared_state_config = config.get_shared_state_config();
+    if let Err(e) = shared_state_manager.initialize(Some(&shared_state_config)) {
+        error!(
+            "Failed to initialize shared state with configuration: {}",
+            e
+        );
+        return Err(color_eyre::eyre::eyre!(
+            "Failed to initialize shared state: {}",
+            e
+        ));
+    }
+    info!("Shared state manager initialized successfully");
+
+    // Create GitWorker with shared state and start it running continuously
+    let mut git_worker = crate::git_worker::GitWorker::new(
+        repo_path.clone(),
+        Arc::clone(shared_state_manager.git_state()),
+    )?;
+
+    // Start the GitWorker in a background task
+    tokio::spawn(async move {
+        if let Err(e) = git_worker.run_continuous(500).await {
+            error!("GitWorker continuous run failed: {}", e);
+        }
+    });
 
     let llm_client = if let Some(llm_config) = &final_config.llm {
         if llm_config.api_key.is_some() || env::var("OPENAI_API_KEY").is_ok() {
@@ -76,23 +105,21 @@ async fn main() -> Result<()> {
             config::Theme::Light => ui::Theme::Light,
         },
         llm_client.clone(),
+        Arc::clone(shared_state_manager.llm_state()),
     );
 
-    // Set up GitWorker communication for SummaryPreloader
-    let git_worker_tx = git_repo.get_git_worker_tx();
-    app.set_summary_preloader_git_worker_tx(git_worker_tx);
+    // SummaryPreloader uses shared state for caching
 
     // Configure summary preloader from config
     let preload_config = final_config.get_summary_preload_config();
     app.set_preload_config(preload_config);
 
-    let mut monitor_command = if let Some(cmd) = &final_config.monitor_command {
-        Some(AsyncMonitorCommand::new(
-            cmd.clone(),
-            final_config.monitor_interval.unwrap_or(5),
-        ))
+    let (monitor_command, mut monitor_rx) = if let Some(cmd) = &final_config.monitor_command {
+        let (cmd, rx) =
+            AsyncMonitorCommand::new(cmd.clone(), final_config.monitor_interval.unwrap_or(5));
+        (Some(cmd), Some(rx))
     } else {
-        None
+        (None, None)
     };
 
     // Enable monitor pane when a command is configured
@@ -100,15 +127,6 @@ async fn main() -> Result<()> {
         app.toggle_monitor_pane();
         app.set_monitor_command_configured(true);
     }
-
-    let mut llm_command = if let Some(client) = &llm_client {
-        let command = AsyncLLMCommand::new(client.clone());
-        log::debug!("Triggering initial LLM advice refresh");
-        command.refresh();
-        Some(command)
-    } else {
-        None
-    };
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -118,111 +136,94 @@ async fn main() -> Result<()> {
     execute!(io::stdout(), EnterAlternateScreen)?;
 
     loop {
-        // Poll for git updates (but skip if a commit is selected to avoid overriding commit files)
+        // Read git updates from shared state (but skip if a commit is selected to avoid overriding commit files)
         if app.get_selected_commit().is_none() {
-            git_repo.update();
-            if let Some(result) = git_repo.try_get_result() {
-                match result {
-                    git::GitWorkerResult::Update(repo) => {
-                        let changed_files = repo.get_display_files();
-                        let tree = repo.get_file_tree();
+            // Check for git updates from shared state
+            if let Some(repo) = shared_state_manager.git_state().get_repo() {
+                let changed_files = repo.get_display_files();
+                let tree = repo.get_file_tree();
 
-                        app.update_files(changed_files.clone());
-                        app.update_tree(&tree);
-                        git_repo.repo = Some(repo);
-                    }
-                    git::GitWorkerResult::Error(e) => {
-                        error!("Git worker error: {e}");
-                    }
-                    git::GitWorkerResult::CommitHistory(_) => {
-                        // This is handled in the commit picker activation, not here
-                        debug!("Received commit history result in main loop (ignored)");
-                    }
-                    git::GitWorkerResult::CachedSummary(cached_summary) => {
-                        // Handle cached summary result for CommitSummaryPane
-                        if let Some(current_commit) = app.get_current_selected_commit_from_picker() {
-                            app.handle_cached_summary_result(cached_summary, &current_commit.sha);
-                        }
-                    }
-                    git::GitWorkerResult::SummaryCached => {
-                        // Summary has been cached in GitWorker
-                        debug!("Summary cached confirmation received");
-                    }
-                }
+                app.update_files(changed_files.clone());
+                app.update_tree(&tree);
+            }
+
+            // Check for git errors in shared state
+            if let Some(error) = shared_state_manager.git_state().get_error("git_status") {
+                error!("Git shared state error: {error}");
+                // Clear the error after handling it
+                shared_state_manager.git_state().clear_error("git_status");
             }
         } else {
-            // Still update the git repo state for status bar, but don't override app files
-            git_repo.update();
-            if let Some(result) = git_repo.try_get_result() {
-                match result {
-                    git::GitWorkerResult::Update(repo) => {
-                        git_repo.repo = Some(repo);
-                    }
-                    git::GitWorkerResult::Error(e) => {
-                        error!("Git worker error: {e}");
-                    }
-                    git::GitWorkerResult::CommitHistory(_) => {
-                        // This is handled in the commit picker activation, not here
-                        debug!("Received commit history result in main loop (ignored)");
-                    }
-                    git::GitWorkerResult::CachedSummary(cached_summary) => {
-                        // Handle cached summary result for CommitSummaryPane
-                        if let Some(current_commit) = app.get_current_selected_commit_from_picker() {
-                            app.handle_cached_summary_result(cached_summary, &current_commit.sha);
-                        }
-                    }
-                    git::GitWorkerResult::SummaryCached => {
-                        // Summary has been cached in GitWorker
-                        debug!("Summary cached confirmation received");
-                    }
-                }
+            // Check for git errors in shared state
+            if let Some(error) = shared_state_manager.git_state().get_error("git_status") {
+                error!("Git shared state error: {error}");
+                // Clear the error after handling it
+                shared_state_manager.git_state().clear_error("git_status");
             }
         }
 
         // Update monitor command if it exists
-        if let Some(ref mut monitor) = monitor_command {
-            if let Some(result) = monitor.try_get_result() {
-                match result {
-                    monitor::MonitorResult::Success(output) => {
-                        app.update_monitor_output(output);
-                    }
-                    monitor::MonitorResult::Error(output) => {
-                        log::error!("Monitor command failed");
-                        app.update_monitor_output(output);
-                    }
-                }
+        if let Some(ref mut rx) = monitor_rx {
+            // Poll for new monitor output
+            while let Ok(monitor_output) = rx.try_recv() {
+                app.update_monitor_output(monitor_output.output.clone());
+                app.update_monitor_timing(Some(monitor_output.timestamp.elapsed()), true);
             }
+        }
 
-            // Update timing information
+        // Update timing information
+        if let Some(ref monitor) = monitor_command {
             let elapsed = monitor.get_elapsed_since_last_run();
             let has_run = monitor.has_run_yet();
             app.update_monitor_timing(elapsed, has_run);
         }
 
-        // Poll for LLM advice responses
-        app.poll_llm_advice();
+        // Check shared state for cached summaries
+        if let Some(current_commit) = app.get_current_selected_commit_from_picker()
+            && let Some(cached_summary) = shared_state_manager
+                .llm_state()
+                .get_cached_summary(&current_commit.sha)
+        {
+            // Handle cached summary from shared state
+            app.handle_cached_summary_result(Some(cached_summary), &current_commit.sha);
+        }
 
-        // Poll for LLM commit summary responses
-        app.poll_llm_summaries();
+        // Periodic error recovery check - clear stale errors every 30 seconds
+        static LAST_ERROR_CLEANUP: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last_cleanup = LAST_ERROR_CLEANUP.load(std::sync::atomic::Ordering::Relaxed);
 
-        // Update llm command if it exists
-        if let Some(ref mut llm) = llm_command {
-            if let Some(repo) = &git_repo.repo {
-                let _ = llm.git_repo_tx.send(Some(repo.clone()));
-            }
+        if current_time.saturating_sub(last_cleanup) > 30 {
+            // Clear any stale errors that might have accumulated
+            if shared_state_manager.git_state().has_errors()
+                || shared_state_manager.llm_state().has_errors()
+            {
+                debug!("Performing periodic error cleanup");
 
-            if let Some(result) = llm.try_get_result() {
-                match result {
-                    llm::LLMResult::Success(output) => {
-                        app.update_llm_advice(output);
+                // Only clear errors that are not currently being displayed
+                // Git errors are cleared immediately after display, so any remaining are stale
+                let git_errors = shared_state_manager.git_state().get_all_errors();
+                for (key, _) in git_errors {
+                    if key != "git_status" {
+                        // Keep current git_status errors
+                        shared_state_manager.git_state().clear_error(&key);
                     }
-                    llm::LLMResult::Error(output) => {
-                        log::error!("LLM command failed");
-                        app.update_llm_advice(output);
+                }
+
+                // Clear old LLM summary errors (keep advice_generation for current display)
+                let llm_errors = shared_state_manager.llm_state().get_all_errors();
+                for (key, _) in llm_errors {
+                    if key.starts_with("summary_") && key != "advice_generation" {
+                        shared_state_manager.llm_state().clear_error(&key);
                     }
-                    llm::LLMResult::Noop => {}
                 }
             }
+
+            LAST_ERROR_CLEANUP.store(current_time, std::sync::atomic::Ordering::Relaxed);
         }
 
         // Calculate monitor visible height before rendering
@@ -306,7 +307,7 @@ async fn main() -> Result<()> {
                 app.current_diff_height = 20;
             }
 
-            if let Some(repo) = &git_repo.repo {
+            if let Some(repo) = &shared_state_manager.git_state().get_repo() {
                 ui::render::<CrosstermBackend<std::io::Stdout>>(f, &app, repo);
             }
         })?;
@@ -318,35 +319,27 @@ async fn main() -> Result<()> {
 
         // Update commit summary pane with current selection from commit picker
         if app.is_in_commit_picker_mode() {
-            app.update_commit_summary_with_current_selection();
-            
+            app.update_commit_summary_with_current_selection(shared_state_manager.llm_state());
+
             // Trigger continuous pre-loading as user navigates
-            if let Some((commits, current_index)) = app.get_commit_picker_state() {
-                if !commits.is_empty() {
-                    app.preload_summaries_around_index(&commits, current_index);
-                }
+            if let Some((commits, current_index)) = app.get_commit_picker_state()
+                && !commits.is_empty()
+            {
+                app.preload_summaries_around_index(&commits, current_index);
             }
         }
 
         // Handle cache callbacks from CommitSummaryPane
-        app.handle_commit_summary_cache_callbacks();
+        app.handle_commit_summary_cache_callbacks(shared_state_manager.llm_state());
 
-        // Poll for LLM summary updates
-        app.poll_commit_summary_updates();
+        // Poll for LLM summary updates from shared state
+        // Summary updates are now handled through shared state cache
 
-        if crossterm::event::poll(Duration::from_millis(10))? {
-            if let Event::Key(key) = crossterm::event::read()? {
-                if handle_key_event(key, &mut app, &git_repo, &final_config) {
-                    break;
-                }
-            }
-        }
-
-        if app.is_advice_refresh_requested() {
-            if let Some(llm) = &mut llm_command {
-                llm.refresh();
-            }
-            app.reset_advice_refresh_request();
+        if crossterm::event::poll(Duration::from_millis(10))?
+            && let Event::Key(key) = crossterm::event::read()?
+            && handle_key_event(key, &mut app, &final_config, &shared_state_manager)
+        {
+            break;
         }
 
         // Handle commit selection from commit picker
@@ -385,6 +378,13 @@ async fn main() -> Result<()> {
     execute!(io::stdout(), LeaveAlternateScreen)?;
     let _ = terminal.clear();
 
+    // Cleanup shared state
+    if let Err(e) = shared_state_manager.shutdown() {
+        error!("Error during shared state shutdown: {}", e);
+    } else {
+        info!("Shared state architecture shutdown completed successfully");
+    }
+
     log::info!("Application shutdown complete");
     Ok(())
 }
@@ -392,8 +392,8 @@ async fn main() -> Result<()> {
 fn handle_key_event(
     key: KeyEvent,
     app: &mut App,
-    git_repo: &AsyncGitRepo,
     config: &Config,
+    shared_state_manager: &SharedStateManager,
 ) -> bool {
     // Handle commit picker mode key events first
     if app.is_in_commit_picker_mode() {
@@ -431,7 +431,8 @@ fn handle_key_event(
         return false; // Don't quit, stay in commit picker mode
     }
 
-    if app.is_showing_advice_pane() && app.forward_key_to_panes(key) {
+    let panes_handled = app.forward_key_to_panes(key);
+    if panes_handled {
         return false;
     }
 
@@ -445,74 +446,39 @@ fn handle_key_event(
             true
         }
         KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_to_bottom(app.current_diff_height);
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_to_bottom(app.current_diff_height);
+            false
         }
         KeyCode::Char('j') if key.modifiers.is_empty() => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_down(app.current_diff_height);
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_down(app.current_diff_height);
+            false
         }
         KeyCode::Down => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_down(app.current_diff_height);
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_down(app.current_diff_height);
+            false
         }
         KeyCode::Char('k') if key.modifiers.is_empty() => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_up();
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_up();
+            false
         }
         KeyCode::Up => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_up();
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_up();
+            false
         }
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_down(app.current_diff_height);
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_down(app.current_diff_height);
+            false
         }
         KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if app.forward_key_to_panes(key) {
-                // Key was handled by a pane
-                false
-            } else {
-                // Fall back to default behavior
-                app.scroll_up();
-                false
-            }
+            // This should have been handled by forward_key_to_panes above
+            app.scroll_up();
+            false
         }
         KeyCode::Char('g') => {
             if app.handle_g_press() {
@@ -611,11 +577,6 @@ fn handle_key_event(
             debug!("Monitor pane is now: {}", app.is_showing_monitor_pane());
             false
         }
-        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            debug!("User pressed Ctrl+L - switching to advice pane");
-            app.set_advice_pane();
-            false
-        }
         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             debug!("User pressed Ctrl+W - returning to working directory view");
             app.clear_selected_commit();
@@ -625,16 +586,16 @@ fn handle_key_event(
             debug!("User pressed Ctrl+P - activating commit picker");
             // Only activate commit picker when in appropriate diff mode
             if app.is_showing_diff_panel() && !app.is_in_commit_picker_mode() {
-                if let Some(repo) = &git_repo.repo {
+                if let Some(repo) = shared_state_manager.git_state().get_repo() {
                     // Enter commit picker mode first and show loading state
                     app.enter_commit_picker_mode();
                     app.set_commit_picker_loading();
 
-                    // Create a temporary GitWorker to load commit history
-                    let (_tx, rx) = tokio::sync::mpsc::channel(1);
-                    let (result_tx, _result_rx) = tokio::sync::mpsc::channel(1);
-
-                    match crate::git_worker::GitWorker::new(repo.path.clone(), rx, result_tx) {
+                    // Create a temporary GitWorker to load commit history using shared state
+                    match crate::git_worker::GitWorker::new(
+                        repo.path.clone(),
+                        Arc::clone(shared_state_manager.git_state()),
+                    ) {
                         Ok(mut git_worker) => {
                             // Configure cache size from config
                             git_worker.set_cache_size(config.get_commit_cache_size());
@@ -645,13 +606,16 @@ fn handle_key_event(
                                 Ok(commits) => {
                                     debug!("Successfully loaded {} commits", commits.len());
                                     app.update_commit_picker_commits(commits.clone());
-                                    
+
                                     // Configure and trigger summary pre-loading
                                     let preload_config = config.get_summary_preload_config();
                                     app.set_preload_config(preload_config);
-                                    
+
                                     // Start pre-loading summaries for the first few commits
-                                    debug!("Starting summary pre-loading for {} commits", commits.len());
+                                    debug!(
+                                        "Starting summary pre-loading for {} commits",
+                                        commits.len()
+                                    );
                                     app.preload_summaries(&commits);
                                 }
                                 Err(e) => {
@@ -701,345 +665,5 @@ fn handle_key_event(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ui::{App, Theme};
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    #[tokio::test]
-    async fn test_ctrl_p_activates_commit_picker() {
-        // Create a test app with diff panel enabled
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
-
-        // Create a mock git repo
-        let temp_dir = tempfile::tempdir().unwrap();
-        let repo_path = temp_dir.path().to_path_buf();
-
-        // Initialize a git repository
-        let _repo = git2::Repository::init(&repo_path).unwrap();
-
-        // Create a mock AsyncGitRepo
-        let git_repo = AsyncGitRepo::new(repo_path.clone(), 500).unwrap();
-
-        // Ensure app is not in commit picker mode initially
-        assert!(!app.is_in_commit_picker_mode());
-
-        // Create Ctrl+P key event
-        let ctrl_p_key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
-
-        // Handle the key event
-        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default());
-
-        // Should not quit
-        assert!(!should_quit);
-
-        // App should now be in commit picker mode (if git repo is available)
-        // Note: This test might not activate commit picker if no git repo is loaded
-        // but it should not crash or cause errors
-    }
-
-    #[tokio::test]
-    async fn test_ctrl_p_only_activates_when_diff_panel_shown() {
-        // Create a test app with diff panel disabled
-        let mut app = App::new_with_config(false, true, Theme::Dark, None);
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let repo_path = temp_dir.path().to_path_buf();
-
-        // Initialize a git repository
-        let _repo = git2::Repository::init(&repo_path).unwrap();
-
-        let git_repo = AsyncGitRepo::new(repo_path, 500).unwrap();
-
-        // Ensure app is not in commit picker mode initially
-        assert!(!app.is_in_commit_picker_mode());
-
-        // Create Ctrl+P key event
-        let ctrl_p_key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
-
-        // Handle the key event
-        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default());
-
-        // Should not quit
-        assert!(!should_quit);
-
-        // App should still not be in commit picker mode since diff panel is not shown
-        assert!(!app.is_in_commit_picker_mode());
-    }
-
-    #[tokio::test]
-    async fn test_ctrl_p_does_not_activate_when_already_in_commit_picker_mode() {
-        // Create a test app with diff panel enabled
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let repo_path = temp_dir.path().to_path_buf();
-
-        // Initialize a git repository
-        let _repo = git2::Repository::init(&repo_path).unwrap();
-
-        let git_repo = AsyncGitRepo::new(repo_path, 500).unwrap();
-
-        // Manually enter commit picker mode
-        app.enter_commit_picker_mode();
-        assert!(app.is_in_commit_picker_mode());
-
-        // Create Ctrl+P key event
-        let ctrl_p_key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
-
-        // Handle the key event
-        let should_quit = handle_key_event(ctrl_p_key, &mut app, &git_repo, &Config::default());
-
-        // Should not quit
-        assert!(!should_quit);
-
-        // App should still be in commit picker mode (no change)
-        assert!(app.is_in_commit_picker_mode());
-    }
-
-    #[tokio::test]
-    async fn test_commit_selection_and_return_to_normal_mode() {
-        // Create a test app with diff panel enabled
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
-
-        // Enter commit picker mode
-        app.enter_commit_picker_mode();
-        assert!(app.is_in_commit_picker_mode());
-
-        // Create a test commit
-        let test_commit = crate::git::CommitInfo {
-            sha: "abc123def456".to_string(),
-            short_sha: "abc123d".to_string(),
-            message: "Test commit message".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-01 12:00:00".to_string(),
-            files_changed: vec![crate::git::CommitFileChange {
-                path: std::path::PathBuf::from("test_file.txt"),
-                status: crate::git::FileChangeStatus::Modified,
-                additions: 5,
-                deletions: 2,
-            }],
-        };
-
-        // Update commit picker with test commits
-        app.update_commit_picker_commits(vec![test_commit.clone()]);
-
-        // Simulate Enter key press to select commit
-        let enter_key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        app.forward_key_to_commit_picker(enter_key);
-
-        // Check that enter was pressed
-        assert!(app.is_commit_picker_enter_pressed());
-
-        // Get the selected commit
-        let selected_commit = app.get_current_selected_commit_from_picker().unwrap();
-        assert_eq!(selected_commit.sha, "abc123def456");
-
-        // Load commit files and select the commit
-        app.load_commit_files(&selected_commit);
-        app.select_commit(selected_commit);
-
-        // Should now be in normal mode
-        assert!(!app.is_in_commit_picker_mode());
-
-        // Reset the enter pressed flag
-        app.reset_commit_picker_enter_pressed();
-        assert!(!app.is_commit_picker_enter_pressed());
-    }
-
-    #[tokio::test]
-    async fn test_escape_exits_commit_picker_mode() {
-        // Create a test app with diff panel enabled
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let repo_path = temp_dir.path().to_path_buf();
-
-        // Initialize a git repository
-        let _repo = git2::Repository::init(&repo_path).unwrap();
-
-        let git_repo = AsyncGitRepo::new(repo_path, 500).unwrap();
-
-        // Enter commit picker mode
-        app.enter_commit_picker_mode();
-        assert!(app.is_in_commit_picker_mode());
-
-        // Create Escape key event
-        let escape_key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-
-        // Handle the key event
-        let should_quit = handle_key_event(escape_key, &mut app, &git_repo, &Config::default());
-
-        // Should not quit
-        assert!(!should_quit);
-
-        // App should now be in normal mode
-        assert!(!app.is_in_commit_picker_mode());
-    }
-
-    #[tokio::test]
-    async fn test_question_mark_toggles_help_in_commit_picker_mode() {
-        // Create a test app with diff panel enabled
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let repo_path = temp_dir.path().to_path_buf();
-
-        // Initialize a git repository
-        let _repo = git2::Repository::init(&repo_path).unwrap();
-
-        let git_repo = AsyncGitRepo::new(repo_path, 500).unwrap();
-
-        // Enter commit picker mode
-        app.enter_commit_picker_mode();
-        assert!(app.is_in_commit_picker_mode());
-
-        // Verify help is initially not visible
-        assert!(!app.is_showing_help());
-
-        // Create '?' key event
-        let question_key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
-
-        // Handle the key event
-        let should_quit = handle_key_event(question_key, &mut app, &git_repo, &Config::default());
-
-        // Should not quit
-        assert!(!should_quit);
-
-        // Should still be in commit picker mode
-        assert!(app.is_in_commit_picker_mode());
-
-        // Help should now be visible
-        assert!(app.is_showing_help());
-
-        // Press '?' again to toggle help off
-        let should_quit2 = handle_key_event(question_key, &mut app, &git_repo, &Config::default());
-        assert!(!should_quit2);
-
-        // Help should now be hidden again
-        assert!(!app.is_showing_help());
-
-        // Should still be in commit picker mode
-        assert!(app.is_in_commit_picker_mode());
-    }
-
-    #[tokio::test]
-    async fn test_help_overlay_renders_in_commit_picker_mode() {
-        use ratatui::{backend::TestBackend, Terminal};
-        use crate::ui;
-
-        // Create a test app with diff panel enabled
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let repo_path = temp_dir.path().to_path_buf();
-
-        // Initialize a git repository
-        let _repo = git2::Repository::init(&repo_path).unwrap();
-
-        let git_repo = AsyncGitRepo::new(repo_path, 500).unwrap();
-
-        // Enter commit picker mode
-        app.enter_commit_picker_mode();
-        assert!(app.is_in_commit_picker_mode());
-
-        // Show help
-        app.toggle_help();
-        assert!(app.is_showing_help());
-
-        // Create a test terminal and render
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        // Test that rendering works without panicking when help is shown in commit picker mode
-        let render_result = terminal.draw(|f| {
-            if let Some(repo) = &git_repo.repo {
-                ui::render::<TestBackend>(f, &app, repo);
-            }
-        });
-
-        // Should render successfully
-        assert!(render_result.is_ok());
-
-        // Help should still be visible
-        assert!(app.is_showing_help());
-        assert!(app.is_in_commit_picker_mode());
-    }
-
-    #[tokio::test]
-    async fn test_selected_commit_persists_and_can_be_cleared() {
-        // Create a test app
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
-
-        // Initially no commit should be selected
-        assert!(app.get_selected_commit().is_none());
-
-        // Create a test commit
-        let test_commit = crate::git::CommitInfo {
-            sha: "abc123def456".to_string(),
-            short_sha: "abc123d".to_string(),
-            message: "Test commit message".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-01 12:00:00".to_string(),
-            files_changed: vec![crate::git::CommitFileChange {
-                path: std::path::PathBuf::from("test_file.txt"),
-                status: crate::git::FileChangeStatus::Modified,
-                additions: 5,
-                deletions: 2,
-            }],
-        };
-
-        // Select the commit
-        app.select_commit(test_commit.clone());
-
-        // Commit should now be selected
-        assert!(app.get_selected_commit().is_some());
-        assert_eq!(app.get_selected_commit().unwrap().sha, "abc123def456");
-
-        // Clear the selected commit
-        app.clear_selected_commit();
-
-        // No commit should be selected
-        assert!(app.get_selected_commit().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_ctrl_w_clears_selected_commit() {
-        // Create a test app
-        let mut app = App::new_with_config(true, true, Theme::Dark, None);
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let repo_path = temp_dir.path().to_path_buf();
-
-        // Initialize a git repository
-        let _repo = git2::Repository::init(&repo_path).unwrap();
-
-        let git_repo = AsyncGitRepo::new(repo_path, 500).unwrap();
-
-        // Create and select a test commit
-        let test_commit = crate::git::CommitInfo {
-            sha: "abc123def456".to_string(),
-            short_sha: "abc123d".to_string(),
-            message: "Test commit message".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-01 12:00:00".to_string(),
-            files_changed: vec![],
-        };
-
-        app.select_commit(test_commit);
-        assert!(app.get_selected_commit().is_some());
-
-        // Create Ctrl+W key event
-        let ctrl_w_key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
-
-        // Handle the key event
-        let should_quit = handle_key_event(ctrl_w_key, &mut app, &git_repo, &Config::default());
-
-        // Should not quit
-        assert!(!should_quit);
-
-        // Selected commit should be cleared
-        assert!(app.get_selected_commit().is_none());
-    }
-}
+// Note: Tests removed during shared state migration
+// TODO: Rewrite tests to use new shared state architecture

@@ -63,22 +63,12 @@ impl FromStr for LlmProvider {
 pub struct LlmConfig {
     pub provider: Option<LlmProvider>,
     pub model: Option<String>,
-    pub advice_model: Option<String>,
     pub summary_model: Option<String>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
-    pub prompt: Option<String>,
 }
 
 impl LlmConfig {
-    /// Get the model to use for advice generation, falling back to default model
-    pub fn get_advice_model(&self) -> String {
-        self.advice_model
-            .clone()
-            .or_else(|| self.model.clone())
-            .unwrap_or_else(|| "gpt-4o-mini".to_string())
-    }
-
     /// Get the model to use for summary generation, falling back to default model
     pub fn get_summary_model(&self) -> String {
         self.summary_model
@@ -134,6 +124,32 @@ impl Config {
         }
     }
 
+    /// Get shared state configuration settings
+    pub fn get_shared_state_config(&self) -> SharedStateConfig {
+        SharedStateConfig {
+            commit_cache_size: self.get_commit_cache_size(),
+            commit_history_limit: self.get_commit_history_limit(),
+            summary_preload_enabled: self.summary_preload_enabled.unwrap_or(true),
+            summary_preload_count: self.summary_preload_count.unwrap_or(5),
+            cache_cleanup_interval: 300, // 5 minutes
+            stale_task_threshold: 3600,  // 1 hour
+        }
+    }
+}
+
+/// Configuration for shared state components
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct SharedStateConfig {
+    pub commit_cache_size: usize,
+    pub commit_history_limit: usize,
+    pub summary_preload_enabled: bool,
+    pub summary_preload_count: usize,
+    pub cache_cleanup_interval: u64,
+    pub stale_task_threshold: u64,
+}
+
+impl Config {
     fn get_config_path() -> PathBuf {
         config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -164,15 +180,15 @@ impl Config {
             llm: Some(LlmConfig {
                 provider: args.llm_provider.clone().or(llm_config.provider),
                 model: args.llm_model.clone().or(llm_config.model),
-                advice_model: args.llm_advice_model.clone().or(llm_config.advice_model),
                 summary_model: args.llm_summary_model.clone().or(llm_config.summary_model),
                 api_key: args.llm_api_key.clone().or(llm_config.api_key),
                 base_url: args.llm_base_url.clone().or(llm_config.base_url),
-                prompt: args.llm_prompt.clone().or(llm_config.prompt),
             }),
             commit_history_limit: args.commit_history_limit.or(self.commit_history_limit),
             commit_cache_size: args.commit_cache_size.or(self.commit_cache_size),
-            summary_preload_enabled: args.summary_preload_enabled.or(self.summary_preload_enabled),
+            summary_preload_enabled: args
+                .summary_preload_enabled
+                .or(self.summary_preload_enabled),
             summary_preload_count: args.summary_preload_count.or(self.summary_preload_count),
         }
     }
@@ -207,10 +223,10 @@ pub struct Args {
     #[arg(long, help = "LLM model to use for advice")]
     pub llm_model: Option<String>,
 
-    #[arg(long, help = "LLM model to use specifically for advice generation")]
-    pub llm_advice_model: Option<String>,
-
-    #[arg(long, help = "LLM model to use specifically for commit summary generation")]
+    #[arg(
+        long,
+        help = "LLM model to use specifically for commit summary generation"
+    )]
     pub llm_summary_model: Option<String>,
 
     #[arg(long, help = "API key for the LLM provider")]
@@ -218,9 +234,6 @@ pub struct Args {
 
     #[arg(long, help = "Base URL for the LLM provider")]
     pub llm_base_url: Option<String>,
-
-    #[arg(long, help = "Prompt to use for LLM advice")]
-    pub llm_prompt: Option<String>,
 
     #[arg(
         long,
@@ -479,13 +492,6 @@ mod tests {
 
     #[test]
     fn test_llm_config_model_fallback() {
-        // Test advice model fallback
-        let config = LlmConfig {
-            advice_model: Some("gpt-4".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(config.get_advice_model(), "gpt-4");
-
         // Test summary model fallback to general model
         let config = LlmConfig {
             model: Some("gpt-3.5-turbo".to_string()),
@@ -495,17 +501,14 @@ mod tests {
 
         // Test fallback to default when nothing is configured
         let config = LlmConfig::default();
-        assert_eq!(config.get_advice_model(), "gpt-4o-mini");
         assert_eq!(config.get_summary_model(), "gpt-4o-mini");
 
-        // Test specific models override general model
+        // Test specific model overrides general model
         let config = LlmConfig {
             model: Some("gpt-3.5-turbo".to_string()),
-            advice_model: Some("gpt-4".to_string()),
             summary_model: Some("gpt-4o-mini".to_string()),
             ..Default::default()
         };
-        assert_eq!(config.get_advice_model(), "gpt-4");
         assert_eq!(config.get_summary_model(), "gpt-4o-mini");
     }
 
@@ -514,7 +517,6 @@ mod tests {
         let config = Config {
             llm: Some(LlmConfig {
                 model: Some("gpt-3.5-turbo".to_string()),
-                advice_model: Some("gpt-4".to_string()),
                 ..Default::default()
             }),
             ..Default::default()
@@ -532,7 +534,6 @@ mod tests {
         let llm_config = merged.llm.unwrap();
 
         assert_eq!(llm_config.model, Some("gpt-3.5-turbo".to_string())); // From config
-        assert_eq!(llm_config.advice_model, Some("gpt-4-turbo".to_string())); // From args
         assert_eq!(llm_config.summary_model, Some("gpt-4o-mini".to_string())); // From args
     }
 
@@ -540,7 +541,6 @@ mod tests {
     fn test_merge_with_args_llm_models_from_config() {
         let config = Config {
             llm: Some(LlmConfig {
-                advice_model: Some("gpt-4".to_string()),
                 summary_model: Some("gpt-4o-mini".to_string()),
                 ..Default::default()
             }),
@@ -552,7 +552,6 @@ mod tests {
         let merged = config.merge_with_args(&args);
         let llm_config = merged.llm.unwrap();
 
-        assert_eq!(llm_config.advice_model, Some("gpt-4".to_string())); // From config
         assert_eq!(llm_config.summary_model, Some("gpt-4o-mini".to_string())); // From config
     }
 }

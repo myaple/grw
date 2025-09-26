@@ -1,4 +1,6 @@
-use crate::git::{CommitInfo, FileDiff, GitRepo, TreeNode, SummaryPreloader, PreloadConfig};
+#![allow(dead_code)]
+
+use crate::git::{CommitInfo, FileDiff, GitRepo, PreloadConfig, SummaryPreloader, TreeNode};
 use crate::llm::LlmClient;
 use crate::pane::{PaneId, PaneRegistry};
 use crossterm::event::KeyEvent;
@@ -10,28 +12,12 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem},
 };
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppMode {
     Normal,
     CommitPicker,
-}
-
-#[derive(Debug, Clone)]
-pub struct CommitPickerState {
-    pub commits: Vec<crate::git::CommitInfo>,
-    pub current_index: usize,
-    pub scroll_offset: usize,
-}
-
-impl CommitPickerState {
-    pub fn new() -> Self {
-        Self {
-            commits: Vec::new(),
-            current_index: 0,
-            scroll_offset: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -128,7 +114,6 @@ pub enum InformationPane {
     Diff,
     SideBySideDiff,
     Help,
-    Advice,
     // Add new pane types here in the future
     // Examples:
     // Stats,
@@ -144,7 +129,6 @@ pub enum ActivePane {
     Monitor,
     Diff,
     SideBySideDiff,
-    Advice,
 }
 
 #[derive(Debug)]
@@ -172,7 +156,6 @@ pub struct App {
     current_information_pane: InformationPane,
     theme: Theme,
     pane_registry: PaneRegistry,
-    llm_advice: String,
     last_active_pane: ActivePane,
     app_mode: AppMode,
     selected_commit: Option<CommitInfo>,
@@ -185,19 +168,18 @@ impl App {
         show_changed_files_pane: bool,
         theme: Theme,
         llm_client: Option<LlmClient>,
+        llm_state: Arc<crate::shared_state::LlmSharedState>,
     ) -> Self {
         let pane_registry = if let Some(ref llm_client) = llm_client {
-            PaneRegistry::new(theme, llm_client.clone())
+            PaneRegistry::new(theme, llm_client.clone(), llm_state.clone())
         } else {
             // Provide a dummy or default LlmClient for the registry when none is available.
-            // This depends on how PaneRegistry and AdvicePane are structured.
-            // For now, let's assume AdvicePane can handle a missing LlmClient.
             let mut dummy_llm_config = crate::config::LlmConfig::default();
             if std::env::var("OPENAI_API_KEY").is_err() {
                 dummy_llm_config.api_key = Some("dummy_key".to_string());
             }
             let dummy_llm_client = LlmClient::new(dummy_llm_config).unwrap();
-            PaneRegistry::new(theme, dummy_llm_client)
+            PaneRegistry::new(theme, dummy_llm_client, llm_state.clone())
         };
 
         Self {
@@ -224,11 +206,10 @@ impl App {
             current_information_pane: InformationPane::Diff,
             theme,
             pane_registry,
-            llm_advice: String::new(),
             last_active_pane: ActivePane::default(),
             app_mode: AppMode::Normal,
             selected_commit: None,
-            summary_preloader: SummaryPreloader::new(llm_client.clone()),
+            summary_preloader: SummaryPreloader::new(llm_client.clone(), Arc::clone(&llm_state)),
         }
     }
 
@@ -437,16 +418,10 @@ impl App {
                     self.set_side_by_side_diff();
                     self.current_information_pane = InformationPane::SideBySideDiff;
                 }
-                ActivePane::Advice => {
-                    self.set_advice_pane();
-                    self.current_information_pane = InformationPane::Advice;
-                }
             }
         } else {
             // Determine which pane is active before showing help
-            if self.is_showing_advice_pane() {
-                self.last_active_pane = ActivePane::Advice;
-            } else if self
+            if self
                 .pane_registry
                 .get_pane(&PaneId::SideBySideDiff)
                 .is_some_and(|p| p.visible())
@@ -478,10 +453,6 @@ impl App {
                 .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
                     diff_pane.set_visible(false);
                 });
-            self.pane_registry
-                .with_pane_mut(&PaneId::Advice, |advice_pane| {
-                    advice_pane.set_visible(false);
-                });
             // Update the legacy field for backward compatibility
             self.current_information_pane = InformationPane::Help;
         }
@@ -506,10 +477,6 @@ impl App {
                 .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
                     diff_pane.set_visible(false);
                 });
-            self.pane_registry
-                .with_pane_mut(&PaneId::Advice, |advice_pane| {
-                    advice_pane.set_visible(false);
-                });
             self.current_information_pane = InformationPane::Diff;
         }
     }
@@ -524,10 +491,6 @@ impl App {
             self.pane_registry
                 .with_pane_mut(&PaneId::Diff, |diff_pane| {
                     diff_pane.set_visible(false);
-                });
-            self.pane_registry
-                .with_pane_mut(&PaneId::Advice, |advice_pane| {
-                    advice_pane.set_visible(false);
                 });
             self.current_information_pane = InformationPane::SideBySideDiff;
         }
@@ -670,10 +633,6 @@ impl App {
         self.show_monitor_pane
     }
 
-    pub fn is_showing_advice_pane(&self) -> bool {
-        matches!(self.current_information_pane, InformationPane::Advice)
-    }
-
     pub fn forward_key_to_panes(&mut self, key: KeyEvent) -> bool {
         let mut handled = false;
 
@@ -690,26 +649,15 @@ impl App {
             }
 
             // Also forward to commit summary pane for scrolling
-            if !handled {
-                if let Some(pane_handled) = self
+            if !handled
+                && let Some(pane_handled) = self
                     .pane_registry
                     .with_pane_mut(&PaneId::CommitSummary, |pane| {
                         pane.handle_event(&crate::pane::AppEvent::Key(key))
                     })
-                {
-                    handled |= pane_handled;
-                }
+            {
+                handled |= pane_handled;
             }
-        }
-
-        // Forward to advice pane if it's visible and not in commit picker mode
-        if !handled
-            && self.is_showing_advice_pane()
-            && let Some(pane_handled) = self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
-                pane.handle_event(&crate::pane::AppEvent::Key(key))
-            })
-        {
-            handled |= pane_handled;
         }
 
         handled
@@ -750,32 +698,6 @@ impl App {
     pub fn toggle_theme(&mut self) {
         self.theme.toggle();
         self.pane_registry.set_theme(self.theme);
-    }
-
-    pub fn set_advice_pane(&mut self) {
-        self.pane_registry
-            .with_pane_mut(&PaneId::Advice, |p| p.set_visible(true));
-        // Hide other information panes
-        self.pane_registry
-            .with_pane_mut(&PaneId::Diff, |p| p.set_visible(false));
-        self.pane_registry
-            .with_pane_mut(&PaneId::SideBySideDiff, |p| p.set_visible(false));
-        self.pane_registry
-            .with_pane_mut(&PaneId::Help, |p| p.set_visible(false));
-        // Update the legacy field for consistency
-        self.current_information_pane = InformationPane::Advice;
-    }
-
-    pub fn update_llm_advice(&mut self, advice: String) {
-        self.llm_advice = advice.clone();
-        self.pane_registry.with_pane_mut(&PaneId::Advice, |p| {
-            let _ = p.handle_event(&crate::pane::AppEvent::DataUpdated((), advice));
-        });
-    }
-
-    #[allow(dead_code)]
-    pub fn get_llm_advice(&self) -> &str {
-        &self.llm_advice
     }
 
     // Public getters for private fields needed by panes
@@ -823,14 +745,6 @@ impl App {
         self.last_active_pane
     }
 
-    pub fn poll_llm_advice(&mut self) {
-        self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
-            if let Some(advice_pane) = pane.as_advice_pane_mut() {
-                advice_pane.poll_llm_response();
-            }
-        });
-    }
-
     pub fn poll_llm_summaries(&mut self) {
         self.pane_registry
             .with_pane_mut(&PaneId::CommitSummary, |pane| {
@@ -838,23 +752,6 @@ impl App {
                     commit_summary_pane.poll_llm_summary();
                 }
             });
-    }
-
-    pub fn is_advice_refresh_requested(&self) -> bool {
-        if let Some(pane) = self.pane_registry.get_pane(&PaneId::Advice) {
-            if let Some(advice_pane) = pane.as_advice_pane() {
-                return advice_pane.refresh_requested;
-            }
-        }
-        false
-    }
-
-    pub fn reset_advice_refresh_request(&mut self) {
-        self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
-            if let Some(advice_pane) = pane.as_advice_pane_mut() {
-                advice_pane.refresh_requested = false;
-            }
-        });
     }
 
     // Commit picker mode state management methods
@@ -893,9 +790,6 @@ impl App {
             .with_pane_mut(&PaneId::SideBySideDiff, |pane| {
                 pane.set_visible(false);
             });
-        self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
-            pane.set_visible(false);
-        });
         self.pane_registry.with_pane_mut(&PaneId::Help, |pane| {
             pane.set_visible(false);
         });
@@ -926,7 +820,6 @@ impl App {
             match self.current_information_pane {
                 InformationPane::Diff => self.set_single_pane_diff(),
                 InformationPane::SideBySideDiff => self.set_side_by_side_diff(),
-                InformationPane::Advice => self.set_advice_pane(),
                 _ => self.set_single_pane_diff(),
             }
         }
@@ -998,10 +891,10 @@ impl App {
     }
 
     pub fn is_commit_picker_enter_pressed(&self) -> bool {
-        if let Some(pane) = self.pane_registry.get_pane(&PaneId::CommitPicker) {
-            if let Some(commit_picker) = pane.as_commit_picker_pane() {
-                return commit_picker.is_enter_pressed();
-            }
+        if let Some(pane) = self.pane_registry.get_pane(&PaneId::CommitPicker)
+            && let Some(commit_picker) = pane.as_commit_picker_pane()
+        {
+            return commit_picker.is_enter_pressed();
         }
         false
     }
@@ -1016,10 +909,10 @@ impl App {
     }
 
     pub fn get_current_selected_commit_from_picker(&self) -> Option<CommitInfo> {
-        if let Some(pane) = self.pane_registry.get_pane(&PaneId::CommitPicker) {
-            if let Some(commit_picker) = pane.as_commit_picker_pane() {
-                return commit_picker.get_current_commit().cloned();
-            }
+        if let Some(pane) = self.pane_registry.get_pane(&PaneId::CommitPicker)
+            && let Some(commit_picker) = pane.as_commit_picker_pane()
+        {
+            return commit_picker.get_current_commit().cloned();
         }
         None
     }
@@ -1040,10 +933,13 @@ impl App {
             .unwrap_or(false)
     }
 
-    pub fn update_commit_summary_with_current_selection(&mut self) {
+    pub fn update_commit_summary_with_current_selection(
+        &mut self,
+        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>,
+    ) {
         if let Some(current_commit) = self.get_current_selected_commit_from_picker() {
             let commit_sha = current_commit.sha.clone();
-            
+
             // First update the commit in the pane
             self.pane_registry
                 .with_pane_mut(&PaneId::CommitSummary, |pane| {
@@ -1051,27 +947,35 @@ impl App {
                         commit_summary.update_commit(Some(current_commit));
                     }
                 });
-            
+
             // Then check if we have a cached summary and set it if available
-            self.check_and_set_cached_summary(&commit_sha);
+            self.check_and_set_cached_summary(&commit_sha, llm_state);
         }
     }
 
-    /// Check GitWorker cache for summary and set it in CommitSummaryPane if available
-    pub fn check_and_set_cached_summary(&mut self, commit_sha: &str) {
-        if let Some(tx) = self.summary_preloader.get_git_worker_tx() {
-            let commit_sha = commit_sha.to_string();
-            
-            tokio::spawn(async move {
-                if let Err(e) = tx.send(crate::git::GitWorkerCommand::GetCachedSummary(commit_sha)).await {
-                    log::error!("Failed to send GetCachedSummary command: {}", e);
-                }
-            });
+    /// Check shared state cache for summary and set it in CommitSummaryPane if available
+    pub fn check_and_set_cached_summary(
+        &mut self,
+        commit_sha: &str,
+        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>,
+    ) {
+        // Check shared state cache directly
+        if let Some(summary) = llm_state.get_cached_summary(commit_sha) {
+            self.pane_registry
+                .with_pane_mut(&PaneId::CommitSummary, |pane| {
+                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
+                        commit_summary.set_cached_summary(commit_sha, summary);
+                    }
+                });
         }
     }
 
     /// Handle cached summary result from GitWorker
-    pub fn handle_cached_summary_result(&mut self, cached_summary: Option<String>, commit_sha: &str) {
+    pub fn handle_cached_summary_result(
+        &mut self,
+        cached_summary: Option<String>,
+        commit_sha: &str,
+    ) {
         if let Some(summary) = cached_summary {
             // Set the cached summary in the CommitSummaryPane
             self.pane_registry
@@ -1084,29 +988,33 @@ impl App {
             // No cached summary available, trigger generation if needed
             self.pane_registry
                 .with_pane_mut(&PaneId::CommitSummary, |pane| {
-                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
-                        if commit_summary.needs_summary() {
-                            commit_summary.force_generate_summary();
-                        }
+                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut()
+                        && commit_summary.needs_summary()
+                    {
+                        commit_summary.force_generate_summary();
                     }
                 });
         }
     }
 
-    /// Cache a newly generated summary in GitWorker
-    pub fn cache_generated_summary(&mut self, commit_sha: String, summary: String) {
-        if let Some(tx) = self.summary_preloader.get_git_worker_tx() {
-            tokio::spawn(async move {
-                if let Err(e) = tx.send(crate::git::GitWorkerCommand::CacheSummary(commit_sha, summary)).await {
-                    log::error!("Failed to send CacheSummary command: {}", e);
-                }
-            });
-        }
+    /// Cache a newly generated summary in shared state
+    pub fn cache_generated_summary(
+        &mut self,
+        commit_sha: String,
+        summary: String,
+        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>,
+    ) {
+        // Cache directly in shared state
+        llm_state.cache_summary(commit_sha, summary);
     }
 
     /// Handle cache callbacks from CommitSummaryPane
-    pub fn handle_commit_summary_cache_callbacks(&mut self) {
-        if let Some(cache_callback) = self.pane_registry
+    pub fn handle_commit_summary_cache_callbacks(
+        &mut self,
+        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>,
+    ) {
+        if let Some(cache_callback) = self
+            .pane_registry
             .with_pane_mut(&PaneId::CommitSummary, |pane| {
                 pane.as_commit_summary_pane_mut()
                     .and_then(|commit_summary| commit_summary.take_cache_callback())
@@ -1114,7 +1022,7 @@ impl App {
             .flatten()
         {
             let (commit_sha, summary) = cache_callback;
-            self.cache_generated_summary(commit_sha, summary);
+            self.cache_generated_summary(commit_sha, summary, llm_state);
         }
     }
 
@@ -1280,17 +1188,15 @@ impl App {
         }
     }
 
-    // Summary preloader methods
-    pub fn set_summary_preloader_git_worker_tx(&mut self, tx: tokio::sync::mpsc::Sender<crate::git::GitWorkerCommand>) {
-        self.summary_preloader.set_git_worker_tx(tx);
-    }
+    // Summary preloader methods - no longer needed with shared state
 
     pub fn preload_summaries(&mut self, commits: &[CommitInfo]) {
         self.summary_preloader.preload_summaries(commits);
     }
 
     pub fn preload_summaries_around_index(&mut self, commits: &[CommitInfo], current_index: usize) {
-        self.summary_preloader.preload_around_index(commits, current_index);
+        self.summary_preloader
+            .preload_around_index(commits, current_index);
     }
 
     pub fn is_summary_loading(&self, commit_sha: &str) -> bool {
@@ -1310,12 +1216,14 @@ impl App {
     }
 
     pub fn get_commit_picker_state(&self) -> Option<(Vec<CommitInfo>, usize)> {
-        if let Some(pane) = self.pane_registry.get_pane(&crate::pane::PaneId::CommitPicker) {
-            if let Some(commit_picker) = pane.as_commit_picker_pane() {
-                let commits = commit_picker.get_commits();
-                let current_index = commit_picker.get_current_index();
-                return Some((commits, current_index));
-            }
+        if let Some(pane) = self
+            .pane_registry
+            .get_pane(&crate::pane::PaneId::CommitPicker)
+            && let Some(commit_picker) = pane.as_commit_picker_pane()
+        {
+            let commits = commit_picker.get_commits();
+            let current_index = commit_picker.get_current_index();
+            return Some((commits, current_index));
         }
         None
     }
@@ -1488,17 +1396,9 @@ fn render_information_pane(
         .pane_registry
         .get_pane(&PaneId::Help)
         .is_some_and(|p| p.visible());
-    let advice_visible = app
-        .pane_registry
-        .get_pane(&PaneId::Advice)
-        .is_some_and(|p| p.visible());
-
     if help_visible {
         app.pane_registry
             .render(f, app, area, PaneId::Help, git_repo);
-    } else if advice_visible {
-        app.pane_registry
-            .render(f, app, area, PaneId::Advice, git_repo);
     } else if app.side_by_side_diff {
         app.pane_registry
             .render(f, app, area, PaneId::SideBySideDiff, git_repo);
@@ -1632,7 +1532,14 @@ mod tests {
             llm_config.api_key = Some("dummy_key".to_string());
         }
         let llm_client = LlmClient::new(llm_config).ok();
-        App::new_with_config(show_diff_panel, show_changed_files_pane, theme, llm_client)
+        let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
+        App::new_with_config(
+            show_diff_panel,
+            show_changed_files_pane,
+            theme,
+            llm_client,
+            llm_state,
+        )
     }
 
     #[test]

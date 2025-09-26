@@ -1,16 +1,21 @@
 use crate::config::LlmConfig;
-use crate::git::GitRepo;
 use log::debug;
 use openai_api_rs::v1::api::OpenAIClient;
-use openai_api_rs::v1::chat_completion::{self, ChatCompletionRequest};
+use openai_api_rs::v1::chat_completion::{self, ChatCompletionMessage, ChatCompletionRequest};
+use serde::{Deserialize, Serialize};
 use std::env;
-use std::fs;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::Mutex;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmAdviceResult {
+    pub id: String,
+    pub content: String,
+    pub execution_time: std::time::Duration,
+    pub has_error: bool,
+}
 
-
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LlmClient {
     client: Arc<Mutex<OpenAIClient>>,
     config: LlmConfig,
@@ -18,6 +23,11 @@ pub struct LlmClient {
 
 impl LlmClient {
     pub fn new(config: LlmConfig) -> Result<Self, String> {
+        debug!(
+            "🤖 LLM_CLIENT: Creating new client with config: {:?}",
+            config
+        );
+
         let api_key = config
             .api_key
             .clone()
@@ -38,28 +48,71 @@ impl LlmClient {
         Ok(Self { client, config })
     }
 
-    pub async fn get_llm_advice(
-        &self,
-        history: Vec<chat_completion::ChatCompletionMessage>,
-    ) -> Result<String, String> {
-        let model = self.config.get_advice_model();
-        self.make_llm_request(model, history).await
-    }
-
     pub async fn get_llm_summary(
         &self,
-        history: Vec<chat_completion::ChatCompletionMessage>,
-    ) -> Result<String, String> {
-        let model = self.config.get_summary_model();
-        self.make_llm_request(model, history).await
+        commit_message: String,
+        diff_content: String,
+    ) -> Result<LlmAdviceResult, String> {
+        let start_time = tokio::time::Instant::now();
+
+        // Build the prompt for commit summary
+        let messages = vec![
+            ChatCompletionMessage {
+                role: chat_completion::MessageRole::system,
+                content: chat_completion::Content::Text(
+                    "You are an expert at summarizing code changes. Generate a concise, clear summary of the following commit changes. Focus on the key changes and their impact.".to_string(),
+                ),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatCompletionMessage {
+                role: chat_completion::MessageRole::user,
+                content: chat_completion::Content::Text(
+                    format!(
+                        "Commit message: {}\n\nPlease summarize these changes:\n\n{}",
+                        commit_message, diff_content
+                    ),
+                ),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ];
+
+        let result = self
+            .make_llm_request(self.config.get_summary_model(), messages)
+            .await;
+        let execution_time = start_time.elapsed();
+
+        match result {
+            Ok(content) => Ok(LlmAdviceResult {
+                id: uuid::Uuid::new_v4().to_string(),
+                content,
+                execution_time,
+                has_error: false,
+            }),
+            Err(error) => Ok(LlmAdviceResult {
+                id: uuid::Uuid::new_v4().to_string(),
+                content: format!("❌ Failed to generate summary: {}", error),
+                execution_time,
+                has_error: true,
+            }),
+        }
     }
 
     async fn make_llm_request(
         &self,
         model: String,
-        history: Vec<chat_completion::ChatCompletionMessage>,
+        messages: Vec<ChatCompletionMessage>,
     ) -> Result<String, String> {
-        let req = ChatCompletionRequest::new(model, history);
+        debug!(
+            "🤖 LLM_CLIENT: Making request to model: {} ({} messages)",
+            model,
+            messages.len()
+        );
+
+        let req = ChatCompletionRequest::new(model, messages);
 
         let mut client = self.client.lock().await;
 
@@ -77,114 +130,25 @@ impl LlmClient {
     }
 }
 
-#[derive(Debug)]
-pub struct AsyncLLMCommand {
-    pub result_rx: mpsc::Receiver<LLMResult>,
-    pub git_repo_tx: watch::Sender<Option<GitRepo>>,
-    refresh_tx: mpsc::Sender<()>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::LlmConfig;
 
-#[derive(Debug, Clone)]
-pub enum LLMResult {
-    Success(String),
-    Error(String),
-    Noop,
-}
-
-impl AsyncLLMCommand {
-    pub fn new(llm_client: LlmClient) -> Self {
-        let (result_tx, result_rx) = mpsc::channel(32);
-        let (git_repo_tx, mut git_repo_rx) = watch::channel(None);
-        let (refresh_tx, mut refresh_rx) = mpsc::channel(1);
-
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    Some(()) = refresh_rx.recv() => {
-                        debug!("Running async LLM command");
-
-                        if git_repo_rx.borrow().is_none() && git_repo_rx.changed().await.is_err() {
-                            break;
-                        }
-
-                        let git_repo = git_repo_rx.borrow().clone();
-
-                        if git_repo.is_none() {
-                            continue;
-                        }
-                        let git_repo: GitRepo = git_repo.unwrap();
-
-                        let diff = git_repo.get_diff_string();
-
-                        if diff.is_empty() {
-                            debug!("No diff found, skipping LLM query.");
-                            if result_tx.send(LLMResult::Noop).await.is_err() {
-                                break;
-                            }
-                            continue;
-                        }
-
-                        let claude_instructions =
-                            fs::read_to_string("CLAUDE.md").unwrap_or_default();
-
-                        let prompt_template = llm_client.config.prompt.clone().unwrap_or_else(|| {
-                            "You are acting in the role of a staff engineer providing a code review. \
-                Please provide a brief review of the following code changes. \
-                The review should focus on 'Maintainability' and any obvious safety bugs. \
-                In the maintainability part, include 0-3 actionable suggestions to enhance code maintainability. \
-                Don't be afraid to say that this code is okay at maintainability and not provide suggestions. \
-                When you provide suggestions, give a brief before and after example using the code diffs below \
-                to provide context and examples of what you mean. \
-                Each suggestion should be clear, specific, and implementable. \
-                Keep the response concise and focused on practical improvements.".to_string()
-                        });
-
-                        let prompt = format!(
-                            "{claude_instructions}\n\n{prompt_template}\n\n```diff\n{diff}\n```"
-                        );
-
-                        let history = vec![chat_completion::ChatCompletionMessage {
-                            role: chat_completion::MessageRole::user,
-                            content: chat_completion::Content::Text(prompt),
-                            name: None,
-                            tool_calls: None,
-                            tool_call_id: None,
-                        }];
-
-                        match llm_client.get_llm_advice(history).await {
-                            Ok(content) => {
-                                if result_tx.send(LLMResult::Success(content)).await.is_err() {
-                                    break;
-                                }
-                                debug!("Async LLM command completed successfully");
-                            }
-                            Err(e) => {
-                                let error_str = format!("LLM command execution failed: {e}");
-                                if result_tx.send(LLMResult::Error(error_str)).await.is_err() {
-                                    break;
-                                }
-                                debug!("Async LLM command execution error: {e}");
-                            }
-                        }
-                    },
-                    else => break,
-                }
-            }
-        });
-
-        Self {
-            result_rx,
-            git_repo_tx,
-            refresh_tx,
-        }
+    #[test]
+    fn test_llm_client_new_no_api_key() {
+        let config = LlmConfig::default();
+        let result = LlmClient::new(config);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "No API key provided");
     }
 
-    pub fn refresh(&self) {
-        debug!("LLM refresh requested");
-        let _ = self.refresh_tx.try_send(());
-    }
-
-    pub fn try_get_result(&mut self) -> Option<LLMResult> {
-        self.result_rx.try_recv().ok()
+    #[test]
+    fn test_llm_client_new_with_api_key() {
+        let mut config = LlmConfig::default();
+        config.api_key = Some("test-key".to_string());
+        let result = LlmClient::new(config);
+        // This might fail due to network issues, but should at least get past the API key check
+        // In a real test, you'd mock the HTTP client
     }
 }
