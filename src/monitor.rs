@@ -1,9 +1,12 @@
+#![allow(dead_code)]
+
 use log::debug;
 use std::time::{Duration, Instant};
 use tokio::process::Command as AsyncCommand;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct MonitorOutput {
     pub output: String,
     pub timestamp: Instant,
@@ -12,6 +15,7 @@ pub struct MonitorOutput {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct AsyncMonitorCommand {
     command: String,
     interval: u64,

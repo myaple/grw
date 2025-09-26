@@ -139,6 +139,7 @@ impl Config {
 
 /// Configuration for shared state components
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SharedStateConfig {
     pub commit_cache_size: usize,
     pub commit_history_limit: usize,

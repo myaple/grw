@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::git::{CommitFileChange, CommitInfo, FileChangeStatus, FileDiff, GitRepo, ViewMode};
 use crate::shared_state::GitSharedState;
 use color_eyre::eyre::Result;
@@ -53,24 +55,6 @@ impl GitWorker {
             "Cache size set to {}, shared state manages eviction automatically",
             max_size
         );
-    }
-
-    /// Clear all cached commit data (now clears shared state caches)
-    pub fn clear_cache(&mut self) {
-        // Note: Direct cache clearing is not exposed in shared state
-        // This would require adding clear methods to GitSharedState
-        debug!("Cache clearing in shared state mode requires GitSharedState clear methods");
-    }
-
-    /// Get cached LLM summary for a commit (deprecated - use LlmSharedState)
-    /// Returns None as LLM summaries are now handled by LlmSharedState
-    pub fn get_cached_summary(&self, commit_sha: &str) -> Option<String> {
-        debug!(
-            "GitWorker.get_cached_summary is deprecated - use LlmSharedState.get_cached_summary instead for commit: {}",
-            commit_sha
-        );
-        // LLM summaries are now handled by LlmSharedState, not GitWorker
-        None
     }
 
     /// Cache an LLM summary for a commit (deprecated - use LlmSharedState)

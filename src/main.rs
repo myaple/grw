@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
     // Create GitWorker with shared state and start it running continuously
     let mut git_worker = crate::git_worker::GitWorker::new(
         repo_path.clone(),
-        Arc::clone(&shared_state_manager.git_state()),
+        Arc::clone(shared_state_manager.git_state()),
     )?;
 
     // Start the GitWorker in a background task
@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
             config::Theme::Light => ui::Theme::Light,
         },
         llm_client.clone(),
-        Arc::clone(&shared_state_manager.llm_state()),
+        Arc::clone(shared_state_manager.llm_state()),
     );
 
     // SummaryPreloader uses shared state for caching
@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
     let preload_config = final_config.get_summary_preload_config();
     app.set_preload_config(preload_config);
 
-    let (mut monitor_command, mut monitor_rx) = if let Some(cmd) = &final_config.monitor_command {
+    let (monitor_command, mut monitor_rx) = if let Some(cmd) = &final_config.monitor_command {
         let (cmd, rx) =
             AsyncMonitorCommand::new(cmd.clone(), final_config.monitor_interval.unwrap_or(5));
         (Some(cmd), Some(rx))
@@ -179,14 +179,13 @@ async fn main() -> Result<()> {
         }
 
         // Check shared state for cached summaries
-        if let Some(current_commit) = app.get_current_selected_commit_from_picker() {
-            if let Some(cached_summary) = shared_state_manager
+        if let Some(current_commit) = app.get_current_selected_commit_from_picker()
+            && let Some(cached_summary) = shared_state_manager
                 .llm_state()
                 .get_cached_summary(&current_commit.sha)
-            {
-                // Handle cached summary from shared state
-                app.handle_cached_summary_result(Some(cached_summary), &current_commit.sha);
-            }
+        {
+            // Handle cached summary from shared state
+            app.handle_cached_summary_result(Some(cached_summary), &current_commit.sha);
         }
 
         // Periodic error recovery check - clear stale errors every 30 seconds
@@ -323,10 +322,10 @@ async fn main() -> Result<()> {
             app.update_commit_summary_with_current_selection(shared_state_manager.llm_state());
 
             // Trigger continuous pre-loading as user navigates
-            if let Some((commits, current_index)) = app.get_commit_picker_state() {
-                if !commits.is_empty() {
-                    app.preload_summaries_around_index(&commits, current_index);
-                }
+            if let Some((commits, current_index)) = app.get_commit_picker_state()
+                && !commits.is_empty()
+            {
+                app.preload_summaries_around_index(&commits, current_index);
             }
         }
 
@@ -336,12 +335,11 @@ async fn main() -> Result<()> {
         // Poll for LLM summary updates from shared state
         // Summary updates are now handled through shared state cache
 
-        if crossterm::event::poll(Duration::from_millis(10))? {
-            if let Event::Key(key) = crossterm::event::read()? {
-                if handle_key_event(key, &mut app, &final_config, &shared_state_manager) {
-                    break;
-                }
-            }
+        if crossterm::event::poll(Duration::from_millis(10))?
+            && let Event::Key(key) = crossterm::event::read()?
+            && handle_key_event(key, &mut app, &final_config, &shared_state_manager)
+        {
+            break;
         }
 
         // Handle commit selection from commit picker
@@ -596,7 +594,7 @@ fn handle_key_event(
                     // Create a temporary GitWorker to load commit history using shared state
                     match crate::git_worker::GitWorker::new(
                         repo.path.clone(),
-                        Arc::clone(&shared_state_manager.git_state()),
+                        Arc::clone(shared_state_manager.git_state()),
                     ) {
                         Ok(mut git_worker) => {
                             // Configure cache size from config

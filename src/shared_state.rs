@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use scc::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -21,6 +23,12 @@ pub struct GitSharedState {
 
     /// Error state
     error_state: HashMap<String, String>,
+}
+
+impl Default for GitSharedState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GitSharedState {
@@ -170,6 +178,12 @@ pub struct LlmSharedState {
 
     /// Error states
     error_state: HashMap<String, String>,
+}
+
+impl Default for LlmSharedState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LlmSharedState {

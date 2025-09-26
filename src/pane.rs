@@ -32,6 +32,7 @@ pub trait Pane {
     fn as_commit_picker_pane_mut(&mut self) -> Option<&mut CommitPickerPane> {
         None
     }
+    #[allow(dead_code)]
     fn as_commit_summary_pane(&self) -> Option<&CommitSummaryPane> {
         None
     }
@@ -147,6 +148,12 @@ impl PaneRegistry {
 pub struct FileTreePane {
     visible: bool,
     scroll_offset: usize,
+}
+
+impl Default for FileTreePane {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FileTreePane {
@@ -324,6 +331,12 @@ pub struct MonitorPane {
     output: String,
 }
 
+impl Default for MonitorPane {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MonitorPane {
     pub fn new() -> Self {
         Self {
@@ -430,6 +443,12 @@ pub struct DiffPane {
     visible: bool,
 }
 
+impl Default for DiffPane {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DiffPane {
     pub fn new() -> Self {
         Self { visible: true }
@@ -526,6 +545,12 @@ impl Pane for DiffPane {
 // Side-by-side Diff Pane Implementation
 pub struct SideBySideDiffPane {
     visible: bool,
+}
+
+impl Default for SideBySideDiffPane {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SideBySideDiffPane {
@@ -665,6 +690,12 @@ pub struct HelpPane {
     visible: bool,
 }
 
+impl Default for HelpPane {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HelpPane {
     pub fn new() -> Self {
         Self { visible: false }
@@ -743,7 +774,6 @@ impl Pane for HelpPane {
                         "  Shift+G           - Go to bottom",
                     ],
                 ),
-                _ => ("Unknown", vec![]),
             }
         };
 
@@ -997,6 +1027,12 @@ pub struct StatusBarPane {
     visible: bool,
 }
 
+impl Default for StatusBarPane {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StatusBarPane {
     pub fn new() -> Self {
         Self { visible: true }
@@ -1106,6 +1142,12 @@ pub enum CommitPickerLoadingState {
     Error,
 }
 
+impl Default for CommitPickerPane {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CommitPickerPane {
     pub fn new() -> Self {
         Self {
@@ -1147,6 +1189,7 @@ impl CommitPickerPane {
         self.render_cache_valid = false;
     }
 
+    #[allow(dead_code)]
     pub fn set_error(&mut self, error: String) {
         self.loading_state = CommitPickerLoadingState::Error;
         self.error_message = Some(error);
@@ -1155,10 +1198,12 @@ impl CommitPickerPane {
         self.scroll_offset = 0;
     }
 
+    #[allow(dead_code)]
     pub fn is_loading(&self) -> bool {
         matches!(self.loading_state, CommitPickerLoadingState::Loading)
     }
 
+    #[allow(dead_code)]
     pub fn has_error(&self) -> bool {
         matches!(self.loading_state, CommitPickerLoadingState::Error)
     }
@@ -1493,9 +1538,17 @@ pub struct CommitSummaryPane {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommitSummaryLoadingState {
     NoCommit,
+    #[allow(dead_code)]
     LoadingSummary,
     Loaded,
+    #[allow(dead_code)]
     Error,
+}
+
+impl Default for CommitSummaryPane {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CommitSummaryPane {
@@ -1564,6 +1617,7 @@ impl CommitSummaryPane {
         self.llm_shared_state = Some(llm_shared_state);
     }
 
+    #[allow(dead_code)]
     pub fn set_error(&mut self, error: String) {
         self.loading_state = CommitSummaryLoadingState::Error;
         if let Some(shared_state) = &self.llm_shared_state {
@@ -1596,6 +1650,7 @@ impl CommitSummaryPane {
         }
     }
 
+    #[allow(dead_code)]
     pub fn poll_llm_summary(&mut self) {
         // This method is now deprecated - use shared state instead
         // The actual summary polling is handled through shared state in the main loop
@@ -1603,14 +1658,14 @@ impl CommitSummaryPane {
 
     /// Set a cached summary directly without generating a new one
     pub fn set_cached_summary(&mut self, commit_sha: &str, summary: String) {
-        if let Some(current_commit) = &self.current_commit {
-            if current_commit.sha == commit_sha {
-                self.llm_summary = Some(summary);
-                self.clear_error();
-                self.is_loading_summary = false;
-                self.pending_summary_sha = None;
-                self.loading_state = CommitSummaryLoadingState::Loaded;
-            }
+        if let Some(current_commit) = &self.current_commit
+            && current_commit.sha == commit_sha
+        {
+            self.llm_summary = Some(summary);
+            self.clear_error();
+            self.is_loading_summary = false;
+            self.pending_summary_sha = None;
+            self.loading_state = CommitSummaryLoadingState::Loaded;
         }
     }
 
@@ -1625,6 +1680,7 @@ impl CommitSummaryPane {
     }
 
     /// Get the current commit SHA if available
+    #[allow(dead_code)]
     pub fn get_current_commit_sha(&self) -> Option<String> {
         self.current_commit.as_ref().map(|c| c.sha.clone())
     }

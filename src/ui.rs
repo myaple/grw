@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::git::{CommitInfo, FileDiff, GitRepo, PreloadConfig, SummaryPreloader, TreeNode};
 use crate::llm::LlmClient;
 use crate::pane::{PaneId, PaneRegistry};
@@ -16,23 +18,6 @@ use std::sync::Arc;
 pub enum AppMode {
     Normal,
     CommitPicker,
-}
-
-#[derive(Debug, Clone)]
-pub struct CommitPickerState {
-    pub commits: Vec<crate::git::CommitInfo>,
-    pub current_index: usize,
-    pub scroll_offset: usize,
-}
-
-impl CommitPickerState {
-    pub fn new() -> Self {
-        Self {
-            commits: Vec::new(),
-            current_index: 0,
-            scroll_offset: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -664,15 +649,14 @@ impl App {
             }
 
             // Also forward to commit summary pane for scrolling
-            if !handled {
-                if let Some(pane_handled) = self
+            if !handled
+                && let Some(pane_handled) = self
                     .pane_registry
                     .with_pane_mut(&PaneId::CommitSummary, |pane| {
                         pane.handle_event(&crate::pane::AppEvent::Key(key))
                     })
-                {
-                    handled |= pane_handled;
-                }
+            {
+                handled |= pane_handled;
             }
         }
 
@@ -907,10 +891,10 @@ impl App {
     }
 
     pub fn is_commit_picker_enter_pressed(&self) -> bool {
-        if let Some(pane) = self.pane_registry.get_pane(&PaneId::CommitPicker) {
-            if let Some(commit_picker) = pane.as_commit_picker_pane() {
-                return commit_picker.is_enter_pressed();
-            }
+        if let Some(pane) = self.pane_registry.get_pane(&PaneId::CommitPicker)
+            && let Some(commit_picker) = pane.as_commit_picker_pane()
+        {
+            return commit_picker.is_enter_pressed();
         }
         false
     }
@@ -925,10 +909,10 @@ impl App {
     }
 
     pub fn get_current_selected_commit_from_picker(&self) -> Option<CommitInfo> {
-        if let Some(pane) = self.pane_registry.get_pane(&PaneId::CommitPicker) {
-            if let Some(commit_picker) = pane.as_commit_picker_pane() {
-                return commit_picker.get_current_commit().cloned();
-            }
+        if let Some(pane) = self.pane_registry.get_pane(&PaneId::CommitPicker)
+            && let Some(commit_picker) = pane.as_commit_picker_pane()
+        {
+            return commit_picker.get_current_commit().cloned();
         }
         None
     }
@@ -1004,10 +988,10 @@ impl App {
             // No cached summary available, trigger generation if needed
             self.pane_registry
                 .with_pane_mut(&PaneId::CommitSummary, |pane| {
-                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
-                        if commit_summary.needs_summary() {
-                            commit_summary.force_generate_summary();
-                        }
+                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut()
+                        && commit_summary.needs_summary()
+                    {
+                        commit_summary.force_generate_summary();
                     }
                 });
         }
@@ -1235,12 +1219,11 @@ impl App {
         if let Some(pane) = self
             .pane_registry
             .get_pane(&crate::pane::PaneId::CommitPicker)
+            && let Some(commit_picker) = pane.as_commit_picker_pane()
         {
-            if let Some(commit_picker) = pane.as_commit_picker_pane() {
-                let commits = commit_picker.get_commits();
-                let current_index = commit_picker.get_current_index();
-                return Some((commits, current_index));
-            }
+            let commits = commit_picker.get_commits();
+            let current_index = commit_picker.get_current_index();
+            return Some((commits, current_index));
         }
         None
     }

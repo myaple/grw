@@ -15,6 +15,7 @@ pub struct FileDiff {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CommitInfo {
     pub sha: String,
     pub short_sha: String,
@@ -165,22 +166,6 @@ impl GitRepo {
             }
         }
     }
-
-    pub fn get_diff_string(&self) -> String {
-        self.get_display_files()
-            .iter()
-            .map(|f| {
-                let mut diff_content = format!(
-                    "diff --git a/{} b/{}\n",
-                    f.path.to_string_lossy(),
-                    f.path.to_string_lossy()
-                );
-                diff_content.push_str(&f.line_strings.join("\n"));
-                diff_content
-            })
-            .collect::<Vec<String>>()
-            .join("\n")
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -223,18 +208,6 @@ impl SummaryPreloader {
         }
     }
 
-    pub fn new_with_config(
-        llm_client: Option<crate::llm::LlmClient>,
-        config: PreloadConfig,
-        llm_state: Arc<LlmSharedState>,
-    ) -> Self {
-        Self {
-            llm_client,
-            config,
-            llm_state,
-        }
-    }
-
     /// Pre-load summaries for a configurable number of commits starting from the beginning
     pub fn preload_summaries(&mut self, commits: &[CommitInfo]) {
         if !self.config.enabled || self.llm_client.is_none() {
@@ -264,11 +237,6 @@ impl SummaryPreloader {
         {
             self.preload_single_summary(&commit.sha);
         }
-    }
-
-    /// Check if a summary is currently being loaded
-    pub fn is_loading(&self, commit_sha: &str) -> bool {
-        self.llm_state.is_summary_loading(commit_sha)
     }
 
     /// Pre-load a single commit summary in the background
@@ -440,12 +408,20 @@ impl SummaryPreloader {
         self.config = config;
     }
 
+    /// Check if a summary is currently being loaded
+    #[allow(dead_code)]
+    pub fn is_loading(&self, commit_sha: &str) -> bool {
+        self.llm_state.is_summary_loading(commit_sha)
+    }
+
     /// Get current configuration
+    #[allow(dead_code)]
     pub fn get_config(&self) -> &PreloadConfig {
         &self.config
     }
 
     /// Clear all active tasks (useful for cleanup)
+    #[allow(dead_code)]
     pub fn clear_active_tasks(&self) {
         self.llm_state.clear_all_active_tasks();
     }
