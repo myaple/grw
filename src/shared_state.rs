@@ -164,17 +164,8 @@ pub struct LlmSharedState {
     /// Summary cache with commit SHA as key
     summary_cache: HashMap<String, String>,
 
-    /// Advice cache with diff hash as key
-    advice_cache: HashMap<String, String>,
-
     /// Active summary generation tasks (using HashMap for efficient lookup)
     active_summary_tasks: HashMap<String, u64>, // commit_sha -> timestamp
-
-    /// Active advice generation tasks (using HashMap for efficient lookup)
-    active_advice_tasks: HashMap<String, u64>, // task_id -> timestamp
-
-    /// Current advice content
-    current_advice: HashMap<String, String>,
 
     /// Error states
     error_state: HashMap<String, String>,
@@ -190,10 +181,7 @@ impl LlmSharedState {
     pub fn new() -> Self {
         Self {
             summary_cache: HashMap::new(),
-            advice_cache: HashMap::new(),
             active_summary_tasks: HashMap::new(),
-            active_advice_tasks: HashMap::new(),
-            current_advice: HashMap::new(),
             error_state: HashMap::new(),
         }
     }
@@ -225,45 +213,6 @@ impl LlmSharedState {
     /// Complete a summary generation task and remove it from tracking
     pub fn complete_summary_task(&self, commit_sha: &str) {
         let _ = self.active_summary_tasks.remove(commit_sha);
-    }
-
-    /// Start tracking an advice generation task
-    pub fn start_advice_task(&self, task_id: String) {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let _ = self.active_advice_tasks.insert(task_id, timestamp);
-    }
-
-    /// Complete an advice generation task and remove it from tracking
-    pub fn complete_advice_task(&self, task_id: &str) {
-        let _ = self.active_advice_tasks.remove(task_id);
-    }
-
-    /// Check if an advice task is currently active
-    pub fn is_advice_loading(&self, task_id: &str) -> bool {
-        self.active_advice_tasks.contains(task_id)
-    }
-
-    /// Cache advice content with a specific key
-    pub fn cache_advice(&self, key: String, advice: String) {
-        let _ = self.advice_cache.insert(key, advice);
-    }
-
-    /// Get cached advice for a specific key
-    pub fn get_cached_advice(&self, key: &str) -> Option<String> {
-        self.advice_cache.read(key, |_, v| v.clone())
-    }
-
-    /// Update current advice content
-    pub fn update_advice(&self, key: String, advice: String) {
-        let _ = self.current_advice.insert(key, advice);
-    }
-
-    /// Get current advice content
-    pub fn get_current_advice(&self, key: &str) -> Option<String> {
-        self.current_advice.read(key, |_, v| v.clone())
     }
 
     /// Set error state for a specific operation
@@ -305,11 +254,6 @@ impl LlmSharedState {
         self.active_summary_tasks.len()
     }
 
-    /// Get count of active advice tasks
-    pub fn active_advice_task_count(&self) -> usize {
-        self.active_advice_tasks.len()
-    }
-
     /// Get all active summary tasks with their timestamps
     pub fn get_active_summary_tasks(&self) -> Vec<(String, u64)> {
         let mut tasks = Vec::new();
@@ -319,19 +263,9 @@ impl LlmSharedState {
         tasks
     }
 
-    /// Get all active advice tasks with their timestamps
-    pub fn get_active_advice_tasks(&self) -> Vec<(String, u64)> {
-        let mut tasks = Vec::new();
-        self.active_advice_tasks.scan(|k, v| {
-            tasks.push((k.clone(), *v));
-        });
-        tasks
-    }
-
     /// Clear all active tasks (for cleanup/reset)
     pub fn clear_all_active_tasks(&self) {
         self.active_summary_tasks.clear();
-        self.active_advice_tasks.clear();
     }
 
     /// Clean up stale tasks older than the specified threshold (in seconds)
@@ -352,19 +286,6 @@ impl LlmSharedState {
         // Remove stale summary tasks
         for task in stale_summary_tasks {
             let _ = self.active_summary_tasks.remove(&task);
-        }
-
-        // Collect stale advice tasks
-        let mut stale_advice_tasks = Vec::new();
-        self.active_advice_tasks.scan(|k, v| {
-            if current_time.saturating_sub(*v) > threshold_seconds {
-                stale_advice_tasks.push(k.clone());
-            }
-        });
-
-        // Remove stale advice tasks
-        for task in stale_advice_tasks {
-            let _ = self.active_advice_tasks.remove(&task);
         }
     }
 }
@@ -631,9 +552,7 @@ pub struct SharedStateStatistics {
 
     // LLM state statistics
     pub llm_summaries_cached: usize,
-    pub llm_advice_cached: usize,
     pub llm_active_summary_tasks: usize,
-    pub llm_active_advice_tasks: usize,
     pub llm_errors: usize,
 
     // Monitor state statistics
@@ -649,13 +568,12 @@ impl SharedStateStatistics {
         self.git_commits_cached
             + self.git_file_diffs_cached
             + self.llm_summaries_cached
-            + self.llm_advice_cached
             + self.monitor_outputs
     }
 
     /// Get total number of active tasks
     pub fn total_active_tasks(&self) -> usize {
-        self.llm_active_summary_tasks + self.llm_active_advice_tasks
+        self.llm_active_summary_tasks
     }
 
     /// Get total number of errors across all components
@@ -777,8 +695,6 @@ impl SharedStateManager {
         self.git_state.repo_data.clear();
 
         self.llm_state.summary_cache.clear();
-        self.llm_state.advice_cache.clear();
-        self.llm_state.current_advice.clear();
 
         self.monitor_state.clear_all_outputs();
         self.monitor_state.clear_all_timing();
@@ -796,9 +712,7 @@ impl SharedStateManager {
             git_errors: self.git_state.get_all_errors().len(),
 
             llm_summaries_cached: self.llm_state.summary_cache.len(),
-            llm_advice_cached: self.llm_state.advice_cache.len(),
             llm_active_summary_tasks: self.llm_state.active_summary_task_count(),
-            llm_active_advice_tasks: self.llm_state.active_advice_task_count(),
             llm_errors: self.llm_state.get_all_errors().len(),
 
             monitor_outputs: self.monitor_state.output_count(),
@@ -1062,9 +976,7 @@ mod tests {
             git_repos_tracked: 1,
             git_errors: 0,
             llm_summaries_cached: 10,
-            llm_advice_cached: 2,
             llm_active_summary_tasks: 2,
-            llm_active_advice_tasks: 1,
             llm_errors: 0,
             monitor_outputs: 4,
             monitor_timings: 4,
@@ -1072,8 +984,8 @@ mod tests {
             monitor_errors: 0,
         };
 
-        assert_eq!(stats.total_cached_items(), 24); // 5+3+10+2+4 = 24
-        assert_eq!(stats.total_active_tasks(), 3); // 2+1 = 3
+        assert_eq!(stats.total_cached_items(), 22); // 5+3+10+4 = 22
+        assert_eq!(stats.total_active_tasks(), 2); // 2 = 2
         assert_eq!(stats.total_errors(), 0);
         assert!(stats.is_healthy());
 
@@ -1250,29 +1162,6 @@ mod tests {
         assert!(!llm_state.is_summary_loading("def456"));
         assert_eq!(llm_state.active_summary_task_count(), 0);
 
-        // Test advice caching
-        llm_state.cache_advice("diff_hash_1".to_string(), "Cached advice".to_string());
-        let cached_advice = llm_state.get_cached_advice("diff_hash_1");
-        assert!(cached_advice.is_some());
-        assert_eq!(cached_advice.unwrap(), "Cached advice");
-
-        // Test advice management
-        llm_state.update_advice("current".to_string(), "Test advice".to_string());
-        let advice = llm_state.get_current_advice("current");
-        assert!(advice.is_some());
-        assert_eq!(advice.unwrap(), "Test advice");
-
-        // Test advice task tracking
-        assert!(!llm_state.is_advice_loading("advice_task_1"));
-        llm_state.start_advice_task("advice_task_1".to_string());
-        assert!(llm_state.is_advice_loading("advice_task_1"));
-        assert_eq!(llm_state.active_advice_task_count(), 1);
-
-        // Test advice task completion
-        llm_state.complete_advice_task("advice_task_1");
-        assert!(!llm_state.is_advice_loading("advice_task_1"));
-        assert_eq!(llm_state.active_advice_task_count(), 0);
-
         // Test error handling
         llm_state.set_error(
             "summary_error".to_string(),
@@ -1289,13 +1178,8 @@ mod tests {
 
         // Test clearing all tasks
         llm_state.start_summary_task("test1".to_string());
-        llm_state.start_advice_task("test2".to_string());
-        assert_eq!(llm_state.active_summary_task_count(), 1);
-        assert_eq!(llm_state.active_advice_task_count(), 1);
-
         llm_state.clear_all_active_tasks();
         assert_eq!(llm_state.active_summary_task_count(), 0);
-        assert_eq!(llm_state.active_advice_task_count(), 0);
     }
 
     #[test]
@@ -1351,86 +1235,6 @@ mod tests {
         llm_state.clear_all_errors();
         let all_errors_after_clear = llm_state.get_all_errors();
         assert!(all_errors_after_clear.is_empty());
-    }
-
-    #[test]
-    fn test_llm_shared_state_cache_operations() {
-        let llm_state = LlmSharedState::new();
-
-        // Test summary cache operations
-        let commit_sha = "test_commit_123";
-        let summary = "This is a test summary for the commit";
-
-        // Initially no summary should exist
-        assert!(llm_state.get_cached_summary(commit_sha).is_none());
-
-        // Cache the summary
-        llm_state.cache_summary(commit_sha.to_string(), summary.to_string());
-
-        // Verify summary is cached
-        let cached_summary = llm_state.get_cached_summary(commit_sha);
-        assert!(cached_summary.is_some());
-        assert_eq!(cached_summary.unwrap(), summary);
-
-        // Test advice cache operations
-        let diff_hash = "diff_hash_456";
-        let advice = "This code looks good, consider adding tests";
-
-        // Initially no advice should exist
-        assert!(llm_state.get_cached_advice(diff_hash).is_none());
-
-        // Cache the advice
-        llm_state.cache_advice(diff_hash.to_string(), advice.to_string());
-
-        // Verify advice is cached
-        let cached_advice = llm_state.get_cached_advice(diff_hash);
-        assert!(cached_advice.is_some());
-        assert_eq!(cached_advice.unwrap(), advice);
-
-        // Test current advice operations
-        let advice_key = "current_diff";
-        let current_advice = "Current advice for the diff";
-
-        llm_state.update_advice(advice_key.to_string(), current_advice.to_string());
-        let retrieved_advice = llm_state.get_current_advice(advice_key);
-        assert!(retrieved_advice.is_some());
-        assert_eq!(retrieved_advice.unwrap(), current_advice);
-    }
-
-    #[test]
-    fn test_llm_shared_state_task_management() {
-        let llm_state = LlmSharedState::new();
-
-        // Test getting active tasks
-        llm_state.start_summary_task("commit1".to_string());
-        llm_state.start_summary_task("commit2".to_string());
-        llm_state.start_advice_task("advice1".to_string());
-
-        let summary_tasks = llm_state.get_active_summary_tasks();
-        let advice_tasks = llm_state.get_active_advice_tasks();
-
-        assert_eq!(summary_tasks.len(), 2);
-        assert_eq!(advice_tasks.len(), 1);
-
-        // Verify task names are correct
-        let summary_task_names: Vec<String> =
-            summary_tasks.iter().map(|(name, _)| name.clone()).collect();
-        assert!(summary_task_names.contains(&"commit1".to_string()));
-        assert!(summary_task_names.contains(&"commit2".to_string()));
-
-        let advice_task_names: Vec<String> =
-            advice_tasks.iter().map(|(name, _)| name.clone()).collect();
-        assert!(advice_task_names.contains(&"advice1".to_string()));
-
-        // Test that cleanup with a large threshold doesn't remove recent tasks
-        llm_state.cleanup_stale_tasks(3600); // 1 hour threshold - tasks should not be stale
-        assert_eq!(llm_state.active_summary_task_count(), 2);
-        assert_eq!(llm_state.active_advice_task_count(), 1);
-
-        // Test manual cleanup by clearing all tasks
-        llm_state.clear_all_active_tasks();
-        assert_eq!(llm_state.active_summary_task_count(), 0);
-        assert_eq!(llm_state.active_advice_task_count(), 0);
     }
 
     #[test]

@@ -1575,7 +1575,6 @@ impl CommitSummaryPane {
 
     fn request_llm_summary(&mut self) {
         if let Some(_commit) = &self.current_commit {
-            // TODO: Implement LLM summary generation using shared state
             self.loading_state = CommitSummaryLoadingState::Loaded;
             self.llm_summary =
                 Some("LLM summary generation not yet implemented with shared state".to_string());

@@ -597,9 +597,6 @@ fn handle_key_event(
                         Arc::clone(shared_state_manager.git_state()),
                     ) {
                         Ok(mut git_worker) => {
-                            // Configure cache size from config
-                            git_worker.set_cache_size(config.get_commit_cache_size());
-
                             // Use configurable commit history limit
                             let commit_limit = config.get_commit_history_limit();
                             match git_worker.get_commit_history(commit_limit) {
@@ -666,4 +663,3 @@ fn handle_key_event(
 }
 
 // Note: Tests removed during shared state migration
-// TODO: Rewrite tests to use new shared state architecture

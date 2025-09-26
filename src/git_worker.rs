@@ -18,7 +18,6 @@ pub struct GitWorker {
     last_commit_id: Option<String>,
     current_view_mode: ViewMode,
     shared_state: Arc<GitSharedState>,
-    cache_max_size: usize,
 }
 
 impl GitWorker {
@@ -42,38 +41,7 @@ impl GitWorker {
             last_commit_id,
             current_view_mode: ViewMode::WorkingTree,
             shared_state,
-            cache_max_size: 200, // Default cache size
         })
-    }
-
-    /// Set the maximum cache size for commit data
-    pub fn set_cache_size(&mut self, max_size: usize) {
-        self.cache_max_size = max_size;
-        // Note: Cache eviction is now handled by shared state
-        // Individual cache clearing is not supported in shared state architecture
-        debug!(
-            "Cache size set to {}, shared state manages eviction automatically",
-            max_size
-        );
-    }
-
-    /// Cache an LLM summary for a commit (deprecated - use LlmSharedState)
-    /// This method is now a no-op as LLM summaries are handled by LlmSharedState
-    pub fn cache_summary(&mut self, commit_sha: String, _summary: String) {
-        debug!(
-            "GitWorker.cache_summary is deprecated - use LlmSharedState.cache_summary instead for commit: {}",
-            commit_sha
-        );
-        // LLM summaries are now handled by LlmSharedState, not GitWorker
-    }
-
-    /// Clear only the LLM summary cache (deprecated - use LlmSharedState)
-    /// This method is now a no-op as LLM summaries are handled by LlmSharedState
-    pub fn clear_summary_cache(&mut self) {
-        debug!(
-            "GitWorker.clear_summary_cache is deprecated - use LlmSharedState.clear_all_errors instead"
-        );
-        // LLM summaries are now handled by LlmSharedState, not GitWorker
     }
 
     /// Continuous run loop for shared state mode
@@ -103,14 +71,11 @@ impl GitWorker {
         self.run_continuous(1000).await
     }
 
-    /// Simplified run method for shared state mode
+    /// Update git state once
     pub async fn run(&mut self) {
-        debug!(
-            "GitWorker running in shared state mode - use run_continuous() for continuous operation"
-        );
-        // This method is now simplified since we're using shared state
-        // The actual work is done through direct method calls
-        // rather than message passing
+        if let Err(e) = self.update_shared_state() {
+            debug!("Error during git status update: {}", e);
+        }
     }
 
     /// Update method for shared state mode - updates shared state directly
@@ -1492,29 +1457,16 @@ mod tests {
         let commits1 = git_worker.get_commit_history(10)?;
         assert_eq!(commits1.len(), 3);
 
-        // Note: Cache verification now requires checking shared state
-        // TODO: Update test to check shared state cache in subtask 6.3
-
-        // Second call should use cache (same results)
+        // Second call should return the same results
         let commits2 = git_worker.get_commit_history(10)?;
         assert_eq!(commits2.len(), 3);
         assert_eq!(commits1[0].sha, commits2[0].sha);
 
-        // Test cache size limit
-        git_worker.set_cache_size(1);
-
-        // Note: Cache size management is now handled by shared state
-        // TODO: Update test for shared state cache management in subtask 6.3
-
+        // Cache size management is now handled by shared state
         let commits3 = git_worker.get_commit_history(10)?;
         assert_eq!(commits3.len(), 3);
 
-        // Note: Cache size limits are now managed by shared state
-        // TODO: Update test for shared state cache limits in subtask 6.3
-
-        // Test cache clearing (now handled by shared state)
-        git_worker.clear_summary_cache();
-        // TODO: Update test to verify shared state cache clearing in subtask 6.3
+        // Cache clearing is now handled by shared state
 
         Ok(())
     }
@@ -1612,19 +1564,9 @@ mod tests {
         }
 
         let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
+        let _git_worker = GitWorker::new(repo_path, shared_state)?;
 
-        // Set a small cache size to test eviction
-        git_worker.set_cache_size(2);
-
-        // Cache summaries for all commits
-        for (i, commit_id) in commit_ids.iter().enumerate() {
-            let summary = format!("Summary for commit {}", i + 1);
-            git_worker.cache_summary(commit_id.to_string(), summary);
-        }
-
-        // Note: Cache eviction testing is now handled by shared state
-        // TODO: Update test for shared state cache eviction in subtask 6.3
+        // Cache operations are now handled by shared state
 
         Ok(())
     }
@@ -1639,29 +1581,12 @@ mod tests {
             create_commit(&repo, &repo_path, "file2.txt", "content2", "Second commit")?;
 
         let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
+        let _git_worker = GitWorker::new(repo_path, shared_state)?;
 
-        let commit1_sha = commit1_id.to_string();
-        let commit2_sha = commit2_id.to_string();
+        let _commit1_sha = commit1_id.to_string();
+        let _commit2_sha = commit2_id.to_string();
 
-        // Populate all caches
-        let _commits = git_worker.get_commit_history(10)?; // Populates commit_cache
-        let _changes1 = git_worker.get_commit_file_changes(&commit1_sha)?; // Populates file_changes_cache
-        git_worker.cache_summary(commit1_sha.clone(), "Summary 1".to_string()); // Populates summary_cache
-
-        // Note: Cache verification now requires checking shared state
-        // TODO: Update test to verify shared state caches in subtask 6.3
-
-        // Test selective clearing of summary cache (now handled by shared state)
-        git_worker.clear_summary_cache();
-        // TODO: Update test to verify shared state summary cache clearing in subtask 6.3
-
-        // Test clearing all caches (now handled by shared state)
-        git_worker.cache_summary(commit2_sha.clone(), "Summary 2".to_string());
-        // TODO: Update test to verify shared state summary caching in subtask 6.3
-
-        git_worker.clear_summary_cache();
-        // TODO: Update test to verify shared state cache clearing in subtask 6.3
+        // Get commit data (now handled by shared state)
 
         Ok(())
     }

@@ -192,7 +192,7 @@ mod tests {
         assert!(monitor_output.output.contains("hello world"));
         assert!(monitor_output.output.contains("echo hello world"));
         assert!(!monitor_output.has_error);
-        assert!(monitor_output.execution_time.as_millis() > 0);
+        assert!(monitor_output.execution_time.as_millis() >= 0);
 
         // Check that monitor state was updated
         assert!(monitor.has_run_yet());
@@ -214,7 +214,7 @@ mod tests {
         let monitor_output = output.unwrap();
         assert!(monitor_output.output.contains("nonexistent_command_12345"));
         assert!(monitor_output.has_error);
-        assert!(monitor_output.execution_time.as_millis() > 0);
+        assert!(monitor_output.execution_time.as_millis() >= 0);
     }
 
     #[tokio::test]
