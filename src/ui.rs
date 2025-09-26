@@ -129,7 +129,6 @@ pub enum InformationPane {
     Diff,
     SideBySideDiff,
     Help,
-    Advice,
     // Add new pane types here in the future
     // Examples:
     // Stats,
@@ -145,7 +144,6 @@ pub enum ActivePane {
     Monitor,
     Diff,
     SideBySideDiff,
-    Advice,
 }
 
 #[derive(Debug)]
@@ -173,7 +171,6 @@ pub struct App {
     current_information_pane: InformationPane,
     theme: Theme,
     pane_registry: PaneRegistry,
-    llm_advice: String,
     last_active_pane: ActivePane,
     app_mode: AppMode,
     selected_commit: Option<CommitInfo>,
@@ -192,8 +189,6 @@ impl App {
             PaneRegistry::new(theme, llm_client.clone(), llm_state.clone())
         } else {
             // Provide a dummy or default LlmClient for the registry when none is available.
-            // This depends on how PaneRegistry and AdvicePane are structured.
-            // For now, let's assume AdvicePane can handle a missing LlmClient.
             let mut dummy_llm_config = crate::config::LlmConfig::default();
             if std::env::var("OPENAI_API_KEY").is_err() {
                 dummy_llm_config.api_key = Some("dummy_key".to_string());
@@ -226,7 +221,6 @@ impl App {
             current_information_pane: InformationPane::Diff,
             theme,
             pane_registry,
-            llm_advice: String::new(),
             last_active_pane: ActivePane::default(),
             app_mode: AppMode::Normal,
             selected_commit: None,
@@ -439,16 +433,10 @@ impl App {
                     self.set_side_by_side_diff();
                     self.current_information_pane = InformationPane::SideBySideDiff;
                 }
-                ActivePane::Advice => {
-                    self.set_advice_pane();
-                    self.current_information_pane = InformationPane::Advice;
-                }
             }
         } else {
             // Determine which pane is active before showing help
-            if self.is_showing_advice_pane() {
-                self.last_active_pane = ActivePane::Advice;
-            } else if self
+            if self
                 .pane_registry
                 .get_pane(&PaneId::SideBySideDiff)
                 .is_some_and(|p| p.visible())
@@ -480,10 +468,6 @@ impl App {
                 .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
                     diff_pane.set_visible(false);
                 });
-            self.pane_registry
-                .with_pane_mut(&PaneId::Advice, |advice_pane| {
-                    advice_pane.set_visible(false);
-                });
             // Update the legacy field for backward compatibility
             self.current_information_pane = InformationPane::Help;
         }
@@ -508,10 +492,6 @@ impl App {
                 .with_pane_mut(&PaneId::SideBySideDiff, |diff_pane| {
                     diff_pane.set_visible(false);
                 });
-            self.pane_registry
-                .with_pane_mut(&PaneId::Advice, |advice_pane| {
-                    advice_pane.set_visible(false);
-                });
             self.current_information_pane = InformationPane::Diff;
         }
     }
@@ -526,10 +506,6 @@ impl App {
             self.pane_registry
                 .with_pane_mut(&PaneId::Diff, |diff_pane| {
                     diff_pane.set_visible(false);
-                });
-            self.pane_registry
-                .with_pane_mut(&PaneId::Advice, |advice_pane| {
-                    advice_pane.set_visible(false);
                 });
             self.current_information_pane = InformationPane::SideBySideDiff;
         }
@@ -672,10 +648,7 @@ impl App {
         self.show_monitor_pane
     }
 
-    pub fn is_showing_advice_pane(&self) -> bool {
-        matches!(self.current_information_pane, InformationPane::Advice)
-    }
-
+  
     pub fn forward_key_to_panes(&mut self, key: KeyEvent) -> bool {
         let mut handled = false;
 
@@ -704,19 +677,7 @@ impl App {
             }
         }
 
-        // Forward to advice pane if it's visible and not in commit picker mode
-        if !handled && !self.is_in_commit_picker_mode() {
-            if let Some(pane_handled) = self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
-                if pane.visible() {
-                    pane.handle_event(&crate::pane::AppEvent::Key(key))
-                } else {
-                    false
-                }
-            }) {
-                handled |= pane_handled;
-            }
-        }
-
+        
         handled
     }
 
@@ -757,32 +718,8 @@ impl App {
         self.pane_registry.set_theme(self.theme);
     }
 
-    pub fn set_advice_pane(&mut self) {
-        self.pane_registry
-            .with_pane_mut(&PaneId::Advice, |p| p.set_visible(true));
-        // Hide other information panes
-        self.pane_registry
-            .with_pane_mut(&PaneId::Diff, |p| p.set_visible(false));
-        self.pane_registry
-            .with_pane_mut(&PaneId::SideBySideDiff, |p| p.set_visible(false));
-        self.pane_registry
-            .with_pane_mut(&PaneId::Help, |p| p.set_visible(false));
-        // Update the legacy field for consistency
-        self.current_information_pane = InformationPane::Advice;
-    }
-
-    pub fn update_llm_advice(&mut self, advice: String) {
-        self.llm_advice = advice.clone();
-        self.pane_registry.with_pane_mut(&PaneId::Advice, |p| {
-            let _ = p.handle_event(&crate::pane::AppEvent::DataUpdated((), advice));
-        });
-    }
-
-    #[allow(dead_code)]
-    pub fn get_llm_advice(&self) -> &str {
-        &self.llm_advice
-    }
-
+    
+    
     // Public getters for private fields needed by panes
     pub fn get_tree_nodes(&self) -> &Vec<(TreeNode, usize)> {
         &self.tree_nodes
@@ -828,14 +765,8 @@ impl App {
         self.last_active_pane
     }
 
-    pub fn poll_llm_advice(&mut self) {
-        self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
-            if let Some(advice_pane) = pane.as_advice_pane_mut() {
-                advice_pane.poll_llm_response();
-            }
-        });
-    }
-
+    
+    
     pub fn poll_llm_summaries(&mut self) {
         self.pane_registry
             .with_pane_mut(&PaneId::CommitSummary, |pane| {
@@ -845,23 +776,7 @@ impl App {
             });
     }
 
-    pub fn is_advice_refresh_requested(&self) -> bool {
-        if let Some(pane) = self.pane_registry.get_pane(&PaneId::Advice) {
-            if let Some(advice_pane) = pane.as_advice_pane() {
-                return advice_pane.refresh_requested;
-            }
-        }
-        false
-    }
-
-    pub fn reset_advice_refresh_request(&mut self) {
-        self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
-            if let Some(advice_pane) = pane.as_advice_pane_mut() {
-                advice_pane.refresh_requested = false;
-            }
-        });
-    }
-
+    
     // Commit picker mode state management methods
     pub fn enter_commit_picker_mode(&mut self) {
         // Validate that we can enter commit picker mode
@@ -898,10 +813,7 @@ impl App {
             .with_pane_mut(&PaneId::SideBySideDiff, |pane| {
                 pane.set_visible(false);
             });
-        self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
-            pane.set_visible(false);
-        });
-        self.pane_registry.with_pane_mut(&PaneId::Help, |pane| {
+                self.pane_registry.with_pane_mut(&PaneId::Help, |pane| {
             pane.set_visible(false);
         });
     }
@@ -931,7 +843,6 @@ impl App {
             match self.current_information_pane {
                 InformationPane::Diff => self.set_single_pane_diff(),
                 InformationPane::SideBySideDiff => self.set_side_by_side_diff(),
-                InformationPane::Advice => self.set_advice_pane(),
                 _ => self.set_single_pane_diff(),
             }
         }
@@ -1310,6 +1221,7 @@ impl App {
         self.summary_preloader.clear_active_tasks();
     }
 
+    
     pub fn get_commit_picker_state(&self) -> Option<(Vec<CommitInfo>, usize)> {
         if let Some(pane) = self.pane_registry.get_pane(&crate::pane::PaneId::CommitPicker) {
             if let Some(commit_picker) = pane.as_commit_picker_pane() {
@@ -1489,17 +1401,9 @@ fn render_information_pane(
         .pane_registry
         .get_pane(&PaneId::Help)
         .is_some_and(|p| p.visible());
-    let advice_visible = app
-        .pane_registry
-        .get_pane(&PaneId::Advice)
-        .is_some_and(|p| p.visible());
-
     if help_visible {
         app.pane_registry
             .render(f, app, area, PaneId::Help, git_repo);
-    } else if advice_visible {
-        app.pane_registry
-            .render(f, app, area, PaneId::Advice, git_repo);
     } else if app.side_by_side_diff {
         app.pane_registry
             .render(f, app, area, PaneId::SideBySideDiff, git_repo);

@@ -26,7 +26,7 @@ use std::env;
 use std::sync::Arc;
 
 use config::{Args, Config};
-use llm::{AsyncLLMCommand, LlmClient};
+use llm::LlmClient;
 use log::{debug, error, info};
 use monitor::AsyncMonitorCommand;
 use shared_state::SharedStateManager;
@@ -126,13 +126,7 @@ async fn main() -> Result<()> {
         app.set_monitor_command_configured(true);
     }
 
-    let (mut llm_command, mut llm_rx) = if let Some(client) = llm_client {
-        let (cmd, rx) = AsyncLLMCommand::new(client, Arc::clone(&shared_state_manager.llm_state()));
-        (Some(cmd), Some(rx))
-    } else {
-        (None, None)
-    };
-
+    
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     let _ = terminal.clear();
@@ -183,54 +177,12 @@ async fn main() -> Result<()> {
             app.update_monitor_timing(elapsed, has_run);
         }
 
-        // Poll for LLM advice responses from the channel
-        if let Some(ref mut rx) = llm_rx {
-            while let Ok(advice_result) = rx.try_recv() {
-                if !advice_result.has_error {
-                    app.update_llm_advice(advice_result.content);
-                } else {
-                    app.update_llm_advice(advice_result.content);
-                }
-            }
-        }
-
-        // Poll for LLM commit summary responses from shared state
-        // This is now handled by the shared state cache check below
-
         // Check shared state for cached summaries
         if let Some(current_commit) = app.get_current_selected_commit_from_picker() {
             if let Some(cached_summary) = shared_state_manager.llm_state().get_cached_summary(&current_commit.sha) {
                 // Handle cached summary from shared state
                 app.handle_cached_summary_result(Some(cached_summary), &current_commit.sha);
             }
-        }
-
-        // Trigger initial LLM advice when git repo is first available
-        if let Some(ref llm) = llm_command {
-            if shared_state_manager.git_state().get_repo().is_some() {
-                static INITIAL_ADVICE_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-                if !INITIAL_ADVICE_DONE.load(std::sync::atomic::Ordering::Relaxed) {
-                    log::debug!("Triggering initial LLM advice generation");
-
-                    // Get current diff and request advice
-                    if let Some(diff) = shared_state_manager.monitor_state().get_output("git_diff") {
-                        let diff_content = diff;
-                        let task_id = futures::executor::block_on(llm.request_advice(diff_content));
-                        log::debug!("Started LLM advice task: {}", task_id);
-                    }
-
-                    INITIAL_ADVICE_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
-                }
-            }
-        }
-
-        
-        // Check for LLM errors in shared state
-        if let Some(error) = shared_state_manager.llm_state().get_error("advice_generation") {
-            log::error!("LLM shared state error: {error}");
-            app.update_llm_advice(format!("❌ Shared state error: {}", error));
-            // Clear the error after handling it
-            shared_state_manager.llm_state().clear_error("advice_generation");
         }
 
         // Periodic error recovery check - clear stale errors every 30 seconds
@@ -383,17 +335,6 @@ async fn main() -> Result<()> {
                     break;
                 }
             }
-        }
-
-        if app.is_advice_refresh_requested() {
-            if let Some(llm) = &llm_command {
-                // Get current diff and request new advice
-                if let Some(diff) = shared_state_manager.monitor_state().get_output("git_diff") {
-                    let task_id = futures::executor::block_on(llm.request_advice(diff));
-                    log::debug!("Started LLM advice refresh task: {}", task_id);
-                }
-            }
-            app.reset_advice_refresh_request();
         }
 
         // Handle commit selection from commit picker
@@ -631,12 +572,7 @@ fn handle_key_event(
             debug!("Monitor pane is now: {}", app.is_showing_monitor_pane());
             false
         }
-        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            debug!("User pressed Ctrl+L - switching to advice pane");
-            app.set_advice_pane();
-            false
-        }
-        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             debug!("User pressed Ctrl+W - returning to working directory view");
             app.clear_selected_commit();
             false
@@ -717,7 +653,7 @@ fn handle_key_event(
             }
             false
         }
-        _ => false,
+        _ => false
     }
 }
 

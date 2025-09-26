@@ -1,13 +1,10 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use openai_api_rs::v1::chat_completion;
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
-    text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
@@ -30,12 +27,6 @@ pub trait Pane {
     fn handle_event(&mut self, event: &AppEvent) -> bool;
     fn visible(&self) -> bool;
     fn set_visible(&mut self, visible: bool);
-    fn as_advice_pane(&self) -> Option<&AdvicePane> {
-        None
-    }
-    fn as_advice_pane_mut(&mut self) -> Option<&mut AdvicePane> {
-        None
-    }
     fn as_commit_picker_pane(&self) -> Option<&CommitPickerPane> {
         None
     }
@@ -58,7 +49,6 @@ pub enum PaneId {
     SideBySideDiff,
     Help,
     StatusBar,
-    Advice,
     CommitPicker,
     CommitSummary,
 }
@@ -103,10 +93,6 @@ impl PaneRegistry {
         self.register_pane(PaneId::SideBySideDiff, Box::new(SideBySideDiffPane::new()));
         self.register_pane(PaneId::Help, Box::new(HelpPane::new()));
         self.register_pane(PaneId::StatusBar, Box::new(StatusBarPane::new()));
-        self.register_pane(
-            PaneId::Advice,
-            Box::new(AdvicePane::new(Some(llm_client.clone()))),
-        );
         self.register_pane(PaneId::CommitPicker, Box::new(CommitPickerPane::new()));
         let mut commit_summary_pane = CommitSummaryPane::new_with_llm_client(Some(llm_client));
         commit_summary_pane.set_shared_state(llm_shared_state);
@@ -757,17 +743,9 @@ impl Pane for HelpPane {
                         "  Shift+G           - Go to bottom",
                     ],
                 ),
-                ActivePane::Advice => (
-                    "LLM Advice",
-                    vec![
-                        "  j / k           - Scroll up/down",
-                        "  g g             - Go to top",
-                        "  Shift+G         - Go to bottom",
-                        "  /               - Enter input mode",
-                        "  Enter           - Submit question",
-                        "  Esc             - Exit input mode",
-                        "  Ctrl+r          - Refresh LLM advice",
-                    ],
+                _ => (
+                    "Unknown",
+                    vec![],
                 ),
             }
         };
@@ -818,7 +796,6 @@ impl Pane for HelpPane {
             )),
             Line::from("  Ctrl+d        - Switch to inline diff view"),
             Line::from("  Ctrl+s        - Switch to side-by-side diff view"),
-            Line::from("  Ctrl+l        - Switch to LLM advice pane"),
             Line::from(""),
             Line::from("Press ? or Esc to return to the previous pane"),
         ]);
@@ -1499,308 +1476,6 @@ impl Pane for CommitPickerPane {
     }
 }
 
-const SYSTEM_PROMPT: &str = "You are acting in the role of a staff engineer providing a code review. \
-Please provide a brief review of the following code changes. \
-The review should focus on 'Maintainability' and any obvious safety bugs. \
-In the maintainability part, include 0-3 actionable suggestions to enhance code maintainability. \
-Don't be afraid to say that this code is okay at maintainability and not provide suggestions. \
-When you provide suggestions, give a brief before and after example using the code diffs below \
-to provide context and examples of what you mean. \
-Each suggestion should be clear, specific, and implementable. \
-Keep the response concise and focused on practical improvements.";
-
-// Advice Pane Implementation
-pub struct AdvicePane {
-    visible: bool,
-    content: String,
-    scroll_offset: usize,
-    input: String,
-    input_mode: bool,
-    conversation_history: Vec<chat_completion::ChatCompletionMessage>,
-    llm_client: Option<LlmClient>,
-    is_loading: bool,
-    input_cursor_position: usize,
-    input_scroll_offset: usize,
-    initial_data: Option<String>,
-    pub refresh_requested: bool,
-    last_rect: RefCell<Rect>,
-    last_g_press: Option<std::time::Instant>,
-}
-
-impl AdvicePane {
-    pub fn new(llm_client: Option<LlmClient>) -> Self {
-        // Initialize with a default rect to prevent issues
-        let default_rect = Rect::new(0, 0, 80, 20);
-        Self {
-            visible: false,
-            content: "⏳ Loading LLM advice...".to_string(),
-            scroll_offset: 0,
-            input: String::new(),
-            input_mode: false,
-            conversation_history: Vec::new(),
-            llm_client,
-            is_loading: false,
-            input_cursor_position: 0,
-            input_scroll_offset: 0,
-            initial_data: None,
-            refresh_requested: false,
-            last_rect: RefCell::new(default_rect),
-            last_g_press: None,
-        }
-    }
-
-    pub fn poll_llm_response(&mut self) {
-        // This method is now deprecated - use shared state instead
-        self.is_loading = false;
-    }
-}
-
-impl Pane for AdvicePane {
-    fn title(&self) -> String {
-        "LLM Advice".to_string()
-    }
-
-    fn render(
-        &self,
-        f: &mut Frame,
-        app: &App,
-        area: Rect,
-        _git_repo: &GitRepo,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        *self.last_rect.borrow_mut() = area;
-        let theme = app.get_theme();
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(
-                [
-                    Constraint::Min(0),
-                    Constraint::Length(if self.input_mode { 3 } else { 0 }),
-                ]
-                .as_ref(),
-            )
-            .split(area);
-
-        let mut text_lines: Vec<Line> = self
-            .content
-            .lines()
-            .map(|l| Line::from(l.to_string()))
-            .collect();
-        if self.is_loading {
-            text_lines.push(Line::from("Loading..."));
-        }
-
-        let paragraph = Paragraph::new(text_lines)
-            .block(
-                Block::default()
-                    .title(self.title())
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border_color())),
-            )
-            .wrap(Wrap { trim: true })
-            .scroll((self.scroll_offset as u16, 0));
-        f.render_widget(paragraph, chunks[0]);
-
-        if self.input_mode {
-            let input_block = Block::default().borders(Borders::ALL).title("Input");
-            let input_paragraph = Paragraph::new(&*self.input)
-                .style(Style::default().fg(theme.foreground_color()))
-                .scroll((0, self.input_scroll_offset as u16))
-                .block(input_block);
-            f.render_widget(input_paragraph, chunks[1]);
-            f.set_cursor_position(ratatui::layout::Position::new(
-                chunks[1].x + (self.input_cursor_position - self.input_scroll_offset) as u16 + 1,
-                chunks[1].y + 1,
-            ));
-        }
-
-        Ok(())
-    }
-
-    fn handle_event(&mut self, event: &AppEvent) -> bool {
-        if !self.visible {
-            return false;
-        }
-        if let AppEvent::Key(key) = event {
-            if self.input_mode {
-                match key.code {
-                    KeyCode::Esc => {
-                        self.input_mode = false;
-                        return true;
-                    }
-                    KeyCode::Enter => {
-                        let prompt = self.input.drain(..).collect::<String>();
-                        self.conversation_history
-                            .push(chat_completion::ChatCompletionMessage {
-                                role: chat_completion::MessageRole::user,
-                                content: chat_completion::Content::Text(prompt.clone()),
-                                name: None,
-                                tool_calls: None,
-                                tool_call_id: None,
-                            });
-
-                        self.content.push_str("\n\n> ");
-                        self.content.push_str(&prompt);
-                        self.is_loading = true;
-                        self.input_mode = false;
-
-                        // Scroll to bottom
-                        let content_lines: Vec<_> = self.content.lines().collect();
-                        self.scroll_offset = content_lines.len().saturating_sub(1);
-
-                        if let Some(_llm_client) = self.llm_client.as_ref() {
-                            // TODO: Implement LLM advice generation using shared state
-                            self.content.push_str("\n\nLLM advice generation not yet implemented with shared state");
-                        }
-                        self.input_cursor_position = 0;
-                        return true;
-                    }
-                    KeyCode::Char(c) => {
-                        self.input.insert(self.input_cursor_position, c);
-                        self.input_cursor_position += 1;
-                        return true;
-                    }
-                    KeyCode::Backspace => {
-                        if self.input_cursor_position > 0 {
-                            self.input_cursor_position -= 1;
-                            self.input.remove(self.input_cursor_position);
-                        }
-                        return true;
-                    }
-                    KeyCode::Left => {
-                        self.input_cursor_position = self.input_cursor_position.saturating_sub(1);
-                        return true;
-                    }
-                    KeyCode::Right => {
-                        self.input_cursor_position = self
-                            .input_cursor_position
-                            .saturating_add(1)
-                            .min(self.input.len());
-                        return true;
-                    }
-                    _ => return false,
-                }
-            } else {
-                match key.code {
-                    KeyCode::Char('/') => {
-                        self.input_mode = true;
-                        if self.conversation_history.is_empty() {
-                            if let Some(data) = &self.initial_data {
-                                self.conversation_history.push(
-                                    chat_completion::ChatCompletionMessage {
-                                        role: chat_completion::MessageRole::system,
-                                        content: chat_completion::Content::Text(
-                                            SYSTEM_PROMPT.to_string(),
-                                        ),
-                                        name: None,
-                                        tool_calls: None,
-                                        tool_call_id: None,
-                                    },
-                                );
-                                self.conversation_history.push(
-                                    chat_completion::ChatCompletionMessage {
-                                        role: chat_completion::MessageRole::user,
-                                        content: chat_completion::Content::Text(data.clone()),
-                                        name: None,
-                                        tool_calls: None,
-                                        tool_call_id: None,
-                                    },
-                                );
-                            }
-                        }
-                        return true;
-                    }
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        let rect = self.last_rect.borrow();
-                        let visible_height = rect.height.saturating_sub(2) as usize; // Subtract 2 for borders
-                        let content_lines: Vec<_> = self.content.lines().collect();
-                        let max_scroll = content_lines.len().saturating_sub(visible_height.max(1));
-                        self.scroll_offset =
-                            std::cmp::min(self.scroll_offset.saturating_add(1), max_scroll);
-                        return true;
-                    }
-                    KeyCode::Char('g') => {
-                        // Check if this is the second 'g' press (gg = go to top)
-                        let now = std::time::Instant::now();
-                        let is_double_press = if let Some(last_time) = self.last_g_press {
-                            now.duration_since(last_time).as_millis() < 500
-                        } else {
-                            false
-                        };
-                        self.last_g_press = Some(now);
-
-                        if is_double_press {
-                            self.scroll_offset = 0;
-                            return true;
-                        }
-                        return false; // First 'g' press, wait for potential second
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        self.scroll_offset = self.scroll_offset.saturating_sub(1);
-                        return true;
-                    }
-                    KeyCode::PageDown => {
-                        let rect = self.last_rect.borrow();
-                        let page_size = rect.height.saturating_sub(2) as usize;
-                        let content_lines: Vec<_> = self.content.lines().collect();
-                        let max_scroll = content_lines.len().saturating_sub(page_size);
-                        self.scroll_offset =
-                            std::cmp::min(self.scroll_offset.saturating_add(page_size), max_scroll);
-                        return true;
-                    }
-                    KeyCode::PageUp => {
-                        let rect = self.last_rect.borrow();
-                        let page_size = rect.height.saturating_sub(2) as usize;
-                        self.scroll_offset = self.scroll_offset.saturating_sub(page_size);
-                        return true;
-                    }
-                    KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                        let rect = self.last_rect.borrow();
-                        let visible_height = rect.height.saturating_sub(2) as usize; // Subtract 2 for borders
-                        let content_lines: Vec<_> = self.content.lines().collect();
-                        let max_scroll = content_lines.len().saturating_sub(visible_height.max(1));
-                        self.scroll_offset = max_scroll;
-                        return true;
-                    }
-                    KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        log::debug!("Ctrl+r pressed, requesting LLM advice refresh");
-                        self.content = "⏳ Loading LLM advice...".to_string();
-                        self.scroll_offset = 0;
-                        log::debug!("Set advice pane content to loading message");
-                        self.refresh_requested = true;
-                        return true;
-                    }
-                    _ => return false,
-                }
-            }
-        }
-
-        if let AppEvent::DataUpdated(_, data) = event {
-            self.content = data.clone();
-            self.scroll_offset = 0;
-            self.conversation_history.clear();
-            self.initial_data = Some(data.clone());
-            return true;
-        }
-
-        false
-    }
-
-    fn visible(&self) -> bool {
-        self.visible
-    }
-
-    fn set_visible(&mut self, visible: bool) {
-        self.visible = visible;
-    }
-
-    fn as_advice_pane(&self) -> Option<&AdvicePane> {
-        Some(self)
-    }
-
-    fn as_advice_pane_mut(&mut self) -> Option<&mut AdvicePane> {
-        Some(self)
-    }
-}
 
 // Commit Summary Pane Implementation
 pub struct CommitSummaryPane {
@@ -2649,83 +2324,5 @@ mod tests {
         advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::PageUp)));
         assert_eq!(advice_pane.scroll_offset, 64);
     }
-
-    // #[test]
-    // fn test_advice_pane_jk_navigation() {
-    //     let mut llm_config = LlmConfig::default();
-    //     if env::var("OPENAI_API_KEY").is_err() {
-    //         llm_config.api_key = Some("dummy_key".to_string());
-    //     }
-    //     let llm_client = LlmClient::new(llm_config).unwrap();
-    //     let mut advice_pane = AdvicePane::new(Some(llm_client));
-    //     advice_pane.visible = true; // Make the pane visible so it can handle events
-    //     advice_pane.content = (0..50).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
-    //     let rect = Rect::new(0, 0, 80, 20); // 20 height, so visible_height = 18 (minus 2 for borders)
-    //     *advice_pane.last_rect.borrow_mut() = rect;
-
-    //     // Start at top
-    //     assert_eq!(advice_pane.scroll_offset, 0);
-
-    //     // Test j key (scroll down)
-    //     let handled = advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::Char('j'))));
-    //     assert!(handled, "j key should be handled by advice pane");
-    //     assert_eq!(advice_pane.scroll_offset, 1);
-
-    //     // Test multiple j presses
-    //     advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::Char('j'))));
-    //     advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::Char('j'))));
-    //     assert_eq!(advice_pane.scroll_offset, 3);
-
-    //     // Test k key (scroll up)
-    //     let handled = advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::Char('k'))));
-    //     assert!(handled, "k key should be handled by advice pane");
-    //     assert_eq!(advice_pane.scroll_offset, 2);
-
-    //     // Test k key at top (should not go below 0)
-    //     advice_pane.scroll_offset = 0;
-    //     advice_pane.handle_event(&AppEvent::Key(KeyEvent::from(KeyCode::Char('k'))));
-    //     assert_eq!(advice_pane.scroll_offset, 0);
-
-    //     // Test Shift+G (go to bottom)
-    //     let handled = advice_pane.handle_event(&AppEvent::Key(KeyEvent::new(
-    //         KeyCode::Char('G'),
-    //         KeyModifiers::SHIFT,
-    //     )));
-    //     assert!(handled, "Shift+G should be handled by advice pane");
-    //     // With 50 lines of content and visible_height of 18, max_scroll should be 50 - 18 = 32
-    //     assert_eq!(advice_pane.scroll_offset, 32);
-    // }
-
-    #[test]
-    fn test_app_forward_key_to_advice_pane() {
-        use crate::ui::{App, Theme};
-        use std::sync::Arc;
-        
-        fn create_test_llm_state() -> Arc<crate::shared_state::LlmSharedState> {
-            Arc::new(crate::shared_state::LlmSharedState::new())
-        }
-
-        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
-        
-        // Initially advice pane should not be showing
-        assert!(!app.is_showing_advice_pane());
-        
-        // Set advice pane as active
-        app.set_advice_pane();
-        
-        // Verify advice pane is showing
-        assert!(app.is_showing_advice_pane());
-        
-        // We can't directly access pane_registry, but we can test the behavior
-        
-        // Test that j key is forwarded to advice pane
-        let j_key = KeyEvent::from(KeyCode::Char('j'));
-        let handled = app.forward_key_to_panes(j_key);
-        assert!(handled, "j key should be handled by advice pane when it's visible");
-        
-        // Test that k key is forwarded to advice pane
-        let k_key = KeyEvent::from(KeyCode::Char('k'));
-        let handled = app.forward_key_to_panes(k_key);
-        assert!(handled, "k key should be handled by advice pane when it's visible");
-    }
 }
+

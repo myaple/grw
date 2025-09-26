@@ -31,7 +31,6 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 ### Pane Modes
 - `Ctrl+d` - Switch to inline diff view
 - `Ctrl+s` - Switch to side-by-side diff view
-- `Ctrl+l` - Switch to LLM advice pane
 
 ### File Tree
 - `Tab` / `g t` - Next file
@@ -48,13 +47,6 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 ### Monitor
 - `Alt+j` / `Alt+Down` - Scroll down
 - `Alt+k` / `Alt+Up` - Scroll up
-
-### LLM Advice
-- `j` / `k` - Scroll up/down
-- `/` - Enter input mode to ask a question
-- `Enter` - Submit the question to the LLM
-- `Esc` - Exit input mode
-- `Ctrl+r` - Refresh LLM advice
 
 ### Commit Picker
 - `j` / `k` / `↑` / `↓` - Navigate commits
@@ -96,11 +88,10 @@ grw
 - `--monitor-command <COMMAND>` - Command to run in monitor pane
 - `--monitor-interval <SECONDS>` - Interval in seconds for monitor command refresh
 - `--theme <THEME>` - Set initial theme (light or dark)
-- `--llm-provider <PROVIDER>` - LLM provider to use for advice (e.g., openai)
-- `--llm-model <MODEL>` - LLM model to use for advice
+- `--llm-provider <PROVIDER>` - LLM provider to use for commit summaries (e.g., openai)
+- `--llm-model <MODEL>` - LLM model to use for commit summaries
 - `--llm-api-key <KEY>` - API key for the LLM provider
 - `--llm-base-url <URL>` - Base URL for the LLM provider
-- `--llm-prompt <PROMPT>` - Prompt to use for LLM advice
 
 ### Examples
 
@@ -166,11 +157,9 @@ Configuration options:
 - `llm` (object): LLM provider configuration (optional)
   - `provider` (string): LLM provider (e.g., "openai")
   - `model` (string): LLM model name
-  - `advice_model` (string): Specific model for advice generation (optional)
   - `summary_model` (string): Specific model for commit summaries (optional)
   - `api_key` (string): API key for the LLM provider
   - `base_url` (string): Base URL for the LLM provider
-  - `prompt` (string): Prompt to use for LLM advice
 
 A full configuration with LLM settings and shared state tuning might look like this:
 
@@ -188,7 +177,6 @@ A full configuration with LLM settings and shared state tuning might look like t
   "llm": {
     "provider": "openai",
     "model": "gpt-4o-mini",
-    "advice_model": "gpt-4",
     "summary_model": "gpt-4o-mini",
     "api_key": "your-api-key-here",
     "base_url": "https://api.openai.com/v1"

@@ -26,9 +26,7 @@ Manages all git-related data using concurrent data structures:
 #### LlmSharedState
 Handles LLM operations and caching:
 - **Summary Cache**: Cached commit summaries indexed by SHA
-- **Advice Cache**: Cached LLM advice responses
 - **Active Tasks**: Tracking of ongoing LLM operations
-- **Current Advice**: Latest advice content for UI display
 - **Error State**: LLM operation errors and failures
 
 #### MonitorSharedState
@@ -66,8 +64,8 @@ Manages monitor command execution and results:
                        │  ┌─────────────────────────────┐ │
 ┌─────────────────┐    │  │     LlmSharedState          │ │
 │   Git Worker    │◄──►│  │  - summary_cache: HashMap   │ │
-│                 │    │  │  - advice_cache: HashMap    │ │
-│  - Status Check │    │  │  - active_tasks: HashMap    │ │
+│                 │    │  │  - active_tasks: HashMap    │ │
+│  - Status Check │    │  └─────────────────────────────┘ │
 │  - Diff Compute │    │  └─────────────────────────────┘ │
 │  - History Load │    │  ┌─────────────────────────────┐ │
 └─────────────────┘    │  │   MonitorSharedState        │ │
@@ -76,7 +74,6 @@ Manages monitor command execution and results:
 │   LLM Worker    │◄──►│  └─────────────────────────────┘ │
 │                 │    └─────────────────────────────────┘
 │  - Summary Gen  │
-│  - Advice Gen   │
 │  - Preloading   │
 └─────────────────┘
 ```
