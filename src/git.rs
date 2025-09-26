@@ -363,7 +363,7 @@ impl SummaryPreloader {
                     let truncated = full_diff.chars().take(8000).collect::<String>();
                     format!("{}\n\n[... diff truncated for brevity ...]", truncated)
                 } else {
-                    full_diff
+                    full_diff.clone()
                 };
 
                 prompt.push_str("Full diff:\n```diff\n");
@@ -373,21 +373,19 @@ impl SummaryPreloader {
 
             prompt.push_str("\nFocus on the functional impact and purpose of the changes. Keep it concise and technical.");
 
-            let history = vec![openai_api_rs::v1::chat_completion::ChatCompletionMessage {
-                role: openai_api_rs::v1::chat_completion::MessageRole::user,
-                content: openai_api_rs::v1::chat_completion::Content::Text(prompt),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-            }];
-
-            // Generate summary
-            match client.get_llm_summary(history).await {
-                Ok(summary) => {
-                    // Cache the summary in shared state
-                    let sanitized_summary = summary.chars().take(1000).collect::<String>();
-                    llm_state.cache_summary(commit_sha.clone(), sanitized_summary);
-                    debug!("Successfully pre-loaded summary for commit {}", commit_sha);
+            // Generate summary with the new API
+            match client.get_llm_summary(prompt, full_diff).await {
+                Ok(summary_result) => {
+                    if !summary_result.has_error {
+                        // Cache the summary in shared state
+                        let sanitized_summary = summary_result.content.chars().take(1000).collect::<String>();
+                        llm_state.cache_summary(commit_sha.clone(), sanitized_summary);
+                        debug!("Successfully pre-loaded summary for commit {}", commit_sha);
+                    } else {
+                        // Store error in shared state
+                        debug!("Failed to generate summary for commit {}: {}", commit_sha, summary_result.content);
+                        llm_state.set_error(format!("summary_{}", commit_sha), format!("Failed to generate summary: {}", summary_result.content));
+                    }
                 }
                 Err(e) => {
                     // Store error in shared state

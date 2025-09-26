@@ -110,14 +110,14 @@ async fn main() -> Result<()> {
     let preload_config = final_config.get_summary_preload_config();
     app.set_preload_config(preload_config);
 
-    let mut monitor_command = if let Some(cmd) = &final_config.monitor_command {
-        Some(AsyncMonitorCommand::new(
+    let (mut monitor_command, mut monitor_rx) = if let Some(cmd) = &final_config.monitor_command {
+        let (cmd, rx) = AsyncMonitorCommand::new(
             cmd.clone(),
             final_config.monitor_interval.unwrap_or(5),
-            shared_state_manager.monitor_state().clone(),
-        ))
+        );
+        (Some(cmd), Some(rx))
     } else {
-        None
+        (None, None)
     };
 
     // Enable monitor pane when a command is configured
@@ -126,11 +126,11 @@ async fn main() -> Result<()> {
         app.set_monitor_command_configured(true);
     }
 
-    let mut llm_command = if let Some(client) = &llm_client {
-        let command = AsyncLLMCommand::new(client.clone(), Arc::clone(&shared_state_manager.llm_state()));
-        Some(command)
+    let (mut llm_command, mut llm_rx) = if let Some(client) = llm_client {
+        let (cmd, rx) = AsyncLLMCommand::new(client, Arc::clone(&shared_state_manager.llm_state()));
+        (Some(cmd), Some(rx))
     } else {
-        None
+        (None, None)
     };
 
     let backend = CrosstermBackend::new(io::stdout());
@@ -168,42 +168,31 @@ async fn main() -> Result<()> {
         }
 
         // Update monitor command if it exists
-        if let Some(ref monitor) = monitor_command {
-            // Get output directly from shared state
-            let command_key = monitor.get_command_key();
-            if let Some(output) = shared_state_manager.monitor_state().get_output(command_key) {
-                // Check if there's an error for this command
-                if let Some(_error) = shared_state_manager.monitor_state().get_error(command_key) {
-                    log::error!("Monitor command failed");
-                    app.update_monitor_output(output);
-                } else {
-                    app.update_monitor_output(output);
-                }
-            }
-
-            // Update timing information from shared state
-            if let Some(timing) = shared_state_manager.monitor_state().get_timing(command_key) {
-                if timing.has_run {
-                    let current_time = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    let elapsed_since_last = current_time.saturating_sub(timing.last_run);
-                    let elapsed = Some(std::time::Duration::from_secs(elapsed_since_last));
-                    app.update_monitor_timing(elapsed, timing.has_run);
-                } else {
-                    app.update_monitor_timing(None, false);
-                }
-            } else {
-                // Fallback to monitor's own timing methods for backward compatibility
-                let elapsed = monitor.get_elapsed_since_last_run();
-                let has_run = monitor.has_run_yet();
-                app.update_monitor_timing(elapsed, has_run);
+        if let Some(ref mut rx) = monitor_rx {
+            // Poll for new monitor output
+            while let Ok(monitor_output) = rx.try_recv() {
+                app.update_monitor_output(monitor_output.output.clone());
+                app.update_monitor_timing(Some(monitor_output.timestamp.elapsed()), true);
             }
         }
 
-        // Poll for LLM advice responses from advice pane (for interactive conversations)
-        app.poll_llm_advice();
+        // Update timing information
+        if let Some(ref monitor) = monitor_command {
+            let elapsed = monitor.get_elapsed_since_last_run();
+            let has_run = monitor.has_run_yet();
+            app.update_monitor_timing(elapsed, has_run);
+        }
+
+        // Poll for LLM advice responses from the channel
+        if let Some(ref mut rx) = llm_rx {
+            while let Ok(advice_result) = rx.try_recv() {
+                if !advice_result.has_error {
+                    app.update_llm_advice(advice_result.content);
+                } else {
+                    app.update_llm_advice(advice_result.content);
+                }
+            }
+        }
 
         // Poll for LLM commit summary responses from shared state
         // This is now handled by the shared state cache check below
@@ -216,23 +205,26 @@ async fn main() -> Result<()> {
             }
         }
 
-        // Trigger initial refresh when git repo is first available
+        // Trigger initial LLM advice when git repo is first available
         if let Some(ref llm) = llm_command {
             if shared_state_manager.git_state().get_repo().is_some() {
-                static INITIAL_REFRESH_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-                if !INITIAL_REFRESH_DONE.load(std::sync::atomic::Ordering::Relaxed) {
-                    log::debug!("Triggering initial LLM advice refresh");
-                    llm.refresh();
-                    INITIAL_REFRESH_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+                static INITIAL_ADVICE_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if !INITIAL_ADVICE_DONE.load(std::sync::atomic::Ordering::Relaxed) {
+                    log::debug!("Triggering initial LLM advice generation");
+
+                    // Get current diff and request advice
+                    if let Some(diff) = shared_state_manager.monitor_state().get_output("git_diff") {
+                        let diff_content = diff;
+                        let task_id = futures::executor::block_on(llm.request_advice(diff_content));
+                        log::debug!("Started LLM advice task: {}", task_id);
+                    }
+
+                    INITIAL_ADVICE_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             }
         }
 
-        // Poll for LLM advice from shared state
-        if let Some(advice) = shared_state_manager.llm_state().get_current_advice("current") {
-            app.update_llm_advice(advice);
-        }
-
+        
         // Check for LLM errors in shared state
         if let Some(error) = shared_state_manager.llm_state().get_error("advice_generation") {
             log::error!("LLM shared state error: {error}");
@@ -248,14 +240,13 @@ async fn main() -> Result<()> {
             .unwrap_or_default()
             .as_secs();
         let last_cleanup = LAST_ERROR_CLEANUP.load(std::sync::atomic::Ordering::Relaxed);
-        
+
         if current_time.saturating_sub(last_cleanup) > 30 {
             // Clear any stale errors that might have accumulated
-            if shared_state_manager.git_state().has_errors() 
-                || shared_state_manager.llm_state().has_errors() 
-                || shared_state_manager.monitor_state().has_errors() {
+            if shared_state_manager.git_state().has_errors()
+                || shared_state_manager.llm_state().has_errors() {
                 debug!("Performing periodic error cleanup");
-                
+
                 // Only clear errors that are not currently being displayed
                 // Git errors are cleared immediately after display, so any remaining are stale
                 let git_errors = shared_state_manager.git_state().get_all_errors();
@@ -264,7 +255,7 @@ async fn main() -> Result<()> {
                         shared_state_manager.git_state().clear_error(&key);
                     }
                 }
-                
+
                 // Clear old LLM summary errors (keep advice_generation for current display)
                 let llm_errors = shared_state_manager.llm_state().get_all_errors();
                 for (key, _) in llm_errors {
@@ -273,7 +264,7 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            
+
             LAST_ERROR_CLEANUP.store(current_time, std::sync::atomic::Ordering::Relaxed);
         }
 
@@ -395,8 +386,12 @@ async fn main() -> Result<()> {
         }
 
         if app.is_advice_refresh_requested() {
-            if let Some(llm) = &mut llm_command {
-                llm.refresh();
+            if let Some(llm) = &llm_command {
+                // Get current diff and request new advice
+                if let Some(diff) = shared_state_manager.monitor_state().get_output("git_diff") {
+                    let task_id = futures::executor::block_on(llm.request_advice(diff));
+                    log::debug!("Started LLM advice refresh task: {}", task_id);
+                }
             }
             app.reset_advice_refresh_request();
         }
