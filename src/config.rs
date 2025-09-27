@@ -97,27 +97,7 @@ pub struct AdviceConfig {
     pub context_lines: Option<usize>,
 }
 
-impl AdviceConfig {
-    pub fn is_enabled(&self) -> bool {
-        self.enabled.unwrap_or(true)
-    }
-
-    pub fn get_max_improvements(&self) -> usize {
-        self.max_improvements.unwrap_or(3)
-    }
-
-    pub fn get_chat_history_limit(&self) -> usize {
-        self.chat_history_limit.unwrap_or(10)
-    }
-
-    pub fn get_timeout_seconds(&self) -> u64 {
-        self.timeout_seconds.unwrap_or(30)
-    }
-
-    pub fn get_context_lines(&self) -> usize {
-        self.context_lines.unwrap_or(50)
-    }
-}
+impl AdviceConfig {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

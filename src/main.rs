@@ -672,10 +672,10 @@ fn handle_key_event(
                 if let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Advice) {
                     log::warn!("Failed to hide advice panel: {}", e);
                 }
-                if !app.is_diff_panel_visible() {
-                    if let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Diff) {
-                        log::warn!("Failed to show diff pane: {}", e);
-                    }
+                if !app.is_diff_panel_visible()
+                    && let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Diff)
+                {
+                    log::warn!("Failed to show diff pane: {}", e);
                 }
                 true // Handled this key
             } else {
