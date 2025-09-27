@@ -592,6 +592,148 @@ impl AdvicePanel {
         // The new message will be sent on the next render when we have fresh diff data
     }
 
+    /// Format chat content to preserve markdown, code blocks, and spacing
+    fn format_chat_content(&self, content: &str) -> Vec<Line> {
+        use ratatui::text::Span;
+        use ratatui::style::{Color, Style};
+
+        let mut lines = Vec::new();
+        let mut in_code_block = false;
+        let mut current_paragraph = String::new();
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+
+            // Handle code block markers
+            if trimmed.starts_with("```") {
+                if in_code_block {
+                    // End of code block
+                    if !current_paragraph.is_empty() {
+                        // Add any remaining paragraph text before code block ended
+                        for para_line in textwrap::wrap(&current_paragraph, 76) {
+                            lines.push(Line::from(Span::styled(
+                                format!("  {}", para_line),
+                                Style::default().fg(Color::Gray)
+                            )));
+                        }
+                        current_paragraph.clear();
+                    }
+                    in_code_block = false;
+                    lines.push(Line::from(Span::styled(
+                        "  ```",
+                        Style::default().fg(Color::Yellow)
+                    )));
+                } else {
+                    // Start of code block - flush any current paragraph
+                    if !current_paragraph.is_empty() {
+                        for para_line in textwrap::wrap(&current_paragraph, 76) {
+                            lines.push(Line::from(Span::styled(
+                                format!("  {}", para_line),
+                                Style::default().fg(Color::Gray)
+                            )));
+                        }
+                        current_paragraph.clear();
+                    }
+                    in_code_block = true;
+                    lines.push(Line::from(Span::styled(
+                        "  ```",
+                        Style::default().fg(Color::Yellow)
+                    )));
+                }
+                continue;
+            }
+
+            if in_code_block {
+                // Inside code block - preserve exact formatting and use monospace-like color
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", line),
+                    Style::default().fg(Color::Cyan)
+                )));
+            } else if trimmed.is_empty() {
+                // Empty line - flush current paragraph and add empty line
+                if !current_paragraph.is_empty() {
+                    for para_line in textwrap::wrap(&current_paragraph, 76) {
+                        lines.push(Line::from(Span::styled(
+                            format!("  {}", para_line),
+                            Style::default().fg(Color::Gray)
+                        )));
+                    }
+                    current_paragraph.clear();
+                }
+                lines.push(Line::from(""));
+            } else if line.starts_with("    ") || line.starts_with("\t") {
+                // Preserve indentation for code-like lines that aren't in formal code blocks
+                if !current_paragraph.is_empty() {
+                    // Flush current paragraph first
+                    for para_line in textwrap::wrap(&current_paragraph, 76) {
+                        lines.push(Line::from(Span::styled(
+                            format!("  {}", para_line),
+                            Style::default().fg(Color::Gray)
+                        )));
+                    }
+                    current_paragraph.clear();
+                }
+                // Add indented line with code-like formatting
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", line),
+                    Style::default().fg(Color::Cyan)
+                )));
+            } else if line.starts_with("#") || line.starts_with("##") || line.starts_with("###") {
+                // Handle markdown headers
+                if !current_paragraph.is_empty() {
+                    for para_line in textwrap::wrap(&current_paragraph, 76) {
+                        lines.push(Line::from(Span::styled(
+                            format!("  {}", para_line),
+                            Style::default().fg(Color::Gray)
+                        )));
+                    }
+                    current_paragraph.clear();
+                }
+                // Add header with special formatting
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", line),
+                    Style::default().fg(Color::Yellow).add_modifier(ratatui::style::Modifier::BOLD)
+                )));
+            } else if line.starts_with("- ") || line.starts_with("* ") {
+                // Handle bullet points
+                if !current_paragraph.is_empty() {
+                    for para_line in textwrap::wrap(&current_paragraph, 76) {
+                        lines.push(Line::from(Span::styled(
+                            format!("  {}", para_line),
+                            Style::default().fg(Color::Gray)
+                        )));
+                    }
+                    current_paragraph.clear();
+                }
+                // Add bullet point
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", line),
+                    Style::default().fg(Color::Gray)
+                )));
+            } else {
+                // Regular text - accumulate in paragraph
+                if current_paragraph.is_empty() {
+                    current_paragraph.push_str(line);
+                } else {
+                    current_paragraph.push(' ');
+                    current_paragraph.push_str(line);
+                }
+            }
+        }
+
+        // Flush any remaining paragraph
+        if !current_paragraph.is_empty() {
+            for para_line in textwrap::wrap(&current_paragraph, 76) {
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", para_line),
+                    Style::default().fg(Color::Gray)
+                )));
+            }
+        }
+
+        lines
+    }
+
     fn trigger_initial_advice(&mut self) {
         debug!("🎯 ADVICE_PANEL: Triggering initial chat message");
 
@@ -3001,11 +3143,10 @@ impl Pane for AdvicePanel {
 
                     lines.push(Line::from(format!("[{}] {}:", time_display, prefix)).fg(color));
 
-                    // Add message content with line wrapping
-                    for content_line in msg.content.lines() {
-                        if !content_line.trim().is_empty() {
-                            lines.push(Line::from(format!("  {}", content_line)));
-                        }
+                    // Add message content with better formatting preservation
+                    let formatted_lines = self.format_chat_content(&msg.content);
+                    for formatted_line in formatted_lines {
+                        lines.push(formatted_line);
                     }
                     lines.push(Line::from("")); // Empty line between messages
                 }
@@ -3038,7 +3179,7 @@ impl Pane for AdvicePanel {
 
         let paragraph = Paragraph::new(content)
             .block(block)
-            .wrap(Wrap { trim: true })
+            .wrap(Wrap { trim: false })
             .scroll((self.scroll_offset as u16, 0));
 
         f.render_widget(paragraph, content_area);
