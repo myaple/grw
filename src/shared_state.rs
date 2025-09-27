@@ -178,6 +178,9 @@ pub struct LlmSharedState {
 
     /// Current advice content storage for async task results
     current_advice_results: HashMap<String, Vec<crate::pane::AdviceImprovement>>, // diff_hash -> advice results
+
+    /// Pending chat responses for async task results
+    pending_chat_responses: HashMap<String, crate::pane::ChatMessageData>, // message_id -> pending AI response
 }
 
 impl Default for LlmSharedState {
@@ -197,6 +200,7 @@ impl LlmSharedState {
             chat_sessions: HashMap::new(),
             advice_error_state: HashMap::new(),
             current_advice_results: HashMap::new(),
+            pending_chat_responses: HashMap::new(),
         }
     }
 
@@ -404,6 +408,7 @@ impl LlmSharedState {
         self.chat_sessions.clear();
         self.advice_error_state.clear();
         self.current_advice_results.clear();
+        self.pending_chat_responses.clear();
     }
 
     // === Advice Results Storage for Async Tasks ===
@@ -431,6 +436,33 @@ impl LlmSharedState {
     /// Clear all advice results
     pub fn clear_all_advice_results(&self) {
         self.current_advice_results.clear();
+    }
+
+    // === Chat Response Storage for Async Tasks ===
+
+    /// Store a pending chat response for a specific message ID
+    pub fn store_pending_chat_response(&self, message_id: String, response: crate::pane::ChatMessageData) {
+        let _ = self.pending_chat_responses.insert(message_id, response);
+    }
+
+    /// Retrieve a pending chat response for a specific message ID
+    pub fn get_pending_chat_response(&self, message_id: &str) -> Option<crate::pane::ChatMessageData> {
+        self.pending_chat_responses.read(message_id, |_, v| v.clone())
+    }
+
+    /// Check if there's a pending chat response for a specific message ID
+    pub fn has_pending_chat_response(&self, message_id: &str) -> bool {
+        self.pending_chat_responses.contains(message_id)
+    }
+
+    /// Remove a pending chat response for a specific message ID
+    pub fn remove_pending_chat_response(&self, message_id: &str) -> bool {
+        self.pending_chat_responses.remove(message_id).is_some()
+    }
+
+    /// Clear all pending chat responses
+    pub fn clear_all_pending_chat_responses(&self) {
+        self.pending_chat_responses.clear();
     }
 }
 

@@ -145,6 +145,8 @@ pub struct AdvicePanel {
     pub current_diff_hash: Option<String>,
     pub loading_state: LoadingState,
     pub pending_advice_task: Option<tokio::task::JoinHandle<()>>,
+    pub pending_chat_task: Option<tokio::task::JoinHandle<()>>,
+    pub pending_chat_message_id: Option<String>,
 }
 
 impl AdvicePanel {
@@ -161,6 +163,8 @@ impl AdvicePanel {
             current_diff_hash: None,
             loading_state: LoadingState::Idle,
             pending_advice_task: None,
+            pending_chat_task: None,
+            pending_chat_message_id: None,
         })
     }
 
@@ -226,15 +230,16 @@ impl AdvicePanel {
     pub fn send_chat_message(&mut self, message: &str) -> Result<(), String> {
         debug!("🎯 ADVICE_PANEL: Sending chat message: {}", message);
 
-        // Add user message to chat history
+        // Add user message to chat history immediately (preserves content)
+        let user_message_id = uuid::Uuid::new_v4().to_string();
         let user_message = ChatMessageData {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: user_message_id.clone(),
             role: MessageRole::User,
             content: message.to_string(),
             timestamp: std::time::SystemTime::now(),
         };
 
-        // Update chat history
+        // Update chat history (never clear, only append)
         match &mut self.content {
             AdviceContent::Chat(messages) => {
                 messages.push(user_message);
@@ -245,121 +250,70 @@ impl AdvicePanel {
             }
         }
 
-        // Set loading state
+        // Set loading state to show "thinking" indicator
         self.update_advice_status(LoadingState::SendingChat);
 
-        // Get original diff for context
+        // Get context for the LLM
         let original_diff = self.get_current_diff_context().unwrap_or_default();
-        let _message_clone = message.to_string();
-        let _diff_clone = original_diff.clone();
+        let conversation_history = self.get_chat_history();
 
-        // Try to use LLM client
+        // Store the message ID for tracking the response
+        self.pending_chat_message_id = Some(user_message_id.clone());
+
+        // Clone necessary data for the async task
+        let shared_state_clone = self.shared_state.clone();
         let llm_client_clone = self.llm_client.clone();
-        if let Some(llm_client) = llm_client_clone {
-            if let Ok(client) = llm_client.try_lock() {
-                let conversation_history = self.get_chat_history();
+        let message_id_clone = user_message_id.clone();
+        let message_content = message.to_string();
+        let diff_content = original_diff.clone();
 
-                // Generate AI response using LLM client directly
-                match client.blocking_send_chat_followup(message.to_string(), conversation_history, original_diff.clone()) {
-                    Ok(ai_message) => {
-                        debug!("🎯 ADVICE_PANEL: Successfully generated AI response via LLM");
+        // Spawn async task for chat response generation
+        let task = tokio::spawn(async move {
+            debug!("🎯 ADVICE_PANEL: Async chat task started for message: {}", message_content);
 
-                        // Add AI response to chat
-                        if let AdviceContent::Chat(messages) = &mut self.content {
-                            messages.push(ai_message);
+            let result = async {
+                // Try to use LLM client if available
+                if let Some(llm_client) = llm_client_clone {
+                    let client = llm_client.lock().await;
+                    debug!("🎯 ADVICE_PANEL: About to call LLM send_chat_followup");
+
+                    match client.send_chat_followup(message_content, conversation_history, diff_content).await {
+                        Ok(ai_message) => {
+                            debug!("🎯 ADVICE_PANEL: Successfully generated AI chat response");
+                            Ok(ai_message)
                         }
-
-                        self.update_advice_status(LoadingState::Idle);
-                        return Ok(());
+                        Err(e) => {
+                            debug!("🎯 ADVICE_PANEL: LLM send_chat_followup failed: {}", e);
+                            Err(format!("LLM chat request failed: {}", e))
+                        }
                     }
-                    Err(error) => {
-                        debug!("🎯 ADVICE_PANEL: LLM chat failed, using fallback: {}", error);
-                        // Fall back to sync processing
-                    }
+                } else {
+                    Err("LLM client not available".to_string())
                 }
-                return Ok(());
-            }
-        }
+            }.await;
 
-        // Fallback to sync processing
-        self.process_chat_sync(message, &original_diff)
-    }
-
-    /// Process chat message synchronously (fallback when async is not available)
-    fn process_chat_sync(&mut self, message: &str, original_diff: &str) -> Result<(), String> {
-        debug!("🎯 ADVICE_PANEL: Processing chat message synchronously");
-
-        // Try to use LLM client
-        let llm_client_clone = self.llm_client.clone();
-        if let Some(llm_client) = llm_client_clone {
-            let client = llm_client.blocking_lock();
-            let conversation_history = self.get_chat_history();
-
-            // Generate AI response using LLM client
-            match client.blocking_send_chat_followup(message.to_string(), conversation_history, original_diff.to_string()) {
-                Ok(ai_message) => {
-                    debug!("🎯 ADVICE_PANEL: Successfully generated AI response via LLM");
-
-                    // Add AI response to chat
-                    if let AdviceContent::Chat(messages) = &mut self.content {
-                        messages.push(ai_message);
+            // Store results in shared state
+            if let Some(shared_state) = shared_state_clone {
+                match result {
+                    Ok(ai_message) => {
+                        shared_state.store_pending_chat_response(message_id_clone.clone(), ai_message);
+                        debug!("🎯 ADVICE_PANEL: Stored chat response in shared state");
                     }
-
-                    self.update_advice_status(LoadingState::Idle);
-                    return Ok(());
-                }
-                Err(error) => {
-                    debug!("🎯 ADVICE_PANEL: LLM chat failed, using fallback: {}", error);
-                    // Fall back to mock response
+                    Err(e) => {
+                        shared_state.set_advice_error(format!("chat_{}", message_id_clone), e);
+                        debug!("🎯 ADVICE_PANEL: Stored chat error in shared state");
+                    }
                 }
             }
-        }
+        });
 
-        // Fallback to mock response when LLM is not available
-        let ai_response = self.generate_mock_fallback_response(message, original_diff);
+        self.pending_chat_task = Some(task);
+        debug!("🎯 ADVICE_PANEL: Spawned async chat generation task with message ID: {}", user_message_id);
 
-        let ai_message = ChatMessageData {
-            id: uuid::Uuid::new_v4().to_string(),
-            role: MessageRole::Assistant,
-            content: ai_response,
-            timestamp: std::time::SystemTime::now(),
-        };
-
-        // Add AI response to chat
-        if let AdviceContent::Chat(messages) = &mut self.content {
-            messages.push(ai_message);
-        }
-
-        debug!("🎯 ADVICE_PANEL: Fallback AI response generated and added to chat");
-        self.update_advice_status(LoadingState::Idle);
         Ok(())
     }
 
-    /// Generate a fallback AI response when LLM is not available
-    fn generate_mock_fallback_response(&self, message: &str, _diff: &str) -> String {
-        debug!("🎯 ADVICE_PANEL: Generating fallback AI response for: {}", message);
-
-        // Simple fallback responses based on message content
-        if message.to_lowercase().contains("hello") || message.to_lowercase().contains("hi") {
-            return "Hello! I'm here to help you with your code review. What would you like to know about the current changes?".to_string();
-        }
-
-        if message.to_lowercase().contains("improv") {
-            return "Based on the code changes, I recommend:\n1. Adding error handling for edge cases\n2. Improving variable naming for clarity\n3. Adding documentation for complex logic\n4. Consider refactoring large functions into smaller ones".to_string();
-        }
-
-        if message.to_lowercase().contains("bug") || message.to_lowercase().contains("issue") {
-            return "I notice a potential issue in the changes. Make sure to:\n- Test all code paths\n- Handle error cases properly\n- Validate input data\n- Consider concurrency implications".to_string();
-        }
-
-        if message.to_lowercase().contains("perform") {
-            return "For better performance:\n- Consider using more efficient algorithms\n- Optimize database queries\n- Use caching where appropriate\n- Minimize memory allocations".to_string();
-        }
-
-        // Default response
-        format!("I've analyzed your question about '{}'. Based on the code changes, I'd suggest reviewing the implementation carefully and considering potential edge cases. Would you like me to elaborate on any specific aspect?", message)
-    }
-
+    
     pub fn clear_chat_history(&mut self) -> Result<(), String> {
         if let AdviceContent::Chat(messages) = &mut self.content {
             messages.clear();
@@ -461,7 +415,7 @@ index abc123..def456 100644
 
     /// Check and update pending async tasks
     pub fn check_pending_tasks(&mut self) {
-        // Check if async task has completed
+        // Check if async advice task has completed
         if let Some(task) = self.pending_advice_task.take() {
             if task.is_finished() {
                 debug!("🎯 ADVICE_PANEL: Pending advice task completed");
@@ -470,6 +424,18 @@ index abc123..def456 100644
             } else {
                 // Task is still running, put it back
                 self.pending_advice_task = Some(task);
+            }
+        }
+
+        // Check if async chat task has completed
+        if let Some(task) = self.pending_chat_task.take() {
+            if task.is_finished() {
+                debug!("🎯 ADVICE_PANEL: Pending chat task completed");
+                // Task is finished, check shared state for chat response
+                self.update_chat_from_shared_state();
+            } else {
+                // Task is still running, put it back
+                self.pending_chat_task = Some(task);
             }
         }
     }
@@ -496,6 +462,59 @@ index abc123..def456 100644
                 ];
                 self.content = AdviceContent::Improvements(improvements);
                 self.update_advice_status(LoadingState::Idle);
+            }
+        }
+    }
+
+    /// Update chat content from shared state when async chat tasks complete
+    fn update_chat_from_shared_state(&mut self) {
+        // Take ownership of the pending message ID to avoid borrow conflicts
+        if let Some(message_id) = self.pending_chat_message_id.take() {
+            // Clone shared_state to avoid borrow conflicts
+            let shared_state_clone = self.shared_state.clone();
+
+            if let Some(shared_state) = &shared_state_clone {
+                // Check if we have a chat response for this message
+                if let Some(response) = shared_state.get_pending_chat_response(&message_id) {
+                    debug!("🎯 ADVICE_PANEL: Updating chat with AI response from shared state");
+
+                    // Add the AI response to the chat
+                    if let AdviceContent::Chat(messages) = &mut self.content {
+                        messages.push(response);
+                    }
+
+                    // Reset loading state
+                    self.update_advice_status(LoadingState::Idle);
+
+                    // Clean up the shared state
+                    shared_state.remove_pending_chat_response(&message_id);
+                } else if let Some(error) = shared_state.get_advice_error(&format!("chat_{}", message_id)) {
+                    debug!("🎯 ADVICE_PANEL: Updating chat with error from shared state: {}", error);
+
+                    // Add error message to chat
+                    let error_message = ChatMessageData {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        role: MessageRole::Assistant,
+                        content: format!("Sorry, I encountered an error: {}", error),
+                        timestamp: std::time::SystemTime::now(),
+                    };
+
+                    if let AdviceContent::Chat(messages) = &mut self.content {
+                        messages.push(error_message);
+                    }
+
+                    // Reset loading state
+                    self.update_advice_status(LoadingState::Idle);
+
+                    // Clean up the shared state
+                    shared_state.clear_advice_error(&format!("chat_{}", message_id));
+                } else {
+                    // If no response or error found, put the message ID back
+                    self.pending_chat_message_id = Some(message_id);
+                }
+            } else {
+                // If no shared state, put the message ID back
+                self.pending_chat_message_id = Some(message_id);
             }
         }
     }
@@ -2778,6 +2797,14 @@ impl Pane for AdvicePanel {
                     }
                     lines.push(Line::from("")); // Empty line between messages
                 }
+
+                // Add "thinking" indicator if waiting for AI response
+                if self.loading_state == LoadingState::SendingChat && self.pending_chat_message_id.is_some() {
+                    lines.push(Line::from("[now] AI:").fg(Color::Green));
+                    lines.push(Line::from("  🤔 Thinking...".to_string()).fg(Color::Yellow));
+                    lines.push(Line::from(""));
+                }
+
                 lines
             }
             AdviceContent::Help(help_text) => {
