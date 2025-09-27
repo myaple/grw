@@ -332,6 +332,9 @@ async fn main() -> Result<()> {
         // Handle cache callbacks from CommitSummaryPane
         app.handle_commit_summary_cache_callbacks(shared_state_manager.llm_state());
 
+        // Check for async advice panel task completion
+        app.check_advice_panel_tasks();
+
         // Poll for LLM summary updates from shared state
         // Summary updates are now handled through shared state cache
 

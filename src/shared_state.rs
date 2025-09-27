@@ -175,6 +175,9 @@ pub struct LlmSharedState {
     active_advice_tasks: HashMap<String, u64>, // diff_hash -> timestamp
     chat_sessions: HashMap<String, String>, // session_id -> chat history JSON
     advice_error_state: HashMap<String, String>, // operation_key -> error message
+
+    /// Current advice content storage for async task results
+    current_advice_results: HashMap<String, Vec<crate::pane::AdviceImprovement>>, // diff_hash -> advice results
 }
 
 impl Default for LlmSharedState {
@@ -193,6 +196,7 @@ impl LlmSharedState {
             active_advice_tasks: HashMap::new(),
             chat_sessions: HashMap::new(),
             advice_error_state: HashMap::new(),
+            current_advice_results: HashMap::new(),
         }
     }
 
@@ -399,6 +403,34 @@ impl LlmSharedState {
         self.active_advice_tasks.clear();
         self.chat_sessions.clear();
         self.advice_error_state.clear();
+        self.current_advice_results.clear();
+    }
+
+    // === Advice Results Storage for Async Tasks ===
+
+    /// Store advice results for a specific diff hash
+    pub fn store_advice_results(&self, diff_hash: String, results: Vec<crate::pane::AdviceImprovement>) {
+        let _ = self.current_advice_results.insert(diff_hash, results);
+    }
+
+    /// Retrieve advice results for a specific diff hash
+    pub fn get_advice_results(&self, diff_hash: &str) -> Option<Vec<crate::pane::AdviceImprovement>> {
+        self.current_advice_results.read(diff_hash, |_, v| v.clone())
+    }
+
+    /// Check if advice results are available for a specific diff hash
+    pub fn has_advice_results(&self, diff_hash: &str) -> bool {
+        self.current_advice_results.contains(diff_hash)
+    }
+
+    /// Remove advice results for a specific diff hash
+    pub fn remove_advice_results(&self, diff_hash: &str) -> bool {
+        self.current_advice_results.remove(diff_hash).is_some()
+    }
+
+    /// Clear all advice results
+    pub fn clear_all_advice_results(&self) {
+        self.current_advice_results.clear();
     }
 }
 

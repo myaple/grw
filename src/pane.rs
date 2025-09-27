@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use log::debug;
+use md5;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -143,6 +144,7 @@ pub struct AdvicePanel {
     pub llm_client: Option<std::sync::Arc<tokio::sync::Mutex<LlmClient>>>,
     pub current_diff_hash: Option<String>,
     pub loading_state: LoadingState,
+    pub pending_advice_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl AdvicePanel {
@@ -158,6 +160,7 @@ impl AdvicePanel {
             llm_client: None,
             current_diff_hash: None,
             loading_state: LoadingState::Idle,
+            pending_advice_task: None,
         })
     }
 
@@ -168,6 +171,7 @@ impl AdvicePanel {
 
     /// Set the LLM client for the advice panel
     pub fn set_llm_client(&mut self, llm_client: std::sync::Arc<tokio::sync::Mutex<LlmClient>>) {
+        debug!("🎯 ADVICE_PANEL: LLM client has been set");
         self.llm_client = Some(llm_client);
     }
 
@@ -368,9 +372,68 @@ impl AdvicePanel {
         self.update_advice_status(LoadingState::GeneratingAdvice);
         self.content = AdviceContent::Loading;
 
-        // For now, generate advice synchronously (in real implementation this would be async)
-        // This is a placeholder until we implement proper async handling
-        self.generate_advice_sync(diff)?;
+        // Use the new async architecture via trigger_initial_advice
+        // Set the current diff hash manually since we're not going through the normal trigger flow
+        let diff_hash = format!("{:x}", md5::compute(diff.as_bytes()));
+        self.current_diff_hash = Some(diff_hash.clone());
+
+        // Check if we already have results for this diff
+        if let Some(shared_state) = &self.shared_state {
+            if let Some(cached_results) = shared_state.get_advice_results(&diff_hash) {
+                debug!("🎯 ADVICE_PANEL: Found cached advice results for diff hash: {}", diff_hash);
+                self.content = AdviceContent::Improvements(cached_results);
+                self.update_advice_status(LoadingState::Idle);
+                return Ok(());
+            }
+        }
+
+        // Spawn async task for LLM advice generation
+        let shared_state_clone = self.shared_state.clone();
+        let llm_client_clone = self.llm_client.clone();
+        let diff_hash_clone = diff_hash.clone();
+        let diff_content = diff.to_string();
+
+        let task = tokio::spawn(async move {
+            debug!("🎯 ADVICE_PANEL: Async advice task started with {} chars", diff_content.len());
+
+            let result = async {
+                // Try to use LLM client if available
+                if let Some(llm_client) = llm_client_clone {
+                    let client = llm_client.lock().await;
+                    debug!("🎯 ADVICE_PANEL: About to call LLM generate_advice");
+
+                    match client.generate_advice(diff_content, 3).await {
+                        Ok(improvements) => {
+                            debug!("🎯 ADVICE_PANEL: Successfully generated {} improvements", improvements.len());
+                            Ok(improvements)
+                        }
+                        Err(e) => {
+                            debug!("🎯 ADVICE_PANEL: LLM generate_advice failed: {}", e);
+                            Err(format!("LLM request failed: {}", e))
+                        }
+                    }
+                } else {
+                    Err("LLM client not available".to_string())
+                }
+            }.await;
+
+            // Store results in shared state
+            if let Some(shared_state) = shared_state_clone {
+                match result {
+                    Ok(improvements) => {
+                        shared_state.store_advice_results(diff_hash_clone.clone(), improvements);
+                        debug!("🎯 ADVICE_PANEL: Stored advice results in shared state");
+                    }
+                    Err(e) => {
+                        shared_state.set_advice_error(format!("advice_{}", diff_hash_clone), e);
+                        debug!("🎯 ADVICE_PANEL: Stored error in shared state");
+                    }
+                }
+            }
+        });
+
+        self.pending_advice_task = Some(task);
+        debug!("🎯 ADVICE_PANEL: Started async advice generation via start_async_advice_generation");
 
         Ok(())
     }
@@ -396,7 +459,48 @@ index abc123..def456 100644
         Some(sample_diff.to_string())
     }
 
-    /// Trigger initial advice generation when panel opens
+    /// Check and update pending async tasks
+    pub fn check_pending_tasks(&mut self) {
+        // Check if async task has completed
+        if let Some(task) = self.pending_advice_task.take() {
+            if task.is_finished() {
+                debug!("🎯 ADVICE_PANEL: Pending advice task completed");
+                // Task is finished, check shared state for results
+                self.update_content_from_shared_state();
+            } else {
+                // Task is still running, put it back
+                self.pending_advice_task = Some(task);
+            }
+        }
+    }
+
+    /// Update panel content from shared state when async tasks complete
+    fn update_content_from_shared_state(&mut self) {
+        if let (Some(shared_state), Some(diff_hash)) = (&self.shared_state, &self.current_diff_hash) {
+            // Check if we have results for this diff
+            if let Some(results) = shared_state.get_advice_results(diff_hash) {
+                debug!("🎯 ADVICE_PANEL: Updating panel with {} improvements from shared state", results.len());
+                self.content = AdviceContent::Improvements(results);
+                self.update_advice_status(LoadingState::Idle);
+            } else if let Some(error) = shared_state.get_advice_error(&format!("advice_{}", diff_hash)) {
+                debug!("🎯 ADVICE_PANEL: Updating panel with error from shared state: {}", error);
+                let improvements = vec![
+                    AdviceImprovement {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        title: "Advice Generation Failed".to_string(),
+                        description: format!("Failed to generate advice: {}", error),
+                        priority: ImprovementPriority::High,
+                        category: "Error".to_string(),
+                        code_examples: Vec::new(),
+                    },
+                ];
+                self.content = AdviceContent::Improvements(improvements);
+                self.update_advice_status(LoadingState::Idle);
+            }
+        }
+    }
+
+    /// Trigger initial advice generation when panel opens (spawns async task)
     fn trigger_initial_advice(&mut self) {
         debug!("🎯 ADVICE_PANEL: Triggering initial advice generation");
 
@@ -432,42 +536,99 @@ index abc123..def456 100644
             return;
         }
 
-        // Try to use LLM client, fall back to sync generation if not available
-        let llm_client_clone = self.llm_client.clone();
-        if let Some(llm_client) = llm_client_clone {
-            if let Ok(client) = llm_client.try_lock() {
-                // Generate advice using LLM client directly
-                match client.blocking_generate_advice(diff_content.clone(), 3) {
-                    Ok(improvements) => {
-                        debug!("🎯 ADVICE_PANEL: Successfully generated {} improvements via LLM", improvements.len());
+        // Generate diff hash for this request
+        let diff_hash = format!("{:x}", md5::compute(diff_content.as_bytes()));
+        let diff_len = diff_content.len();
+        self.current_diff_hash = Some(diff_hash.clone());
+        debug!("🎯 ADVICE_PANEL: Generated diff hash: {}", diff_hash);
 
-                        // Cache the improvements
-                        if let Some(ref diff_hash) = self.current_diff_hash {
-                            if let Ok(cached_json) = serde_json::to_string(&improvements) {
-                                self.cache_advice(diff_hash, &cached_json);
-                            }
-                        }
-
-                        // Update content
-                        self.content = AdviceContent::Improvements(improvements);
-                        self.update_advice_status(LoadingState::Idle);
-                        return;
-                    }
-                    Err(error) => {
-                        debug!("🎯 ADVICE_PANEL: LLM generation failed, using fallback: {}", error);
-                        // Fall back to sync generation
-                    }
-                }
+        // Check if we already have results for this diff
+        if let Some(shared_state) = &self.shared_state {
+            if let Some(cached_results) = shared_state.get_advice_results(&diff_hash) {
+                debug!("🎯 ADVICE_PANEL: Found cached advice results for diff hash: {}", diff_hash);
+                self.content = AdviceContent::Improvements(cached_results);
+                self.update_advice_status(LoadingState::Idle);
                 return;
             }
         }
 
-        // Fallback to sync generation if no shared state
-        if let Err(e) = self.generate_advice_sync(&diff_content) {
-            debug!("🎯 ADVICE_PANEL: Sync generation failed: {}", e);
-            self.content = AdviceContent::Improvements(Vec::new());
-            self.update_advice_status(LoadingState::Idle);
+        // Track this advice generation task in shared state
+        if let Some(shared_state) = &self.shared_state {
+            shared_state.start_advice_task(diff_hash.clone());
         }
+
+        // Clone necessary data for the async task
+        let shared_state_clone = self.shared_state.clone();
+        let llm_client_clone = self.llm_client.clone();
+        let diff_hash_clone = diff_hash.clone();
+
+        // Spawn async task for LLM advice generation
+        let task = tokio::spawn(async move {
+            debug!("🎯 ADVICE_PANEL: Async advice task started with {} chars", diff_content.len());
+
+            let result = async {
+                // Try to use LLM client if available
+                if let Some(llm_client) = llm_client_clone {
+                    let client = llm_client.lock().await;
+                    debug!("🎯 ADVICE_PANEL: About to call LLM generate_advice");
+
+                    match client.generate_advice(diff_content, 3).await {
+                        Ok(improvements) => {
+                            debug!("🎯 ADVICE_PANEL: Successfully generated {} improvements", improvements.len());
+                            Ok(improvements)
+                        }
+                        Err(e) => {
+                            debug!("🎯 ADVICE_PANEL: LLM generate_advice failed: {}", e);
+                            Err(format!("LLM request failed: {}", e))
+                        }
+                    }
+                } else {
+                    Err("LLM client not available".to_string())
+                }
+            }.await;
+
+            // Store results in shared state
+            if let Some(shared_state) = shared_state_clone {
+                match result {
+                    Ok(improvements) => {
+                        shared_state.store_advice_results(diff_hash_clone.clone(), improvements);
+                        debug!("🎯 ADVICE_PANEL: Stored advice results in shared state");
+                    }
+                    Err(e) => {
+                        shared_state.set_advice_error(format!("advice_{}", diff_hash_clone), e);
+                        debug!("🎯 ADVICE_PANEL: Stored error in shared state");
+                    }
+                }
+
+                // Mark task as completed
+                shared_state.complete_advice_task(&diff_hash_clone);
+            }
+        });
+
+        self.pending_advice_task = Some(task);
+        debug!("🎯 ADVICE_PANEL: Spawned async advice generation task with shared state communication");
+
+        // For now, use the fallback improvements while the async task runs
+        let improvements = vec![
+            AdviceImprovement {
+                id: uuid::Uuid::new_v4().to_string(),
+                title: "Async Advice Generation Started".to_string(),
+                description: "An asynchronous task has been spawned to generate AI-powered advice. The results will appear here momentarily. This demonstrates the new async architecture working properly.".to_string(),
+                priority: ImprovementPriority::Medium,
+                category: "System".to_string(),
+                code_examples: Vec::new(),
+            },
+            AdviceImprovement {
+                id: uuid::Uuid::new_v4().to_string(),
+                title: "Diff Analysis in Progress".to_string(),
+                description: format!("Currently analyzing diff with {} characters. The async architecture allows the UI to remain responsive while LLM processing happens in the background.", diff_len),
+                priority: ImprovementPriority::Low,
+                category: "Info".to_string(),
+                code_examples: Vec::new(),
+            },
+        ];
+        self.content = AdviceContent::Improvements(improvements);
+        self.update_advice_status(LoadingState::Idle);
     }
 
     
@@ -573,16 +734,23 @@ index abc123..def456 100644
         }
     }
 
-    /// Generate advice synchronously (fallback when async is not available)
-    fn generate_advice_sync(&mut self, diff: &str) -> Result<(), String> {
-        debug!("🎯 ADVICE_PANEL: Generating advice synchronously");
+    /// Generate advice asynchronously
+    async fn generate_advice_async(&mut self, diff: &str) -> Result<(), String> {
+        debug!("🎯 ADVICE_PANEL: Generating advice asynchronously");
+
+        // Set loading state
+        self.content = AdviceContent::Loading;
+        self.update_advice_status(LoadingState::GeneratingAdvice);
 
         // Try to use LLM client
         let llm_client_clone = self.llm_client.clone();
+        debug!("🎯 ADVICE_PANEL: LLM client available: {}", llm_client_clone.is_some());
         if let Some(llm_client) = llm_client_clone {
-            let client = llm_client.blocking_lock();
+            let client = llm_client.lock().await;
+            debug!("🎯 ADVICE_PANEL: About to call LLM generate_advice with diff length: {}", diff.len());
+
             // Generate advice using LLM client
-            match client.blocking_generate_advice(diff.to_string(), 3) {
+            match client.generate_advice(diff.to_string(), 3).await {
                 Ok(improvements) => {
                     debug!("🎯 ADVICE_PANEL: Successfully generated {} improvements via LLM", improvements.len());
 
@@ -604,6 +772,8 @@ index abc123..def456 100644
                 }
             }
         }
+
+        debug!("🎯 ADVICE_PANEL: Using fallback improvements (LLM client not available)");
 
         // Fallback improvements when LLM is not available
         let improvements = vec![
@@ -713,11 +883,12 @@ impl PaneRegistry {
         commit_summary_pane.set_shared_state(llm_shared_state.clone());
         self.register_pane(PaneId::CommitSummary, Box::new(commit_summary_pane));
 
-        // Create advice panel with configuration and shared state
+        // Create advice panel with configuration, LLM client, and shared state
         let advice_config = crate::config::AdviceConfig::default();
         let mut advice_panel = AdvicePanel::new(crate::config::Config::default(), advice_config)
             .expect("Failed to create AdvicePanel");
-        advice_panel.set_shared_state(llm_shared_state);
+        advice_panel.set_shared_state(llm_shared_state.clone());
+        advice_panel.set_llm_client(std::sync::Arc::new(tokio::sync::Mutex::new(llm_client.clone())));
         self.register_pane(PaneId::Advice, Box::new(advice_panel));
     }
 
