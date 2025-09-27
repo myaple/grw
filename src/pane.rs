@@ -131,7 +131,7 @@ pub struct AdvicePanel {
 impl AdvicePanel {
     pub fn new(_config: crate::config::Config, advice_config: crate::config::AdviceConfig) -> Result<Self, String> {
         Ok(Self {
-            visible: true,
+            visible: false,
             mode: AdviceMode::Viewing,
             content: AdviceContent::Loading,
             chat_input: String::new(),
@@ -2247,7 +2247,7 @@ mod tests {
         assert!(panel.is_ok(), "Failed to create AdvicePanel");
 
         let panel = panel.unwrap();
-        assert!(panel.visible());
+        assert!(!panel.visible()); // Should be hidden by default
         assert_eq!(panel.get_mode(), AdviceMode::Viewing);
         assert!(panel.get_improvements().is_empty());
         assert!(panel.get_chat_history().is_empty());
@@ -2259,22 +2259,22 @@ mod tests {
         let advice_config = AdviceConfig::default();
         let mut panel = AdvicePanel::new(config, advice_config).unwrap();
 
-        // Initially visible
-        assert!(panel.visible());
-
-        // Toggle to hide
-        panel.toggle_visibility();
+        // Initially hidden (not default pane)
         assert!(!panel.visible());
 
         // Toggle to show
         panel.toggle_visibility();
         assert!(panel.visible());
 
-        // Set explicitly
-        panel.set_visibility(false);
+        // Toggle to hide
+        panel.toggle_visibility();
         assert!(!panel.visible());
+
+        // Set explicitly
         panel.set_visibility(true);
         assert!(panel.visible());
+        panel.set_visibility(false);
+        assert!(!panel.visible());
     }
 
     #[test]

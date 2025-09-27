@@ -13,12 +13,12 @@ mod tests {
         // This should fail until AdvicePanel is implemented
         let panel = AdvicePanel::new(config, advice_config).unwrap();
 
-        // Panel should be visible after creation
-        assert!(panel.is_visible(), "AdvicePanel should be visible after creation");
+        // Panel should be hidden after creation (not default pane)
+        assert!(!panel.is_visible(), "AdvicePanel should be hidden after creation");
 
         // Test that we can get visibility state
         let visibility = panel.get_visibility();
-        assert!(visibility, "AdvicePanel should report correct visibility state");
+        assert!(!visibility, "AdvicePanel should report correct visibility state (hidden)");
     }
 
     #[test]
@@ -30,16 +30,16 @@ mod tests {
         // This should fail until AdvicePanel is implemented
         let mut panel = AdvicePanel::new(config, advice_config).unwrap();
 
-        // Initially visible
-        assert!(panel.is_visible(), "Panel should start visible");
-
-        // Toggle to hide
-        panel.toggle_visibility();
-        assert!(!panel.is_visible(), "Panel should be hidden after toggle");
+        // Initially hidden
+        assert!(!panel.is_visible(), "Panel should start hidden");
 
         // Toggle to show
         panel.toggle_visibility();
-        assert!(panel.is_visible(), "Panel should be visible after second toggle");
+        assert!(panel.is_visible(), "Panel should be visible after first toggle");
+
+        // Toggle to hide
+        panel.toggle_visibility();
+        assert!(!panel.is_visible(), "Panel should be hidden after second toggle");
     }
 
     #[test]
