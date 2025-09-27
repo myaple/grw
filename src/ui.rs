@@ -633,8 +633,71 @@ impl App {
         self.show_monitor_pane
     }
 
+    pub fn toggle_pane_visibility(&mut self, pane_id: &PaneId) -> Result<(), String> {
+        // Get current visibility state
+        let is_visible = if let Some(pane) = self.pane_registry.get_pane(pane_id) {
+            pane.visible()
+        } else {
+            return Err(format!("Pane {:?} not found in registry", pane_id));
+        };
+
+        // Toggle visibility
+        self.pane_registry.with_pane_mut(pane_id, |pane| {
+            pane.set_visible(!is_visible);
+        });
+
+        // Special handling for advice panel to ensure it takes over the entire screen
+        if *pane_id == PaneId::Advice {
+            if !is_visible {
+                // Advice panel is being shown - hide other panes
+                self.hide_all_panes_except(PaneId::Advice);
+            } else {
+                // Advice panel is being hidden - restore normal view
+                self.restore_normal_pane_visibility();
+            }
+        }
+
+        Ok(())
+    }
+
+    fn hide_all_panes_except(&mut self, except_pane: PaneId) {
+        // Hide all information panes except the specified one
+        let panes_to_check = &[PaneId::Diff, PaneId::SideBySideDiff, PaneId::Help];
+
+        for &pane_id in panes_to_check {
+            if pane_id != except_pane {
+                self.pane_registry.with_pane_mut(&pane_id, |pane| {
+                    pane.set_visible(false);
+                });
+            }
+        }
+    }
+
+    fn restore_normal_pane_visibility(&mut self) {
+        // Restore the normal visibility based on current app state
+        if self.show_diff_panel {
+            match self.current_information_pane {
+                InformationPane::Diff => self.set_single_pane_diff(),
+                InformationPane::SideBySideDiff => self.set_side_by_side_diff(),
+                _ => self.set_single_pane_diff(),
+            }
+        }
+    }
+
     pub fn forward_key_to_panes(&mut self, key: KeyEvent) -> bool {
         let mut handled = false;
+
+        // Forward to advice panel if it's visible and has priority
+        if let Some(advice_pane) = self.pane_registry.get_pane(&PaneId::Advice)
+            && advice_pane.visible()
+        {
+            if let Some(pane_handled) = self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
+                pane.handle_event(&crate::pane::AppEvent::Key(key))
+            }) {
+                handled |= pane_handled;
+            }
+            return handled; // Advice panel gets priority when visible
+        }
 
         // Forward to commit picker panes if in commit picker mode
         if self.is_in_commit_picker_mode() {
@@ -1036,6 +1099,31 @@ impl App {
             });
     }
 
+    /// Check for async advice panel task completion and update content
+    pub fn check_advice_panel_tasks(&mut self) {
+        self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
+            if let Some(advice_panel) = pane.as_advice_pane_mut() {
+                advice_panel.check_pending_tasks();
+            }
+        });
+    }
+
+    /// Check if advice panel is currently visible
+    pub fn is_advice_panel_visible(&self) -> bool {
+        self.pane_registry
+            .get_pane(&PaneId::Advice)
+            .map(|pane| pane.visible())
+            .unwrap_or(false)
+    }
+
+    /// Check if diff panel is currently visible
+    pub fn is_diff_panel_visible(&self) -> bool {
+        self.pane_registry
+            .get_pane(&PaneId::Diff)
+            .map(|pane| pane.visible())
+            .unwrap_or(false)
+    }
+
     pub fn load_commit_files(&mut self, commit: &CommitInfo) {
         // Validate commit data before loading
         if commit.sha.is_empty() {
@@ -1250,6 +1338,16 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
     // Render status bar using new pane system
     app.pane_registry
         .render(f, app, chunks[0], PaneId::StatusBar, git_repo);
+
+    // Check if advice panel is visible - it takes over the entire screen
+    if let Some(advice_pane) = app.pane_registry.get_pane(&PaneId::Advice)
+        && advice_pane.visible()
+    {
+        // Render advice pane as full-screen overlay
+        app.pane_registry
+            .render(f, app, chunks[1], PaneId::Advice, git_repo);
+        return;
+    }
 
     // Check if we're in commit picker mode
     if app.is_in_commit_picker_mode() {

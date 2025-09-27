@@ -128,6 +128,96 @@ impl LlmClient {
             Err(e) => Err(format!("LLM command execution failed: {e}")),
         }
     }
+
+    /// Send a chat follow-up message for advice context
+    pub async fn send_chat_followup(
+        &self,
+        question: String,
+        conversation_history: Vec<crate::pane::ChatMessageData>,
+        original_diff: String,
+    ) -> Result<crate::pane::ChatMessageData, String> {
+        let start_time = tokio::time::Instant::now();
+        debug!("🤖 LLM_CLIENT: Processing chat follow-up: {}", question);
+
+        // Build conversation context
+        let mut context_messages = vec![
+            ChatCompletionMessage {
+                role: chat_completion::MessageRole::system,
+                content: chat_completion::Content::Text(
+                    "You are an expert software engineer helping with code improvements. \
+                    The user is asking about specific code changes and improvements. \
+                    Be helpful, specific, and provide practical advice. \
+                    Keep your responses concise but thorough."
+                        .to_string(),
+                ),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatCompletionMessage {
+                role: chat_completion::MessageRole::user,
+                content: chat_completion::Content::Text(format!(
+                    "Here is the original git diff for context:\n\n{}",
+                    original_diff
+                )),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ];
+
+        // Add conversation history
+        for msg in conversation_history {
+            let role = match msg.role {
+                crate::pane::MessageRole::User => chat_completion::MessageRole::user,
+                crate::pane::MessageRole::Assistant => chat_completion::MessageRole::assistant,
+                crate::pane::MessageRole::System => chat_completion::MessageRole::system,
+            };
+            context_messages.push(ChatCompletionMessage {
+                role,
+                content: chat_completion::Content::Text(msg.content),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+
+        // Add the current question
+        context_messages.push(ChatCompletionMessage {
+            role: chat_completion::MessageRole::user,
+            content: chat_completion::Content::Text(question),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+        });
+
+        debug!(
+            "🤖 LLM_CLIENT: About to make HTTP request to LLM API with {} messages",
+            context_messages.len()
+        );
+        let result = self
+            .make_llm_request(self.config.get_advice_model(), context_messages)
+            .await;
+
+        let execution_time = start_time.elapsed();
+        debug!(
+            "🤖 LLM_CLIENT: Chat follow-up completed in {:?}",
+            execution_time
+        );
+
+        match result {
+            Ok(content) => Ok(crate::pane::ChatMessageData {
+                id: uuid::Uuid::new_v4().to_string(),
+                role: crate::pane::MessageRole::Assistant,
+                content,
+                timestamp: std::time::SystemTime::now(),
+            }),
+            Err(error) => {
+                debug!("🤖 LLM_CLIENT: Failed to process chat: {}", error);
+                Err(format!("Failed to process chat: {}", error))
+            }
+        }
+    }
 }
 
 #[cfg(test)]

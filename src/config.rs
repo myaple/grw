@@ -66,6 +66,7 @@ pub struct LlmConfig {
     pub summary_model: Option<String>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
+    pub advice_model: Option<String>,
 }
 
 impl LlmConfig {
@@ -76,7 +77,27 @@ impl LlmConfig {
             .or_else(|| self.model.clone())
             .unwrap_or_else(|| "gpt-4o-mini".to_string())
     }
+
+    /// Get the model to use for advice generation, falling back to default model
+    pub fn get_advice_model(&self) -> String {
+        self.advice_model
+            .clone()
+            .or_else(|| self.model.clone())
+            .unwrap_or_else(|| "gpt-4o-mini".to_string())
+    }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AdviceConfig {
+    pub enabled: Option<bool>,
+    pub advice_model: Option<String>,
+    pub max_improvements: Option<usize>,
+    pub chat_history_limit: Option<usize>,
+    pub timeout_seconds: Option<u64>,
+    pub context_lines: Option<usize>,
+}
+
+impl AdviceConfig {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -87,6 +108,7 @@ pub struct Config {
     pub monitor_interval: Option<u64>,
     pub theme: Option<Theme>,
     pub llm: Option<LlmConfig>,
+    pub advice: Option<AdviceConfig>,
     pub commit_history_limit: Option<usize>,
     pub commit_cache_size: Option<usize>,
     pub summary_preload_enabled: Option<bool>,
@@ -183,7 +205,9 @@ impl Config {
                 summary_model: args.llm_summary_model.clone().or(llm_config.summary_model),
                 api_key: args.llm_api_key.clone().or(llm_config.api_key),
                 base_url: args.llm_base_url.clone().or(llm_config.base_url),
+                advice_model: args.llm_advice_model.clone().or(llm_config.advice_model),
             }),
+            advice: self.advice.clone(),
             commit_history_limit: args.commit_history_limit.or(self.commit_history_limit),
             commit_cache_size: args.commit_cache_size.or(self.commit_cache_size),
             summary_preload_enabled: args
@@ -228,6 +252,9 @@ pub struct Args {
         help = "LLM model to use specifically for commit summary generation"
     )]
     pub llm_summary_model: Option<String>,
+
+    #[arg(long, help = "LLM model to use specifically for advice generation")]
+    pub llm_advice_model: Option<String>,
 
     #[arg(long, help = "API key for the LLM provider")]
     pub llm_api_key: Option<String>,

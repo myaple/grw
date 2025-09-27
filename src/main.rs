@@ -314,7 +314,7 @@ async fn main() -> Result<()> {
         let render_duration = render_start.elapsed();
 
         if render_duration.as_millis() > 10 {
-            log::debug!("Slow render detected: {render_duration:?}");
+            log::trace!("Slow render detected: {render_duration:?}");
         }
 
         // Update commit summary pane with current selection from commit picker
@@ -331,6 +331,9 @@ async fn main() -> Result<()> {
 
         // Handle cache callbacks from CommitSummaryPane
         app.handle_commit_summary_cache_callbacks(shared_state_manager.llm_state());
+
+        // Check for async advice panel task completion
+        app.check_advice_panel_tasks();
 
         // Poll for LLM summary updates from shared state
         // Summary updates are now handled through shared state cache
@@ -551,10 +554,6 @@ fn handle_key_event(
             app.set_side_by_side_diff();
             false
         }
-        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.set_single_pane_diff();
-            false
-        }
         KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.toggle_diff_panel();
             false
@@ -657,6 +656,33 @@ fn handle_key_event(
                 debug!("Already in commit picker mode");
             }
             false
+        }
+        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            debug!("User pressed Ctrl+L - toggling advice panel");
+            if let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Advice) {
+                log::warn!("Failed to toggle advice panel: {}", e);
+            }
+            false
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            debug!("User pressed Ctrl+D - switching to diff pane");
+            // Only handle Ctrl+D for advice panel navigation when advice panel is visible
+            if app.is_advice_panel_visible() {
+                // Hide advice panel and show diff pane
+                if let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Advice) {
+                    log::warn!("Failed to hide advice panel: {}", e);
+                }
+                if !app.is_diff_panel_visible()
+                    && let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Diff)
+                {
+                    log::warn!("Failed to show diff pane: {}", e);
+                }
+                true // Handled this key
+            } else {
+                // Fall through to default Ctrl+D behavior (single pane diff)
+                app.set_single_pane_diff();
+                false
+            }
         }
         _ => false,
     }
