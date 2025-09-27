@@ -422,6 +422,27 @@ impl LlmClient {
         debug!("🤖 LLM_CLIENT: Extracted {} improvements from text", improvements.len());
         Ok(improvements)
     }
+
+    /// Blocking version of generate_advice for synchronous contexts
+    pub fn blocking_generate_advice(
+        &self,
+        diff_content: String,
+        max_improvements: usize,
+    ) -> Result<Vec<crate::pane::AdviceImprovement>, String> {
+        let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        runtime.block_on(self.generate_advice(diff_content, max_improvements))
+    }
+
+    /// Blocking version of send_chat_followup for synchronous contexts
+    pub fn blocking_send_chat_followup(
+        &self,
+        question: String,
+        conversation_history: Vec<crate::pane::ChatMessageData>,
+        original_diff: String,
+    ) -> Result<crate::pane::ChatMessageData, String> {
+        let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        runtime.block_on(self.send_chat_followup(question, conversation_history, original_diff))
+    }
 }
 
 #[cfg(test)]

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use log::debug;
-use serde::{Deserialize, Serialize};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -140,6 +139,7 @@ pub struct AdvicePanel {
     pub config: crate::config::AdviceConfig,
     pub scroll_offset: usize,
     pub shared_state: Option<std::sync::Arc<crate::shared_state::LlmSharedState>>,
+    pub llm_client: Option<std::sync::Arc<tokio::sync::Mutex<LlmClient>>>,
     pub current_diff_hash: Option<String>,
     pub loading_state: LoadingState,
 }
@@ -154,6 +154,7 @@ impl AdvicePanel {
             config: advice_config,
             scroll_offset: 0,
             shared_state: None,
+            llm_client: None,
             current_diff_hash: None,
             loading_state: LoadingState::Idle,
         })
@@ -162,6 +163,11 @@ impl AdvicePanel {
     /// Set the shared state for the advice panel
     pub fn set_shared_state(&mut self, shared_state: std::sync::Arc<crate::shared_state::LlmSharedState>) {
         self.shared_state = Some(shared_state);
+    }
+
+    /// Set the LLM client for the advice panel
+    pub fn set_llm_client(&mut self, llm_client: std::sync::Arc<tokio::sync::Mutex<LlmClient>>) {
+        self.llm_client = Some(llm_client);
     }
 
     pub fn get_mode(&self) -> AdviceMode {
@@ -239,9 +245,73 @@ impl AdvicePanel {
 
         // Get original diff for context
         let original_diff = self.get_current_diff_context().unwrap_or_default();
+        let _message_clone = message.to_string();
+        let _diff_clone = original_diff.clone();
 
-        // Generate AI response (works with or without shared state)
-        let ai_response = self.generate_mock_ai_response(message, &original_diff);
+        // Try to use LLM client
+        let llm_client_clone = self.llm_client.clone();
+        if let Some(llm_client) = llm_client_clone {
+            if let Ok(client) = llm_client.try_lock() {
+                let conversation_history = self.get_chat_history();
+
+                // Generate AI response using LLM client directly
+                match client.blocking_send_chat_followup(message.to_string(), conversation_history, original_diff.clone()) {
+                    Ok(ai_message) => {
+                        debug!("🎯 ADVICE_PANEL: Successfully generated AI response via LLM");
+
+                        // Add AI response to chat
+                        if let AdviceContent::Chat(messages) = &mut self.content {
+                            messages.push(ai_message);
+                        }
+
+                        self.update_advice_status(LoadingState::Idle);
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        debug!("🎯 ADVICE_PANEL: LLM chat failed, using fallback: {}", error);
+                        // Fall back to sync processing
+                    }
+                }
+                return Ok(());
+            }
+        }
+
+        // Fallback to sync processing
+        self.process_chat_sync(message, &original_diff)
+    }
+
+    /// Process chat message synchronously (fallback when async is not available)
+    fn process_chat_sync(&mut self, message: &str, original_diff: &str) -> Result<(), String> {
+        debug!("🎯 ADVICE_PANEL: Processing chat message synchronously");
+
+        // Try to use LLM client
+        let llm_client_clone = self.llm_client.clone();
+        if let Some(llm_client) = llm_client_clone {
+            let client = llm_client.blocking_lock();
+            let conversation_history = self.get_chat_history();
+
+            // Generate AI response using LLM client
+            match client.blocking_send_chat_followup(message.to_string(), conversation_history, original_diff.to_string()) {
+                Ok(ai_message) => {
+                    debug!("🎯 ADVICE_PANEL: Successfully generated AI response via LLM");
+
+                    // Add AI response to chat
+                    if let AdviceContent::Chat(messages) = &mut self.content {
+                        messages.push(ai_message);
+                    }
+
+                    self.update_advice_status(LoadingState::Idle);
+                    return Ok(());
+                }
+                Err(error) => {
+                    debug!("🎯 ADVICE_PANEL: LLM chat failed, using fallback: {}", error);
+                    // Fall back to mock response
+                }
+            }
+        }
+
+        // Fallback to mock response when LLM is not available
+        let ai_response = self.generate_mock_fallback_response(message, original_diff);
 
         let ai_message = ChatMessageData {
             id: uuid::Uuid::new_v4().to_string(),
@@ -255,10 +325,34 @@ impl AdvicePanel {
             messages.push(ai_message);
         }
 
-        debug!("🎯 ADVICE_PANEL: AI response generated and added to chat");
-
+        debug!("🎯 ADVICE_PANEL: Fallback AI response generated and added to chat");
         self.update_advice_status(LoadingState::Idle);
         Ok(())
+    }
+
+    /// Generate a fallback AI response when LLM is not available
+    fn generate_mock_fallback_response(&self, message: &str, _diff: &str) -> String {
+        debug!("🎯 ADVICE_PANEL: Generating fallback AI response for: {}", message);
+
+        // Simple fallback responses based on message content
+        if message.to_lowercase().contains("hello") || message.to_lowercase().contains("hi") {
+            return "Hello! I'm here to help you with your code review. What would you like to know about the current changes?".to_string();
+        }
+
+        if message.to_lowercase().contains("improv") {
+            return "Based on the code changes, I recommend:\n1. Adding error handling for edge cases\n2. Improving variable naming for clarity\n3. Adding documentation for complex logic\n4. Consider refactoring large functions into smaller ones".to_string();
+        }
+
+        if message.to_lowercase().contains("bug") || message.to_lowercase().contains("issue") {
+            return "I notice a potential issue in the changes. Make sure to:\n- Test all code paths\n- Handle error cases properly\n- Validate input data\n- Consider concurrency implications".to_string();
+        }
+
+        if message.to_lowercase().contains("perform") {
+            return "For better performance:\n- Consider using more efficient algorithms\n- Optimize database queries\n- Use caching where appropriate\n- Minimize memory allocations".to_string();
+        }
+
+        // Default response
+        format!("I've analyzed your question about '{}'. Based on the code changes, I'd suggest reviewing the implementation carefully and considering potential edge cases. Would you like me to elaborate on any specific aspect?", message)
     }
 
     pub fn clear_chat_history(&mut self) -> Result<(), String> {
@@ -295,66 +389,55 @@ impl AdvicePanel {
         self.update_advice_status(LoadingState::GeneratingAdvice);
         self.content = AdviceContent::Loading;
 
-        // Generate some initial improvements to show the user
-        let improvements = vec![
-            AdviceImprovement {
-                id: uuid::Uuid::new_v4().to_string(),
-                title: "Code Quality Review".to_string(),
-                description: "The code changes show good structure but consider adding more documentation and error handling for robustness.".to_string(),
-                priority: ImprovementPriority::Medium,
-                category: "CodeQuality".to_string(),
-                code_examples: Vec::new(),
-            },
-            AdviceImprovement {
-                id: uuid::Uuid::new_v4().to_string(),
-                title: "Performance Considerations".to_string(),
-                description: "Review the algorithm efficiency and consider optimizing database queries or memory usage if applicable.".to_string(),
-                priority: ImprovementPriority::Low,
-                category: "Performance".to_string(),
-                code_examples: Vec::new(),
-            },
-            AdviceImprovement {
-                id: uuid::Uuid::new_v4().to_string(),
-                title: "Security Best Practices".to_string(),
-                description: "Ensure proper input validation, authentication, and authorization checks are in place for security.".to_string(),
-                priority: ImprovementPriority::High,
-                category: "Security".to_string(),
-                code_examples: Vec::new(),
-            },
-        ];
+        // Get current diff for advice generation
+        let diff_content = self.get_current_diff_context().unwrap_or_default();
 
-        // Update content with improvements
-        self.content = AdviceContent::Improvements(improvements);
-        self.update_advice_status(LoadingState::Idle);
+        if diff_content.is_empty() {
+            // No diff available, show empty state
+            self.content = AdviceContent::Improvements(Vec::new());
+            self.update_advice_status(LoadingState::Idle);
+            return;
+        }
 
-        debug!("🎯 ADVICE_PANEL: Initial advice generation completed");
+        // Try to use LLM client, fall back to sync generation if not available
+        let llm_client_clone = self.llm_client.clone();
+        if let Some(llm_client) = llm_client_clone {
+            if let Ok(client) = llm_client.try_lock() {
+                // Generate advice using LLM client directly
+                match client.blocking_generate_advice(diff_content.clone(), 3) {
+                    Ok(improvements) => {
+                        debug!("🎯 ADVICE_PANEL: Successfully generated {} improvements via LLM", improvements.len());
+
+                        // Cache the improvements
+                        if let Some(ref diff_hash) = self.current_diff_hash {
+                            if let Ok(cached_json) = serde_json::to_string(&improvements) {
+                                self.cache_advice(diff_hash, &cached_json);
+                            }
+                        }
+
+                        // Update content
+                        self.content = AdviceContent::Improvements(improvements);
+                        self.update_advice_status(LoadingState::Idle);
+                        return;
+                    }
+                    Err(error) => {
+                        debug!("🎯 ADVICE_PANEL: LLM generation failed, using fallback: {}", error);
+                        // Fall back to sync generation
+                    }
+                }
+                return;
+            }
+        }
+
+        // Fallback to sync generation if no shared state
+        if let Err(e) = self.generate_advice_sync(&diff_content) {
+            debug!("🎯 ADVICE_PANEL: Sync generation failed: {}", e);
+            self.content = AdviceContent::Improvements(Vec::new());
+            self.update_advice_status(LoadingState::Idle);
+        }
     }
 
-    /// Generate a mock AI response for testing (will be replaced with real LLM integration)
-    fn generate_mock_ai_response(&self, message: &str, _diff: &str) -> String {
-        debug!("🎯 ADVICE_PANEL: Generating mock AI response for: {}", message);
-
-        // Simple mock responses based on message content
-        if message.to_lowercase().contains("hello") || message.to_lowercase().contains("hi") {
-            return "Hello! I'm here to help you with your code review. What would you like to know about the current changes?".to_string();
-        }
-
-        if message.to_lowercase().contains("improv") {
-            return "Based on the code changes, I recommend:\n1. Adding error handling for edge cases\n2. Improving variable naming for clarity\n3. Adding documentation for complex logic\n4. Consider refactoring large functions into smaller ones".to_string();
-        }
-
-        if message.to_lowercase().contains("bug") || message.to_lowercase().contains("issue") {
-            return "I notice a potential issue in the changes. Make sure to:\n- Test all code paths\n- Handle error cases properly\n- Validate input data\n- Consider concurrency implications".to_string();
-        }
-
-        if message.to_lowercase().contains("perform") {
-            return "For better performance:\n- Consider using more efficient algorithms\n- Optimize database queries\n- Use caching where appropriate\n- Minimize memory allocations".to_string();
-        }
-
-        // Default response
-        format!("I've analyzed your question about '{}'. Based on the code changes, I'd suggest reviewing the implementation carefully and considering potential edge cases. Would you like me to elaborate on any specific aspect?", message)
-    }
-
+    
     pub fn get_advice_generation_status(&self) -> String {
         match self.loading_state {
             LoadingState::GeneratingAdvice => "Generating advice...".to_string(),
@@ -457,12 +540,39 @@ impl AdvicePanel {
         }
     }
 
-    /// Generate advice synchronously (placeholder for async implementation)
-    fn generate_advice_sync(&mut self, _diff: &str) -> Result<(), String> {
+    /// Generate advice synchronously (fallback when async is not available)
+    fn generate_advice_sync(&mut self, diff: &str) -> Result<(), String> {
         debug!("🎯 ADVICE_PANEL: Generating advice synchronously");
 
-        // For now, create placeholder improvements since we can't easily access LlmClient here
-        // In a real implementation, this would be handled through the App or async tasks
+        // Try to use LLM client
+        let llm_client_clone = self.llm_client.clone();
+        if let Some(llm_client) = llm_client_clone {
+            let client = llm_client.blocking_lock();
+            // Generate advice using LLM client
+            match client.blocking_generate_advice(diff.to_string(), 3) {
+                Ok(improvements) => {
+                    debug!("🎯 ADVICE_PANEL: Successfully generated {} improvements via LLM", improvements.len());
+
+                    // Cache the improvements
+                    if let Some(ref diff_hash) = self.current_diff_hash {
+                        if let Ok(cached_json) = serde_json::to_string(&improvements) {
+                            self.cache_advice(diff_hash, &cached_json);
+                        }
+                    }
+
+                    // Update content
+                    self.content = AdviceContent::Improvements(improvements);
+                    self.update_advice_status(LoadingState::Idle);
+                    return Ok(());
+                }
+                Err(error) => {
+                    debug!("🎯 ADVICE_PANEL: LLM generation failed, using fallback: {}", error);
+                    // Fall back to placeholder improvements
+                }
+            }
+        }
+
+        // Fallback improvements when LLM is not available
         let improvements = vec![
             AdviceImprovement {
                 id: uuid::Uuid::new_v4().to_string(),
