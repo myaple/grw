@@ -162,6 +162,7 @@ pub struct AdvicePanel {
     pub current_diff_content: std::cell::RefCell<Option<String>>,
     pub initial_message_sent: bool,
     pub first_visit: bool,
+    pub chat_content_backup: Option<AdviceContent>,
 }
 
 impl AdvicePanel {
@@ -184,6 +185,7 @@ impl AdvicePanel {
             current_diff_content: std::cell::RefCell::new(None),
             initial_message_sent: false,
             first_visit: true,
+            chat_content_backup: None,
         })
     }
 
@@ -3110,6 +3112,8 @@ impl Pane for AdvicePanel {
                                     self.mode = AdviceMode::Help;
                                     // Reset scroll offset when entering help mode
                                     self.scroll_offset = 0;
+                                    // Backup current chat content before switching to help
+                                    self.chat_content_backup = Some(self.content.clone());
                                     // Set help content when entering help mode
                                     let help_text = vec![
                                         "Git Repository Watcher - Chat Interface Help",
@@ -3211,8 +3215,15 @@ impl Pane for AdvicePanel {
                     AdviceMode::Help => {
                         match key_event.code {
                             KeyCode::Esc => {
-                                // Exit help mode and let parent handle closing the panel
+                                // Exit help mode and restore chat content
                                 self.mode = AdviceMode::Chatting;
+                                // Restore backed up chat content if available
+                                if let Some(backup_content) = self.chat_content_backup.take() {
+                                    self.content = backup_content;
+                                } else {
+                                    // Fallback to empty chat if no backup
+                                    self.content = AdviceContent::Chat(Vec::new());
+                                }
                                 false // Let parent handle Esc for panel closing
                             }
                             KeyCode::Char('j') | KeyCode::Down => {
