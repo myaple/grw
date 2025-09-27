@@ -554,11 +554,7 @@ fn handle_key_event(
             app.set_side_by_side_diff();
             false
         }
-        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.set_single_pane_diff();
-            false
-        }
-        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.toggle_diff_panel();
             false
         }
@@ -667,6 +663,26 @@ fn handle_key_event(
                 log::warn!("Failed to toggle advice panel: {}", e);
             }
             false
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            debug!("User pressed Ctrl+D - switching to diff pane");
+            // Only handle Ctrl+D for advice panel navigation when advice panel is visible
+            if app.is_advice_panel_visible() {
+                // Hide advice panel and show diff pane
+                if let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Advice) {
+                    log::warn!("Failed to hide advice panel: {}", e);
+                }
+                if !app.is_diff_panel_visible() {
+                    if let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Diff) {
+                        log::warn!("Failed to show diff pane: {}", e);
+                    }
+                }
+                true // Handled this key
+            } else {
+                // Fall through to default Ctrl+D behavior (single pane diff)
+                app.set_single_pane_diff();
+                false
+            }
         }
         _ => false,
     }

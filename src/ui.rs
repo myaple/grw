@@ -1114,6 +1114,22 @@ impl App {
             });
     }
 
+    /// Check if advice panel is currently visible
+    pub fn is_advice_panel_visible(&self) -> bool {
+        self.pane_registry
+            .get_pane(&PaneId::Advice)
+            .map(|pane| pane.visible())
+            .unwrap_or(false)
+    }
+
+    /// Check if diff panel is currently visible
+    pub fn is_diff_panel_visible(&self) -> bool {
+        self.pane_registry
+            .get_pane(&PaneId::Diff)
+            .map(|pane| pane.visible())
+            .unwrap_or(false)
+    }
+
     pub fn load_commit_files(&mut self, commit: &CommitInfo) {
         // Validate commit data before loading
         if commit.sha.is_empty() {
