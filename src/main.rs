@@ -314,7 +314,7 @@ async fn main() -> Result<()> {
         let render_duration = render_start.elapsed();
 
         if render_duration.as_millis() > 10 {
-            log::debug!("Slow render detected: {render_duration:?}");
+            log::trace!("Slow render detected: {render_duration:?}");
         }
 
         // Update commit summary pane with current selection from commit picker

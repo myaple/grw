@@ -149,6 +149,7 @@ pub struct AdvicePanel {
     pub mode: AdviceMode,
     pub content: AdviceContent,
     pub chat_input: String,
+    pub chat_input_active: bool,
     pub config: crate::config::AdviceConfig,
     pub scroll_offset: usize,
     pub shared_state: Option<std::sync::Arc<crate::shared_state::LlmSharedState>>,
@@ -159,6 +160,7 @@ pub struct AdvicePanel {
     pub pending_chat_task: Option<tokio::task::JoinHandle<()>>,
     pub pending_chat_message_id: Option<String>,
     pub current_diff_content: std::cell::RefCell<Option<String>>,
+    pub initial_message_sent: bool,
 }
 
 impl AdvicePanel {
@@ -168,6 +170,7 @@ impl AdvicePanel {
             mode: AdviceMode::Chatting,
             content: AdviceContent::Loading,
             chat_input: String::new(),
+            chat_input_active: false,
             config: advice_config,
             scroll_offset: 0,
             shared_state: None,
@@ -178,6 +181,7 @@ impl AdvicePanel {
             pending_chat_task: None,
             pending_chat_message_id: None,
             current_diff_content: std::cell::RefCell::new(None),
+            initial_message_sent: false,
         })
     }
 
@@ -519,6 +523,57 @@ impl AdvicePanel {
     }
 
     /// Trigger initial advice generation when panel opens (spawns async task)
+    fn send_initial_message_with_diff(&mut self, diff_content: &str) {
+        debug!("🎯 ADVICE_PANEL: Sending initial message with diff context");
+
+        // Always start in chat mode with empty history
+        self.mode = AdviceMode::Chatting;
+        self.content = AdviceContent::Chat(Vec::new());
+
+        let initial_message = format!(
+            "Please provide 3 actionable improvements for the following code changes:\n\n```diff\n{}\n```\n\nFocus on practical, specific suggestions that would improve code quality, performance, or maintainability.",
+            diff_content
+        );
+
+        // Send the initial message automatically
+        if let Err(e) = self.send_chat_message(&initial_message) {
+            // If sending fails, add an error message
+            let error_message = ChatMessageData {
+                id: uuid::Uuid::new_v4().to_string(),
+                role: MessageRole::System,
+                content: format!("Failed to send initial request to AI: {}", e),
+                timestamp: std::time::SystemTime::now(),
+            };
+
+            if let AdviceContent::Chat(messages) = &mut self.content {
+                messages.push(error_message);
+            }
+            self.update_advice_status(LoadingState::Idle);
+        } else {
+            debug!("🎯 ADVICE_PANEL: Successfully sent initial chat message for advice");
+        }
+    }
+
+    fn send_no_changes_message(&mut self) {
+        debug!("🎯 ADVICE_PANEL: Sending no changes message");
+
+        // Always start in chat mode with empty history
+        self.mode = AdviceMode::Chatting;
+        self.content = AdviceContent::Chat(Vec::new());
+
+        // Add a system message about no changes
+        let system_message = ChatMessageData {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: MessageRole::System,
+            content: "No code changes are currently available to analyze. Make some code changes and stage them with `git add` to get AI-powered improvement suggestions. You can still ask me general questions about programming best practices!".to_string(),
+            timestamp: std::time::SystemTime::now(),
+        };
+
+        if let AdviceContent::Chat(messages) = &mut self.content {
+            messages.push(system_message);
+        }
+    }
+
     fn trigger_initial_advice(&mut self) {
         debug!("🎯 ADVICE_PANEL: Triggering initial chat message");
 
@@ -907,7 +962,16 @@ impl AdvicePanel {
     }
 
     pub fn set_visibility(&mut self, visible: bool) {
+        let was_visible = self.visible;
         self.visible = visible;
+
+        // When panel becomes visible, reset the initial message flag
+        // The actual message will be sent during the first render when we have access to files
+        if visible && !was_visible {
+            debug!("🎯 ADVICE_PANEL: Panel became visible, resetting initial message flag");
+            self.initial_message_sent = false;
+            self.chat_input_active = false;
+        }
     }
 }
 
@@ -2824,6 +2888,29 @@ impl Pane for AdvicePanel {
             *self.current_diff_content.borrow_mut() = None;
         }
 
+        // Check if we need to send the initial message
+        // Use a mutable reference to self for this operation
+        if self.visible && !self.initial_message_sent {
+            // This is a workaround to call a method that requires &mut self from &self
+            unsafe {
+                let self_mut = self as *const AdvicePanel as *mut AdvicePanel;
+                if let Some(diff_content) = (*self_mut).current_diff_content.borrow().as_ref() {
+                    if !diff_content.is_empty() {
+                        (*self_mut).send_initial_message_with_diff(diff_content);
+                        (*self_mut).initial_message_sent = true;
+                    } else if files.is_empty() {
+                        // No files available, send message about no changes
+                        (*self_mut).send_no_changes_message();
+                        (*self_mut).initial_message_sent = true;
+                    }
+                } else if files.is_empty() {
+                    // No files available, send message about no changes
+                    (*self_mut).send_no_changes_message();
+                    (*self_mut).initial_message_sent = true;
+                }
+            }
+        }
+
         let block = Block::default()
             .title(self.title())
             .borders(Borders::ALL)
@@ -2873,6 +2960,10 @@ impl Pane for AdvicePanel {
             AdviceContent::Chat(messages) => {
                 let mut lines = Vec::new();
                 for msg in messages {
+                    // Skip user messages that contain the diff pattern (initial automated message)
+                    if msg.role == MessageRole::User && msg.content.contains("Please provide 3 actionable improvements for the following code changes:") {
+                        continue;
+                    }
                     let (prefix, color) = match msg.role {
                         MessageRole::User => ("You", Color::Cyan),
                         MessageRole::Assistant => ("AI", Color::Green),
@@ -2914,8 +3005,8 @@ impl Pane for AdvicePanel {
             }
         };
 
-        // Adjust content area when in chat mode to make room for chat input
-        let content_area = if self.mode == AdviceMode::Chatting {
+        // Adjust content area when chat input is active to make room for chat input
+        let content_area = if self.mode == AdviceMode::Chatting && self.chat_input_active {
             Rect {
                 x: area.x,
                 y: area.y,
@@ -2933,8 +3024,8 @@ impl Pane for AdvicePanel {
 
         f.render_widget(paragraph, content_area);
 
-        // Show chat input when in chat mode
-        if self.mode == AdviceMode::Chatting {
+        // Show chat input only when activated
+        if self.mode == AdviceMode::Chatting && self.chat_input_active {
             let input_area = Rect {
                 x: area.x,
                 y: area.bottom().saturating_sub(3),
@@ -2963,32 +3054,76 @@ impl Pane for AdvicePanel {
             AppEvent::Key(key_event) => {
                 match self.mode {
                     AdviceMode::Chatting => {
-                        match key_event.code {
-                            KeyCode::Enter => {
-                                if !self.chat_input.is_empty() {
-                                    let message = self.chat_input.clone();
-                                    self.chat_input.clear();
-                                    // This will be connected to LLM later
-                                    let _ = self.send_chat_message(&message);
+                        if self.chat_input_active {
+                            // Chat input is active, handle input keys
+                            match key_event.code {
+                                KeyCode::Enter => {
+                                    if !self.chat_input.is_empty() {
+                                        let message = self.chat_input.clone();
+                                        self.chat_input.clear();
+                                        self.chat_input_active = false;
+                                        // Send the message
+                                        let _ = self.send_chat_message(&message);
+                                    }
+                                    true
                                 }
-                                true
+                                KeyCode::Esc => {
+                                    self.chat_input_active = false;
+                                    self.chat_input.clear();
+                                    true
+                                }
+                                KeyCode::Char(c) => {
+                                    self.chat_input.push(c);
+                                    true
+                                }
+                                KeyCode::Backspace => {
+                                    self.chat_input.pop();
+                                    true
+                                }
+                                _ => false,
                             }
-                            KeyCode::Char('?') => {
-                                self.mode = AdviceMode::Help;
-                                true
+                        } else {
+                            // Chat input is not active, handle navigation and activation keys
+                            match key_event.code {
+                                KeyCode::Char('/') => {
+                                    self.chat_input_active = true;
+                                    true
+                                }
+                                KeyCode::Char('?') => {
+                                    self.mode = AdviceMode::Help;
+                                    true
+                                }
+                                KeyCode::Esc => {
+                                    false // Let parent handle Esc
+                                }
+                                // Navigation keys - always work when chat input is inactive
+                                KeyCode::Char('j') | KeyCode::Down => {
+                                    self.scroll_offset = self.scroll_offset.saturating_add(1);
+                                    true
+                                }
+                                KeyCode::Char('k') | KeyCode::Up => {
+                                    self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                                    true
+                                }
+                                KeyCode::PageDown => {
+                                    self.scroll_offset = self.scroll_offset.saturating_add(10);
+                                    true
+                                }
+                                KeyCode::PageUp => {
+                                    self.scroll_offset = self.scroll_offset.saturating_sub(10);
+                                    true
+                                }
+                                KeyCode::Char('g') => {
+                                    self.scroll_offset = 0;
+                                    true
+                                }
+                                KeyCode::Char('G') if key_event.modifiers.contains(KeyModifiers::SHIFT) => {
+                                    // Scroll to bottom (approximate)
+                                    self.scroll_offset = self.scroll_offset.saturating_add(1000);
+                                    true
+                                }
+                                _ => false,
                             }
-                            KeyCode::Esc => {
-                                false // Let parent handle Esc
-                            }
-                            KeyCode::Char(c) => {
-                                self.chat_input.push(c);
-                                true
-                            }
-                            KeyCode::Backspace => {
-                                self.chat_input.pop();
-                                true
-                            }
-                            _ => false,
                         }
                     }
                     AdviceMode::Help => {
