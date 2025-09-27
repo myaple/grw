@@ -161,6 +161,7 @@ pub struct AdvicePanel {
     pub pending_chat_message_id: Option<String>,
     pub current_diff_content: std::cell::RefCell<Option<String>>,
     pub initial_message_sent: bool,
+    pub first_visit: bool,
 }
 
 impl AdvicePanel {
@@ -182,6 +183,7 @@ impl AdvicePanel {
             pending_chat_message_id: None,
             current_diff_content: std::cell::RefCell::new(None),
             initial_message_sent: false,
+            first_visit: true,
         })
     }
 
@@ -572,6 +574,20 @@ impl AdvicePanel {
         if let AdviceContent::Chat(messages) = &mut self.content {
             messages.push(system_message);
         }
+    }
+
+    fn refresh_chat_with_new_diff(&mut self) {
+        debug!("🎯 ADVICE_PANEL: Refreshing chat with new diff");
+
+        // Clear existing chat content
+        self.content = AdviceContent::Chat(Vec::new());
+        self.scroll_offset = 0;
+
+        // Reset first visit flag so it will send a new initial message
+        self.first_visit = true;
+        self.initial_message_sent = false;
+
+        // The new message will be sent on the next render when we have fresh diff data
     }
 
     fn trigger_initial_advice(&mut self) {
@@ -965,11 +981,9 @@ impl AdvicePanel {
         let was_visible = self.visible;
         self.visible = visible;
 
-        // When panel becomes visible, reset the initial message flag
-        // The actual message will be sent during the first render when we have access to files
+        // When panel becomes visible, set up chat input state but preserve history
         if visible && !was_visible {
-            debug!("🎯 ADVICE_PANEL: Panel became visible, resetting initial message flag");
-            self.initial_message_sent = false;
+            debug!("🎯 ADVICE_PANEL: Panel became visible");
             self.chat_input_active = false;
         }
     }
@@ -2888,9 +2902,9 @@ impl Pane for AdvicePanel {
             *self.current_diff_content.borrow_mut() = None;
         }
 
-        // Check if we need to send the initial message
+        // Check if we need to send the initial message (only on first visit)
         // Use a mutable reference to self for this operation
-        if self.visible && !self.initial_message_sent {
+        if self.visible && !self.initial_message_sent && self.first_visit {
             // This is a workaround to call a method that requires &mut self from &self
             unsafe {
                 let self_mut = self as *const AdvicePanel as *mut AdvicePanel;
@@ -2898,15 +2912,18 @@ impl Pane for AdvicePanel {
                     if !diff_content.is_empty() {
                         (*self_mut).send_initial_message_with_diff(diff_content);
                         (*self_mut).initial_message_sent = true;
+                        (*self_mut).first_visit = false;
                     } else if files.is_empty() {
                         // No files available, send message about no changes
                         (*self_mut).send_no_changes_message();
                         (*self_mut).initial_message_sent = true;
+                        (*self_mut).first_visit = false;
                     }
                 } else if files.is_empty() {
                     // No files available, send message about no changes
                     (*self_mut).send_no_changes_message();
                     (*self_mut).initial_message_sent = true;
+                    (*self_mut).first_visit = false;
                 }
             }
         }
@@ -3091,10 +3108,43 @@ impl Pane for AdvicePanel {
                                 }
                                 KeyCode::Char('?') => {
                                     self.mode = AdviceMode::Help;
+                                    // Set help content when entering help mode
+                                    let help_text = vec![
+                                        "Git Repository Watcher - Chat Interface Help",
+                                        "",
+                                        "Navigation:",
+                                        "  j / k / ↑ / ↓     - Scroll up/down",
+                                        "  PageUp / PageDown  - Scroll faster",
+                                        "  g                  - Go to top",
+                                        "  Shift+G            - Go to bottom",
+                                        "",
+                                        "Chat Interface:",
+                                        "  /                  - Activate chat input",
+                                        "  Enter              - Send message (when input active)",
+                                        "  Esc                - Deactivate chat input",
+                                        "",
+                                        "Other Controls:",
+                                        "  Ctrl+R             - Refresh diff and clear chat",
+                                        "  Esc                - Exit advice pane",
+                                        "  ?                  - Show this help",
+                                        "",
+                                        "Tips:",
+                                        "- Chat history is preserved across panel activations",
+                                        "- Initial message with diff is sent automatically on first visit",
+                                        "- Use Ctrl+R to refresh with latest diff and start fresh conversation",
+                                    ].join("\n");
+                                    self.content = AdviceContent::Help(help_text);
                                     true
                                 }
                                 KeyCode::Esc => {
-                                    false // Let parent handle Esc
+                                    if self.chat_input_active {
+                                        // Deactivate chat input
+                                        self.chat_input_active = false;
+                                        self.chat_input.clear();
+                                        true
+                                    } else {
+                                        false // Let parent handle Esc for panel closing
+                                    }
                                 }
                                 // Navigation keys - always work when chat input is inactive
                                 KeyCode::Char('j') | KeyCode::Down => {
@@ -3118,8 +3168,38 @@ impl Pane for AdvicePanel {
                                     true
                                 }
                                 KeyCode::Char('G') if key_event.modifiers.contains(KeyModifiers::SHIFT) => {
-                                    // Scroll to bottom (approximate)
-                                    self.scroll_offset = self.scroll_offset.saturating_add(1000);
+                                    // Scroll to actual bottom by calculating content height
+                                    let content_lines = match &self.content {
+                                        AdviceContent::Chat(messages) => {
+                                            let mut line_count = 0;
+                                            for msg in messages {
+                                                // Skip user messages that contain the diff pattern
+                                                if msg.role == MessageRole::User && msg.content.contains("Please provide 3 actionable improvements for the following code changes:") {
+                                                    continue;
+                                                }
+                                                // Count header line
+                                                line_count += 1;
+                                                // Count content lines
+                                                line_count += msg.content.lines().count();
+                                                // Add empty line between messages
+                                                line_count += 1;
+                                            }
+                                            // Add thinking indicator if present
+                                            if self.loading_state == LoadingState::SendingChat && self.pending_chat_message_id.is_some() {
+                                                line_count += 3; // "AI:" + "Thinking..." + empty line
+                                            }
+                                            line_count
+                                        }
+                                        AdviceContent::Help(help_text) => help_text.lines().count(),
+                                        _ => 0,
+                                    };
+                                    let visible_lines = 20; // Approximate visible area height
+                                    self.scroll_offset = content_lines.saturating_sub(visible_lines).max(0);
+                                    true
+                                }
+                                KeyCode::Char('r') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                                    // Ctrl+R: Refresh diff and clear chat
+                                    self.refresh_chat_with_new_diff();
                                     true
                                 }
                                 _ => false,
