@@ -97,6 +97,18 @@ pub enum ImprovementPriority {
     Unknown,
 }
 
+impl std::fmt::Display for ImprovementPriority {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImprovementPriority::Low => write!(f, "Low"),
+            ImprovementPriority::Medium => write!(f, "Medium"),
+            ImprovementPriority::High => write!(f, "High"),
+            ImprovementPriority::Critical => write!(f, "Critical"),
+            ImprovementPriority::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AdviceImprovement {
     pub id: String,
@@ -147,6 +159,7 @@ pub struct AdvicePanel {
     pub pending_advice_task: Option<tokio::task::JoinHandle<()>>,
     pub pending_chat_task: Option<tokio::task::JoinHandle<()>>,
     pub pending_chat_message_id: Option<String>,
+    pub current_diff_content: std::cell::RefCell<Option<String>>,
 }
 
 impl AdvicePanel {
@@ -165,6 +178,7 @@ impl AdvicePanel {
             pending_advice_task: None,
             pending_chat_task: None,
             pending_chat_message_id: None,
+            current_diff_content: std::cell::RefCell::new(None),
         })
     }
 
@@ -394,25 +408,11 @@ impl AdvicePanel {
 
     /// Get the current diff context for LLM
     fn get_current_diff_context(&self) -> Option<String> {
-        // For now, return a sample diff to test the advice panel functionality
-        // In a real implementation, this would get the actual git diff
-        let sample_diff = r#"diff --git a/src/example.rs b/src/example.rs
-index abc123..def456 100644
---- a/src/example.rs
-+++ b/src/example.rs
-@@ -1,5 +1,8 @@
- fn main() {
--    println!("Hello, World!");
-+    // Improved greeting with error handling
-+    match std::env::args().len() {
-+        1 => println!("Hello, World!"),
-+        _ => println!("Hello, User!"),
-+    }
- }"#;
-
-        Some(sample_diff.to_string())
+        // Return the stored diff content that was updated during rendering
+        self.current_diff_content.borrow().clone()
     }
 
+    
     /// Check and update pending async tasks
     pub fn check_pending_tasks(&mut self) {
         // Check if async advice task has completed
@@ -2729,6 +2729,52 @@ impl Pane for AdvicePanel {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let theme = app.get_theme();
 
+        // Update the current diff content from the app's files
+        let files = app.get_files();
+        if !files.is_empty() {
+            let mut diff_content = String::new();
+
+            for file_diff in files {
+                // Add file header
+                diff_content.push_str(&format!("diff --git a/{} b/{}\n",
+                    file_diff.path.to_string_lossy(),
+                    file_diff.path.to_string_lossy()));
+
+                // Add git index line based on status
+                if file_diff.status.contains(git2::Status::WT_NEW) {
+                    diff_content.push_str("new file mode 100644\n");
+                } else if file_diff.status.contains(git2::Status::WT_DELETED) {
+                    diff_content.push_str("deleted file mode 100644\n");
+                } else if file_diff.status.contains(git2::Status::WT_RENAMED) {
+                    diff_content.push_str("similarity index 100%\n");
+                    diff_content.push_str("rename from old_name\n");
+                    diff_content.push_str("rename to new_name\n");
+                } else {
+                    diff_content.push_str("index 0000000..1111111 100644\n");
+                }
+
+                // Add file change markers
+                diff_content.push_str(&format!("--- a/{}\n", file_diff.path.to_string_lossy()));
+                diff_content.push_str(&format!("+++ b/{}\n", file_diff.path.to_string_lossy()));
+
+                // Add the actual diff content
+                for line in &file_diff.line_strings {
+                    diff_content.push_str(line);
+                    diff_content.push('\n');
+                }
+
+                diff_content.push('\n'); // Add separator between files
+            }
+
+            *self.current_diff_content.borrow_mut() = if diff_content.trim().is_empty() {
+                None
+            } else {
+                Some(diff_content)
+            };
+        } else {
+            *self.current_diff_content.borrow_mut() = None;
+        }
+
         let block = Block::default()
             .title(self.title())
             .borders(Borders::ALL)
@@ -2743,28 +2789,35 @@ impl Pane for AdvicePanel {
             }
             AdviceContent::Improvements(improvements) => {
                 let mut lines = Vec::new();
-                for (i, imp) in improvements.iter().enumerate() {
-                    lines.push(Line::from(format!("{}. {} ({})", i + 1, imp.title, imp.category)));
-                    // Add priority indicator
-                    let priority_str = match imp.priority {
-                        ImprovementPriority::Low => "🟢 Low",
-                        ImprovementPriority::Medium => "🟡 Medium",
-                        ImprovementPriority::High => "🟠 High",
-                        ImprovementPriority::Critical => "🔴 Critical",
-                        ImprovementPriority::Unknown => "⚪ Unknown",
-                    };
-                    lines.push(Line::from(format!("   Priority: {}", priority_str)));
-                    lines.push(Line::from(format!("   Category: {}", imp.category)));
-                    lines.push(Line::from("")); // Empty line
-                    // Add description with proper line wrapping
-                    for desc_line in imp.description.lines() {
-                        if !desc_line.trim().is_empty() {
-                            lines.push(Line::from(format!("   {}", desc_line)));
+                for imp in improvements {
+                    // Use chat-style timestamp format
+                    let time_str = "now"; // Improvements are always current
+                    lines.push(Line::from(format!("[{}] AI:", time_str)).fg(Color::Green));
+
+                    // Add title as the main message
+                    for title_line in imp.title.lines() {
+                        if !title_line.trim().is_empty() {
+                            lines.push(Line::from(format!("  {}", title_line)));
                         }
                     }
-                    lines.push(Line::from("")); // Empty line between improvements
-                    lines.push(Line::from("─".repeat(50))); // Separator
-                    lines.push(Line::from("")); // Empty line after separator
+
+                    // Add description with chat-style indentation
+                    for desc_line in imp.description.lines() {
+                        if !desc_line.trim().is_empty() {
+                            lines.push(Line::from(format!("  {}", desc_line)));
+                        }
+                    }
+
+                    // Add category and priority in a subtle way
+                    let priority_emoji = match imp.priority {
+                        ImprovementPriority::Low => "🟢",
+                        ImprovementPriority::Medium => "🟡",
+                        ImprovementPriority::High => "🟠",
+                        ImprovementPriority::Critical => "🔴",
+                        ImprovementPriority::Unknown => "⚪",
+                    };
+                    lines.push(Line::from(format!("  {} {} · {}", priority_emoji, imp.category, imp.priority)));
+                    lines.push(Line::from("")); // Empty line between messages
                 }
                 lines
             }
@@ -2812,12 +2865,24 @@ impl Pane for AdvicePanel {
             }
         };
 
+        // Adjust content area when in chat mode to make room for chat input
+        let content_area = if self.mode == AdviceMode::Chatting {
+            Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: area.height.saturating_sub(3), // Reserve space for chat input
+            }
+        } else {
+            area
+        };
+
         let paragraph = Paragraph::new(content)
             .block(block)
             .wrap(Wrap { trim: true })
             .scroll((self.scroll_offset as u16, 0));
 
-        f.render_widget(paragraph, area);
+        f.render_widget(paragraph, content_area);
 
         // Show chat input when in chat mode
         if self.mode == AdviceMode::Chatting {
