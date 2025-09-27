@@ -2620,4 +2620,422 @@ mod tests {
         assert_eq!(PaneId::FileTree, PaneId::FileTree);
         assert_ne!(PaneId::FileTree, PaneId::Monitor);
     }
+
+    #[test]
+    fn test_advice_generation_api_contract() {
+        // Test contract for advice generation API methods
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        // Test that generate_advice method exists and works
+        let result = panel.generate_advice("sample diff content");
+        assert!(result.is_ok(), "generate_advice should not panic and return Result");
+
+        let improvements = result.unwrap();
+        // Should return empty vector for now (placeholder implementation)
+        assert!(improvements.is_empty(), "Initial implementation should return empty improvements");
+
+        // Test async advice generation methods exist
+        let async_result = panel.start_async_advice_generation("sample diff");
+        assert!(async_result.is_ok(), "start_async_advice_generation should work");
+
+        let status = panel.get_advice_generation_status();
+        assert_eq!(status, "Ready", "Should report ready status");
+    }
+
+    #[test]
+    fn test_advice_generation_with_empty_diff_contract() {
+        // Test advice generation handles empty diff gracefully
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        let result = panel.generate_advice("");
+        assert!(result.is_ok(), "Should handle empty diff without error");
+
+        let improvements = result.unwrap();
+        assert!(improvements.is_empty(), "Empty diff should result in no improvements");
+    }
+
+    #[test]
+    fn test_advice_generation_error_handling_contract() {
+        // Test advice generation error handling
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        // Test with invalid diff content
+        let invalid_diff = "This is not a valid git diff";
+        let result = panel.generate_advice(invalid_diff);
+
+        assert!(result.is_ok(), "Should handle invalid input gracefully");
+        let improvements = result.unwrap();
+        assert!(improvements.is_empty(), "Invalid input should result in no improvements");
+    }
+
+    #[test]
+    fn test_chat_functionality_api_contract() {
+        // Test contract for chat functionality API methods
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        // Test that chat methods exist and work
+        let send_result = panel.send_chat_message("Hello, AI!");
+        assert!(send_result.is_ok(), "send_chat_message should work");
+
+        // Test chat history management
+        let history = panel.get_chat_history();
+        assert!(history.is_empty(), "Initial chat history should be empty");
+
+        // Test clearing chat history
+        let clear_result = panel.clear_chat_history();
+        assert!(clear_result.is_ok(), "clear_chat_history should work");
+
+        // Test error handling methods
+        let last_error = panel.get_last_chat_error();
+        assert!(last_error.is_none(), "Initial last error should be None");
+
+        let is_available = panel.is_chat_available();
+        assert!(is_available, "Chat should be available by default");
+    }
+
+    #[test]
+    fn test_send_chat_message_contract() {
+        // Test sending chat messages functionality
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        // Send a chat message
+        let result = panel.send_chat_message("Can you explain this code change?");
+        assert!(result.is_ok(), "Should send chat message without error");
+
+        // Since this is a placeholder implementation, the message won't actually be stored
+        // but the method should exist and not panic
+        let history = panel.get_chat_history();
+        assert!(history.is_empty(), "Placeholder implementation returns empty history");
+    }
+
+    #[test]
+    fn test_chat_message_validation_contract() {
+        // Test validation of chat messages
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        // Test various message types
+        let long_message = "a".repeat(10000);
+        let test_messages = vec![
+            "", // Empty message
+            "   ", // Whitespace-only
+            &long_message, // Very long message
+            "Hello 🚀! Special chars: @#$%^&*()", // Unicode and special chars
+        ];
+
+        for message in test_messages {
+            let result = panel.send_chat_message(message);
+            let preview = message.chars().take(20).collect::<String>();
+            assert!(result.is_ok(), "Should handle message: '{}'", preview);
+        }
+    }
+
+    #[test]
+    fn test_chat_history_management_contract() {
+        // Test chat history management
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        // Send multiple messages
+        for i in 0..5 {
+            let result = panel.send_chat_message(&format!("Message {}", i));
+            assert!(result.is_ok(), "Should send message {}", i);
+        }
+
+        // Clear history
+        let clear_result = panel.clear_chat_history();
+        assert!(clear_result.is_ok(), "Should clear chat history");
+
+        // History should be empty after clearing
+        let history = panel.get_chat_history();
+        assert!(history.is_empty(), "History should be empty after clearing");
+    }
+
+    #[test]
+    fn test_panel_opening_integration_contract() {
+        // Test integration contract for panel opening flow
+        use crate::ui::App;
+        use std::sync::Arc;
+
+        // Create app using the same pattern as existing tests
+        let mut llm_config = crate::config::LlmConfig::default();
+        if std::env::var("OPENAI_API_KEY").is_err() {
+            llm_config.api_key = Some("dummy_key".to_string());
+        }
+        let llm_client = crate::llm::LlmClient::new(llm_config).ok();
+        let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
+        let mut app = App::new_with_config(true, true, crate::ui::Theme::Dark, llm_client, llm_state);
+
+        // Test that toggle_pane_visibility works for advice panel
+        // This is the core integration contract - Ctrl+L should work
+        let result1 = app.toggle_pane_visibility(&PaneId::Advice);
+        assert!(result1.is_ok(), "Should be able to toggle advice panel visibility");
+
+        // Test toggling back
+        let result2 = app.toggle_pane_visibility(&PaneId::Advice);
+        assert!(result2.is_ok(), "Should be able to toggle advice panel back to hidden");
+
+        // Test error handling for invalid pane ID
+        let invalid_result = app.toggle_pane_visibility(&PaneId::FileTree); // FileTree is not togglable
+        // This should either succeed or give a meaningful error
+        assert!(invalid_result.is_ok(), "Should handle invalid pane gracefully");
+    }
+
+    #[test]
+    fn test_panel_opening_keyboard_integration_contract() {
+        // Test contract for keyboard integration - this represents what happens in main.rs
+        // We can't directly test key events here, but we can test the method that gets called
+        use crate::ui::App;
+        use std::sync::Arc;
+
+        // Create app with same pattern as tests
+        let mut llm_config = crate::config::LlmConfig::default();
+        if std::env::var("OPENAI_API_KEY").is_err() {
+            llm_config.api_key = Some("dummy_key".to_string());
+        }
+        let llm_client = crate::llm::LlmClient::new(llm_config).ok();
+        let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
+        let mut app = App::new_with_config(true, true, crate::ui::Theme::Dark, llm_client, llm_state);
+
+        // Test multiple toggles to simulate repeated Ctrl+L presses
+        for i in 0..5 {
+            let result = app.toggle_pane_visibility(&PaneId::Advice);
+            assert!(result.is_ok(), "Ctrl+L toggle {} should succeed", i + 1);
+        }
+    }
+
+    #[test]
+    fn test_chat_conversation_flow_integration_contract() {
+        // Test integration contract for complete chat conversation flow
+        use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
+        use crate::pane::AppEvent;
+
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        // Test initial state - should be in Viewing mode
+        assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should start in Viewing mode");
+
+        // Step 1: Enter chat mode with '/' key
+        let slash_key = AppEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        let handled = panel.handle_event(&slash_key);
+        assert!(handled, "Should handle '/' key to enter chat mode");
+        assert_eq!(panel.get_mode(), AdviceMode::Chatting, "Should be in Chatting mode after '/'");
+
+        // Step 2: Test typing in chat input
+        let test_chars = vec![
+            KeyEvent::new(KeyCode::Char('H'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
+        ];
+
+        for char_key in test_chars {
+            let handled = panel.handle_event(&AppEvent::Key(char_key));
+            assert!(handled, "Should handle character input in chat mode");
+        }
+
+        // Chat input should contain the typed text
+        assert_eq!(panel.chat_input, "Hello", "Chat input should reflect typed characters");
+
+        // Step 3: Test backspace functionality
+        let backspace_key = AppEvent::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        for _ in 0..2 {
+            let handled = panel.handle_event(&backspace_key);
+            assert!(handled, "Should handle backspace in chat mode");
+        }
+
+        assert_eq!(panel.chat_input, "Hel", "Backspace should remove characters");
+
+        // Step 4: Test sending message with Enter key
+        let enter_key = AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let handled = panel.handle_event(&enter_key);
+        assert!(handled, "Should handle Enter key to send message");
+
+        // Chat input should be cleared after sending
+        assert_eq!(panel.chat_input, "", "Chat input should be cleared after sending");
+
+        // Message should be in chat history (implementation dependent)
+        let _history = panel.get_chat_history(); // Method should work
+        assert!(panel.is_chat_available(), "Chat should remain available after sending message");
+
+        // Step 5: Test exit chat mode with ESC
+        let esc_key = AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let handled = panel.handle_event(&esc_key);
+        assert!(handled, "Should handle ESC key to exit chat mode");
+        assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should return to Viewing mode after ESC");
+
+        // Step 6: Test re-entering chat mode
+        let handled = panel.handle_event(&slash_key);
+        assert!(handled, "Should be able to re-enter chat mode");
+        assert_eq!(panel.get_mode(), AdviceMode::Chatting, "Should be back in Chatting mode");
+    }
+
+    #[test]
+    fn test_chat_conversation_error_handling_integration_contract() {
+        // Test error handling in chat conversation flow
+        use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
+        use crate::pane::AppEvent;
+
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        // Enter chat mode
+        let slash_key = AppEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        let handled = panel.handle_event(&slash_key);
+        assert!(handled, "Should enter chat mode successfully");
+
+        // Test sending empty message
+        let enter_key = AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let handled = panel.handle_event(&enter_key);
+        assert!(handled, "Should handle sending empty message gracefully");
+
+        // Test typing very long message
+        let long_text = "a".repeat(1000);
+        for char in long_text.chars() {
+            let key_event = AppEvent::Key(KeyEvent::new(KeyCode::Char(char), KeyModifiers::NONE));
+            let _handled = panel.handle_event(&key_event); // Should handle gracefully
+        }
+
+        // Should still be functional after long input
+        assert_eq!(panel.get_mode(), AdviceMode::Chatting, "Should remain in chat mode");
+        assert!(panel.is_chat_available(), "Chat should still be available");
+    }
+
+    #[test]
+    fn test_help_system_integration_contract() {
+        // Test integration contract for help system
+        use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
+        use crate::pane::AppEvent;
+
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        // Test initial state - should be in Viewing mode
+        assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should start in Viewing mode");
+
+        // Step 1: Enter help mode with '?' key
+        let question_key = AppEvent::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        let handled = panel.handle_event(&question_key);
+        assert!(handled, "Should handle '?' key to enter help mode");
+        assert_eq!(panel.get_mode(), AdviceMode::Help, "Should be in Help mode after '?'");
+
+        // Step 2: Test navigation in help mode
+        let nav_keys = vec![
+            AppEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)), // Down
+            AppEvent::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)), // Up
+        ];
+
+        for nav_key in nav_keys {
+            let handled = panel.handle_event(&nav_key);
+            assert!(handled, "Should handle navigation keys in help mode");
+            // Should remain in help mode during navigation
+            assert_eq!(panel.get_mode(), AdviceMode::Help, "Should stay in Help mode during navigation");
+        }
+
+        // Step 3: Test exit help mode with ESC
+        let esc_key = AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let handled = panel.handle_event(&esc_key);
+        assert!(handled, "Should handle ESC key to exit help mode");
+        assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should return to Viewing mode after ESC");
+
+        // Step 4: Test re-entering help mode
+        let handled = panel.handle_event(&question_key);
+        assert!(handled, "Should be able to re-enter help mode");
+        assert_eq!(panel.get_mode(), AdviceMode::Help, "Should be back in Help mode");
+    }
+
+    #[test]
+    fn test_help_system_from_different_modes_integration_contract() {
+        // Test help system accessibility from different modes
+        use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
+        use crate::pane::AppEvent;
+
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        let _modes_to_test = vec![
+            (AdviceMode::Viewing, "Viewing mode"),
+            // Note: We can't directly set internal modes, but we can test transitions
+        ];
+
+        let question_key = AppEvent::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        let esc_key = AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        // Test from viewing mode
+        let handled = panel.handle_event(&question_key);
+        assert!(handled, "Should enter help from viewing mode");
+        assert_eq!(panel.get_mode(), AdviceMode::Help, "Should be in help mode");
+
+        // Exit and test again
+        let handled = panel.handle_event(&esc_key);
+        assert!(handled, "Should exit help mode");
+        assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should return to viewing mode");
+
+        // Test entering help mode multiple times
+        for i in 0..3 {
+            let handled = panel.handle_event(&question_key);
+            assert!(handled, "Should enter help mode on attempt {}", i + 1);
+            assert_eq!(panel.get_mode(), AdviceMode::Help, "Should be in help mode");
+
+            let handled = panel.handle_event(&esc_key);
+            assert!(handled, "Should exit help mode on attempt {}", i + 1);
+            assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should return to viewing mode");
+        }
+    }
+
+    #[test]
+    fn test_help_system_error_handling_integration_contract() {
+        // Test error handling in help system
+        use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
+        use crate::pane::AppEvent;
+
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        // Enter help mode
+        let question_key = AppEvent::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        panel.handle_event(&question_key);
+
+        // Test various key inputs in help mode - should handle gracefully
+        let test_keys = vec![
+            AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)), // Regular char
+            AppEvent::Key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE)), // Number
+            AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),  // Enter
+            AppEvent::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),    // Tab
+            AppEvent::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)), // Backspace
+        ];
+
+        for test_key in test_keys {
+            let _handled = panel.handle_event(&test_key);
+            // Most keys should not be handled in help mode (only j, k, ESC)
+            // but should not cause errors
+            // The important thing is that the panel remains stable
+            assert_eq!(panel.get_mode(), AdviceMode::Help, "Should remain in help mode after key input");
+        }
+
+        // Test that we can still exit normally
+        let esc_key = AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let handled = panel.handle_event(&esc_key);
+        assert!(handled, "Should be able to exit help mode after various key inputs");
+        assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should return to viewing mode");
+    }
 }
