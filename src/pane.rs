@@ -3108,6 +3108,8 @@ impl Pane for AdvicePanel {
                                 }
                                 KeyCode::Char('?') => {
                                     self.mode = AdviceMode::Help;
+                                    // Reset scroll offset when entering help mode
+                                    self.scroll_offset = 0;
                                     // Set help content when entering help mode
                                     let help_text = vec![
                                         "Git Repository Watcher - Chat Interface Help",
@@ -3209,8 +3211,9 @@ impl Pane for AdvicePanel {
                     AdviceMode::Help => {
                         match key_event.code {
                             KeyCode::Esc => {
+                                // Exit help mode and let parent handle closing the panel
                                 self.mode = AdviceMode::Chatting;
-                                true
+                                false // Let parent handle Esc for panel closing
                             }
                             KeyCode::Char('j') | KeyCode::Down => {
                                 self.scroll_offset = self.scroll_offset.saturating_add(1);
@@ -3237,10 +3240,10 @@ impl Pane for AdvicePanel {
         let was_visible = self.visible;
         self.visible = visible;
 
-        // When panel becomes visible, trigger initial advice generation
+        // When panel becomes visible, set up chat input state but preserve history
         if visible && !was_visible {
-            debug!("🎯 ADVICE_PANEL: Panel became visible, triggering initial advice generation");
-            self.trigger_initial_advice();
+            debug!("🎯 ADVICE_PANEL: Panel became visible");
+            self.chat_input_active = false;
         }
     }
 
