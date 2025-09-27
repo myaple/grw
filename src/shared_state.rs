@@ -169,6 +169,12 @@ pub struct LlmSharedState {
 
     /// Error states
     error_state: HashMap<String, String>,
+
+    /// Advice panel state management
+    advice_cache: HashMap<String, String>, // diff_hash -> cached advice JSON
+    active_advice_tasks: HashMap<String, u64>, // diff_hash -> timestamp
+    chat_sessions: HashMap<String, String>, // session_id -> chat history JSON
+    advice_error_state: HashMap<String, String>, // operation_key -> error message
 }
 
 impl Default for LlmSharedState {
@@ -183,6 +189,10 @@ impl LlmSharedState {
             summary_cache: HashMap::new(),
             active_summary_tasks: HashMap::new(),
             error_state: HashMap::new(),
+            advice_cache: HashMap::new(),
+            active_advice_tasks: HashMap::new(),
+            chat_sessions: HashMap::new(),
+            advice_error_state: HashMap::new(),
         }
     }
 
@@ -287,6 +297,108 @@ impl LlmSharedState {
         for task in stale_summary_tasks {
             let _ = self.active_summary_tasks.remove(&task);
         }
+    }
+
+    // === Advice Panel Methods ===
+
+    /// Cache advice for a specific diff hash
+    pub fn cache_advice(&self, diff_hash: String, advice: String) {
+        let _ = self.advice_cache.insert(diff_hash, advice);
+    }
+
+    /// Get cached advice for a specific diff hash
+    pub fn get_cached_advice(&self, diff_hash: &str) -> Option<String> {
+        self.advice_cache.read(diff_hash, |_, v| v.clone())
+    }
+
+    /// Check if advice is currently being generated for a diff
+    pub fn is_advice_generating(&self, diff_hash: &str) -> bool {
+        self.active_advice_tasks.contains(diff_hash)
+    }
+
+    /// Start tracking an advice generation task
+    pub fn start_advice_task(&self, diff_hash: String) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = self.active_advice_tasks.insert(diff_hash, timestamp);
+    }
+
+    /// Complete an advice generation task
+    pub fn complete_advice_task(&self, diff_hash: &str) {
+        let _ = self.active_advice_tasks.remove(diff_hash);
+    }
+
+    /// Save a chat session
+    pub fn save_chat_session(&self, session_id: String, chat_history: String) {
+        let _ = self.chat_sessions.insert(session_id, chat_history);
+    }
+
+    /// Load a chat session
+    pub fn load_chat_session(&self, session_id: &str) -> Option<String> {
+        self.chat_sessions.read(session_id, |_, v| v.clone())
+    }
+
+    /// Delete a chat session
+    pub fn delete_chat_session(&self, session_id: &str) -> bool {
+        self.chat_sessions.remove(session_id).is_some()
+    }
+
+    /// Set advice panel error state
+    pub fn set_advice_error(&self, key: String, error: String) {
+        let _ = self.advice_error_state.insert(key, error);
+    }
+
+    /// Get advice panel error state
+    pub fn get_advice_error(&self, key: &str) -> Option<String> {
+        self.advice_error_state.read(key, |_, v| v.clone())
+    }
+
+    /// Clear advice panel error state
+    pub fn clear_advice_error(&self, key: &str) -> bool {
+        self.advice_error_state.remove(key).is_some()
+    }
+
+    /// Get count of active advice tasks
+    pub fn active_advice_task_count(&self) -> usize {
+        self.active_advice_tasks.len()
+    }
+
+    /// Get all active advice tasks
+    pub fn get_active_advice_tasks(&self) -> Vec<(String, u64)> {
+        let mut tasks = Vec::new();
+        self.active_advice_tasks.scan(|k, v| {
+            tasks.push((k.clone(), *v));
+        });
+        tasks
+    }
+
+    /// Clean up stale advice tasks older than threshold
+    pub fn cleanup_stale_advice_tasks(&self, threshold_seconds: u64) {
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let mut stale_tasks = Vec::new();
+        self.active_advice_tasks.scan(|k, v| {
+            if current_time.saturating_sub(*v) > threshold_seconds {
+                stale_tasks.push(k.clone());
+            }
+        });
+
+        for task in stale_tasks {
+            let _ = self.active_advice_tasks.remove(&task);
+        }
+    }
+
+    /// Clear all advice-related state (for cleanup/reset)
+    pub fn clear_all_advice_state(&self) {
+        self.advice_cache.clear();
+        self.active_advice_tasks.clear();
+        self.chat_sessions.clear();
+        self.advice_error_state.clear();
     }
 }
 

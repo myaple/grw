@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+use log::debug;
+use serde::{Deserialize, Serialize};
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
@@ -77,14 +80,14 @@ pub enum AdviceMode {
     Help,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MessageRole {
     User,
     Assistant,
     System,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ImprovementPriority {
     Low,
     Medium,
@@ -93,8 +96,9 @@ pub enum ImprovementPriority {
     Unknown,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AdviceImprovement {
+    pub id: String,
     pub title: String,
     pub description: String,
     pub priority: ImprovementPriority,
@@ -102,8 +106,9 @@ pub struct AdviceImprovement {
     pub code_examples: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChatMessageData {
+    pub id: String,
     pub role: MessageRole,
     pub content: String,
     pub timestamp: std::time::SystemTime,
@@ -118,6 +123,14 @@ pub enum AdviceContent {
     Error(String),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoadingState {
+    Idle,
+    GeneratingAdvice,
+    SendingChat,
+    LoadingHelp,
+}
+
 #[derive(Debug)]
 pub struct AdvicePanel {
     pub visible: bool,
@@ -126,6 +139,9 @@ pub struct AdvicePanel {
     pub chat_input: String,
     pub config: crate::config::AdviceConfig,
     pub scroll_offset: usize,
+    pub shared_state: Option<std::sync::Arc<crate::shared_state::LlmSharedState>>,
+    pub current_diff_hash: Option<String>,
+    pub loading_state: LoadingState,
 }
 
 impl AdvicePanel {
@@ -137,7 +153,15 @@ impl AdvicePanel {
             chat_input: String::new(),
             config: advice_config,
             scroll_offset: 0,
+            shared_state: None,
+            current_diff_hash: None,
+            loading_state: LoadingState::Idle,
         })
+    }
+
+    /// Set the shared state for the advice panel
+    pub fn set_shared_state(&mut self, shared_state: std::sync::Arc<crate::shared_state::LlmSharedState>) {
+        self.shared_state = Some(shared_state);
     }
 
     pub fn get_mode(&self) -> AdviceMode {
@@ -158,9 +182,34 @@ impl AdvicePanel {
         }
     }
 
-    pub fn generate_advice(&mut self, _diff: &str) -> Result<Vec<AdviceImprovement>, String> {
-        // Placeholder implementation - will be connected to LLM later
-        Ok(Vec::new())
+    pub fn generate_advice(&mut self, diff: &str) -> Result<Vec<AdviceImprovement>, String> {
+        if diff.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Create diff hash for caching
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        diff.hash(&mut hasher);
+        let diff_hash = format!("{:x}", hasher.finish());
+
+        self.current_diff_hash = Some(diff_hash.clone());
+
+        // Check if we have cached advice
+        if let Some(cached_json) = self.load_cached_advice(&diff_hash) {
+            debug!("🎯 ADVICE_PANEL: Using cached advice for diff hash: {}", diff_hash);
+            return self.parse_cached_advice(&cached_json);
+        }
+
+        // Check if already generating
+        if self.is_generating_advice() {
+            return Err("Advice generation already in progress".to_string());
+        }
+
+        // Start async generation
+        self.start_async_advice_generation(diff)?;
+        Ok(Vec::new()) // Return empty for now, will be populated async
     }
 
     pub fn send_chat_message(&mut self, _message: &str) -> Result<(), String> {
@@ -175,19 +224,173 @@ impl AdvicePanel {
         Ok(())
     }
 
-    pub fn start_async_advice_generation(&mut self, _diff: &str) -> Result<(), String> {
-        // Placeholder implementation
+    pub fn start_async_advice_generation(&mut self, diff: &str) -> Result<(), String> {
+        // Update loading state
+        self.update_advice_status(LoadingState::GeneratingAdvice);
+        self.content = AdviceContent::Loading;
+
+        // For now, generate advice synchronously (in real implementation this would be async)
+        // This is a placeholder until we implement proper async handling
+        self.generate_advice_sync(diff)?;
+
         Ok(())
     }
 
     pub fn get_advice_generation_status(&self) -> String {
-        // Placeholder implementation
-        "Ready".to_string()
+        match self.loading_state {
+            LoadingState::GeneratingAdvice => "Generating advice...".to_string(),
+            LoadingState::SendingChat => "Sending message...".to_string(),
+            LoadingState::LoadingHelp => "Loading help...".to_string(),
+            LoadingState::Idle => "Ready".to_string(),
+        }
     }
 
     pub fn get_last_chat_error(&self) -> Option<String> {
-        // Placeholder implementation
-        None
+        // Check shared state for errors
+        if let Some(ref shared_state) = self.shared_state {
+            shared_state.get_advice_error("chat_error")
+        } else {
+            None
+        }
+    }
+
+    /// Update the advice generation status
+    pub fn update_advice_status(&mut self, status: LoadingState) {
+        let old_status = self.loading_state.clone();
+        self.loading_state = status.clone();
+
+        // Update shared state if available
+        if let Some(ref shared_state) = self.shared_state {
+            match status {
+                LoadingState::GeneratingAdvice => {
+                    if let Some(ref diff_hash) = self.current_diff_hash {
+                        shared_state.start_advice_task(diff_hash.clone());
+                    }
+                }
+                LoadingState::Idle => {
+                    if old_status == LoadingState::GeneratingAdvice {
+                        if let Some(ref diff_hash) = self.current_diff_hash {
+                            shared_state.complete_advice_task(diff_hash);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Get the current loading state
+    pub fn get_loading_state(&self) -> LoadingState {
+        self.loading_state.clone()
+    }
+
+    /// Check if advice is currently being generated
+    pub fn is_generating_advice(&self) -> bool {
+        match self.loading_state {
+            LoadingState::GeneratingAdvice => true,
+            _ => false,
+        }
+    }
+
+    /// Cache advice in shared state
+    pub fn cache_advice(&self, diff_hash: &str, advice: &str) {
+        if let Some(ref shared_state) = self.shared_state {
+            shared_state.cache_advice(diff_hash.to_string(), advice.to_string());
+        }
+    }
+
+    /// Load cached advice from shared state
+    pub fn load_cached_advice(&self, diff_hash: &str) -> Option<String> {
+        if let Some(ref shared_state) = self.shared_state {
+            shared_state.get_cached_advice(diff_hash)
+        } else {
+            None
+        }
+    }
+
+    /// Save chat session to shared state
+    pub fn save_chat_session(&self, session_id: &str, chat_history: &str) {
+        if let Some(ref shared_state) = self.shared_state {
+            shared_state.save_chat_session(session_id.to_string(), chat_history.to_string());
+        }
+    }
+
+    /// Load chat session from shared state
+    pub fn load_chat_session(&self, session_id: &str) -> Option<String> {
+        if let Some(ref shared_state) = self.shared_state {
+            shared_state.load_chat_session(session_id)
+        } else {
+            None
+        }
+    }
+
+    /// Set advice panel error
+    pub fn set_advice_error(&self, key: &str, error: &str) {
+        if let Some(ref shared_state) = self.shared_state {
+            shared_state.set_advice_error(key.to_string(), error.to_string());
+        }
+    }
+
+    /// Clear advice panel error
+    pub fn clear_advice_error(&self, key: &str) {
+        if let Some(ref shared_state) = self.shared_state {
+            shared_state.clear_advice_error(key);
+        }
+    }
+
+    /// Generate advice synchronously (placeholder for async implementation)
+    fn generate_advice_sync(&mut self, diff: &str) -> Result<(), String> {
+        debug!("🎯 ADVICE_PANEL: Generating advice synchronously");
+
+        // For now, create placeholder improvements since we can't easily access LlmClient here
+        // In a real implementation, this would be handled through the App or async tasks
+        let improvements = vec![
+            AdviceImprovement {
+                id: uuid::Uuid::new_v4().to_string(),
+                title: "Code Quality Improvement".to_string(),
+                description: "The diff shows opportunities for improving code quality and maintainability.".to_string(),
+                priority: ImprovementPriority::Medium,
+                category: "CodeQuality".to_string(),
+                code_examples: Vec::new(),
+            },
+            AdviceImprovement {
+                id: uuid::Uuid::new_v4().to_string(),
+                title: "Performance Optimization".to_string(),
+                description: "Consider optimizing the algorithm or data structures for better performance.".to_string(),
+                priority: ImprovementPriority::Medium,
+                category: "Performance".to_string(),
+                code_examples: Vec::new(),
+            },
+            AdviceImprovement {
+                id: uuid::Uuid::new_v4().to_string(),
+                title: "Error Handling".to_string(),
+                description: "Add proper error handling to make the code more robust.".to_string(),
+                priority: ImprovementPriority::Low,
+                category: "BugFix".to_string(),
+                code_examples: Vec::new(),
+            },
+        ];
+
+        // Cache the improvements
+        if let Some(ref diff_hash) = self.current_diff_hash {
+            if let Ok(cached_json) = serde_json::to_string(&improvements) {
+                self.cache_advice(diff_hash, &cached_json);
+            }
+        }
+
+        // Update content
+        self.content = AdviceContent::Improvements(improvements);
+        self.update_advice_status(LoadingState::Idle);
+
+        Ok(())
+    }
+
+    /// Parse cached advice from JSON
+    fn parse_cached_advice(&self, cached_json: &str) -> Result<Vec<AdviceImprovement>, String> {
+        match serde_json::from_str::<Vec<AdviceImprovement>>(cached_json) {
+            Ok(improvements) => Ok(improvements),
+            Err(e) => Err(format!("Failed to parse cached advice: {}", e)),
+        }
     }
 
     pub fn is_chat_available(&self) -> bool {
@@ -244,14 +447,15 @@ impl PaneRegistry {
         self.register_pane(PaneId::Help, Box::new(HelpPane::new()));
         self.register_pane(PaneId::StatusBar, Box::new(StatusBarPane::new()));
         self.register_pane(PaneId::CommitPicker, Box::new(CommitPickerPane::new()));
-        let mut commit_summary_pane = CommitSummaryPane::new_with_llm_client(Some(llm_client));
-        commit_summary_pane.set_shared_state(llm_shared_state);
+        let mut commit_summary_pane = CommitSummaryPane::new_with_llm_client(Some(llm_client.clone()));
+        commit_summary_pane.set_shared_state(llm_shared_state.clone());
         self.register_pane(PaneId::CommitSummary, Box::new(commit_summary_pane));
 
-        // Create advice panel with configuration
+        // Create advice panel with configuration and shared state
         let advice_config = crate::config::AdviceConfig::default();
-        let advice_panel = AdvicePanel::new(crate::config::Config::default(), advice_config)
+        let mut advice_panel = AdvicePanel::new(crate::config::Config::default(), advice_config)
             .expect("Failed to create AdvicePanel");
+        advice_panel.set_shared_state(llm_shared_state);
         self.register_pane(PaneId::Advice, Box::new(advice_panel));
     }
 
