@@ -173,7 +173,7 @@ pub struct LlmSharedState {
     /// Advice panel state management
     advice_cache: HashMap<String, String>, // diff_hash -> cached advice JSON
     active_advice_tasks: HashMap<String, u64>, // diff_hash -> timestamp
-    chat_sessions: HashMap<String, String>, // session_id -> chat history JSON
+    chat_sessions: HashMap<String, String>,    // session_id -> chat history JSON
     advice_error_state: HashMap<String, String>, // operation_key -> error message
 
     /// Current advice content storage for async task results
@@ -414,13 +414,21 @@ impl LlmSharedState {
     // === Advice Results Storage for Async Tasks ===
 
     /// Store advice results for a specific diff hash
-    pub fn store_advice_results(&self, diff_hash: String, results: Vec<crate::pane::AdviceImprovement>) {
+    pub fn store_advice_results(
+        &self,
+        diff_hash: String,
+        results: Vec<crate::pane::AdviceImprovement>,
+    ) {
         let _ = self.current_advice_results.insert(diff_hash, results);
     }
 
     /// Retrieve advice results for a specific diff hash
-    pub fn get_advice_results(&self, diff_hash: &str) -> Option<Vec<crate::pane::AdviceImprovement>> {
-        self.current_advice_results.read(diff_hash, |_, v| v.clone())
+    pub fn get_advice_results(
+        &self,
+        diff_hash: &str,
+    ) -> Option<Vec<crate::pane::AdviceImprovement>> {
+        self.current_advice_results
+            .read(diff_hash, |_, v| v.clone())
     }
 
     /// Check if advice results are available for a specific diff hash
@@ -441,13 +449,21 @@ impl LlmSharedState {
     // === Chat Response Storage for Async Tasks ===
 
     /// Store a pending chat response for a specific message ID
-    pub fn store_pending_chat_response(&self, message_id: String, response: crate::pane::ChatMessageData) {
+    pub fn store_pending_chat_response(
+        &self,
+        message_id: String,
+        response: crate::pane::ChatMessageData,
+    ) {
         let _ = self.pending_chat_responses.insert(message_id, response);
     }
 
     /// Retrieve a pending chat response for a specific message ID
-    pub fn get_pending_chat_response(&self, message_id: &str) -> Option<crate::pane::ChatMessageData> {
-        self.pending_chat_responses.read(message_id, |_, v| v.clone())
+    pub fn get_pending_chat_response(
+        &self,
+        message_id: &str,
+    ) -> Option<crate::pane::ChatMessageData> {
+        self.pending_chat_responses
+            .read(message_id, |_, v| v.clone())
     }
 
     /// Check if there's a pending chat response for a specific message ID

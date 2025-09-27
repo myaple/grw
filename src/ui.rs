@@ -642,10 +642,9 @@ impl App {
         };
 
         // Toggle visibility
-        self.pane_registry
-            .with_pane_mut(pane_id, |pane| {
-                pane.set_visible(!is_visible);
-            });
+        self.pane_registry.with_pane_mut(pane_id, |pane| {
+            pane.set_visible(!is_visible);
+        });
 
         // Special handling for advice panel to ensure it takes over the entire screen
         if *pane_id == PaneId::Advice {
@@ -667,10 +666,9 @@ impl App {
 
         for &pane_id in panes_to_check {
             if pane_id != except_pane {
-                self.pane_registry
-                    .with_pane_mut(&pane_id, |pane| {
-                        pane.set_visible(false);
-                    });
+                self.pane_registry.with_pane_mut(&pane_id, |pane| {
+                    pane.set_visible(false);
+                });
             }
         }
     }
@@ -693,12 +691,9 @@ impl App {
         if let Some(advice_pane) = self.pane_registry.get_pane(&PaneId::Advice)
             && advice_pane.visible()
         {
-            if let Some(pane_handled) = self
-                .pane_registry
-                .with_pane_mut(&PaneId::Advice, |pane| {
-                    pane.handle_event(&crate::pane::AppEvent::Key(key))
-                })
-            {
+            if let Some(pane_handled) = self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
+                pane.handle_event(&crate::pane::AppEvent::Key(key))
+            }) {
                 handled |= pane_handled;
             }
             return handled; // Advice panel gets priority when visible
@@ -1106,12 +1101,11 @@ impl App {
 
     /// Check for async advice panel task completion and update content
     pub fn check_advice_panel_tasks(&mut self) {
-        self.pane_registry
-            .with_pane_mut(&PaneId::Advice, |pane| {
-                if let Some(advice_panel) = pane.as_advice_pane_mut() {
-                    advice_panel.check_pending_tasks();
-                }
-            });
+        self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
+            if let Some(advice_panel) = pane.as_advice_pane_mut() {
+                advice_panel.check_pending_tasks();
+            }
+        });
     }
 
     /// Check if advice panel is currently visible

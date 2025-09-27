@@ -273,10 +273,7 @@ pub struct Args {
     )]
     pub llm_summary_model: Option<String>,
 
-    #[arg(
-        long,
-        help = "LLM model to use specifically for advice generation"
-    )]
+    #[arg(long, help = "LLM model to use specifically for advice generation")]
     pub llm_advice_model: Option<String>,
 
     #[arg(long, help = "API key for the LLM provider")]

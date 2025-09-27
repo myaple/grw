@@ -554,7 +554,7 @@ fn handle_key_event(
             app.set_side_by_side_diff();
             false
         }
-                KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.toggle_diff_panel();
             false
         }

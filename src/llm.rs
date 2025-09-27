@@ -136,8 +136,14 @@ impl LlmClient {
         max_improvements: usize,
     ) -> Result<Vec<crate::pane::AdviceImprovement>, String> {
         let start_time = tokio::time::Instant::now();
-        debug!("🤖 LLM_CLIENT: Generating advice for diff ({} chars)", diff_content.len());
-        debug!("🤖 LLM_CLIENT: Using model: {}", self.config.get_advice_model());
+        debug!(
+            "🤖 LLM_CLIENT: Generating advice for diff ({} chars)",
+            diff_content.len()
+        );
+        debug!(
+            "🤖 LLM_CLIENT: Using model: {}",
+            self.config.get_advice_model()
+        );
 
         // Build the prompt for code improvement advice
         let system_prompt = format!(
@@ -188,13 +194,19 @@ impl LlmClient {
             },
         ];
 
-        debug!("🤖 LLM_CLIENT: About to make HTTP request to LLM API with {} messages", messages.len());
+        debug!(
+            "🤖 LLM_CLIENT: About to make HTTP request to LLM API with {} messages",
+            messages.len()
+        );
         let result = self
             .make_llm_request(self.config.get_advice_model(), messages)
             .await;
 
         let execution_time = start_time.elapsed();
-        debug!("🤖 LLM_CLIENT: Advice generation completed in {:?}", execution_time);
+        debug!(
+            "🤖 LLM_CLIENT: Advice generation completed in {:?}",
+            execution_time
+        );
 
         match result {
             Ok(content) => {
@@ -226,7 +238,8 @@ impl LlmClient {
                     "You are an expert software engineer helping with code improvements. \
                     The user is asking about specific code changes and improvements. \
                     Be helpful, specific, and provide practical advice. \
-                    Keep your responses concise but thorough.".to_string(),
+                    Keep your responses concise but thorough."
+                        .to_string(),
                 ),
                 name: None,
                 tool_calls: None,
@@ -234,9 +247,10 @@ impl LlmClient {
             },
             ChatCompletionMessage {
                 role: chat_completion::MessageRole::user,
-                content: chat_completion::Content::Text(
-                    format!("Here is the original git diff for context:\n\n{}", original_diff),
-                ),
+                content: chat_completion::Content::Text(format!(
+                    "Here is the original git diff for context:\n\n{}",
+                    original_diff
+                )),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -268,13 +282,19 @@ impl LlmClient {
             tool_call_id: None,
         });
 
-        debug!("🤖 LLM_CLIENT: About to make HTTP request to LLM API with {} messages", context_messages.len());
+        debug!(
+            "🤖 LLM_CLIENT: About to make HTTP request to LLM API with {} messages",
+            context_messages.len()
+        );
         let result = self
             .make_llm_request(self.config.get_advice_model(), context_messages)
             .await;
 
         let execution_time = start_time.elapsed();
-        debug!("🤖 LLM_CLIENT: Chat follow-up completed in {:?}", execution_time);
+        debug!(
+            "🤖 LLM_CLIENT: Chat follow-up completed in {:?}",
+            execution_time
+        );
 
         match result {
             Ok(content) => Ok(crate::pane::ChatMessageData {
@@ -325,7 +345,10 @@ impl LlmClient {
                 })
                 .collect();
 
-            debug!("🤖 LLM_CLIENT: Parsed {} improvements from JSON response", improvements.len());
+            debug!(
+                "🤖 LLM_CLIENT: Parsed {} improvements from JSON response",
+                improvements.len()
+            );
             return Ok(improvements);
         }
 
@@ -361,10 +384,13 @@ impl LlmClient {
             let trimmed = line.trim();
 
             // Look for improvement indicators (numbered, bullet points, or strong headings)
-            if trimmed.starts_with("1.") || trimmed.starts_with("2.") || trimmed.starts_with("3.")
-                || trimmed.starts_with("- ") || trimmed.starts_with("* ")
-                || (trimmed.starts_with("**") && trimmed.ends_with("**")) {
-
+            if trimmed.starts_with("1.")
+                || trimmed.starts_with("2.")
+                || trimmed.starts_with("3.")
+                || trimmed.starts_with("- ")
+                || trimmed.starts_with("* ")
+                || (trimmed.starts_with("**") && trimmed.ends_with("**"))
+            {
                 // Save previous improvement if we have one
                 if !current_title.is_empty() {
                     improvements.push(crate::pane::AdviceImprovement {
@@ -422,7 +448,10 @@ impl LlmClient {
             });
         }
 
-        debug!("🤖 LLM_CLIENT: Extracted {} improvements from text", improvements.len());
+        debug!(
+            "🤖 LLM_CLIENT: Extracted {} improvements from text",
+            improvements.len()
+        );
         Ok(improvements)
     }
 
@@ -433,7 +462,11 @@ impl LlmClient {
         diff_content: String,
         max_improvements: usize,
     ) -> Result<Vec<crate::pane::AdviceImprovement>, String> {
-        debug!("🤖 LLM_CLIENT: blocking_generate_advice called with diff length: {}, max_improvements: {}", diff_content.len(), max_improvements);
+        debug!(
+            "🤖 LLM_CLIENT: blocking_generate_advice called with diff length: {}, max_improvements: {}",
+            diff_content.len(),
+            max_improvements
+        );
 
         // For now, return a placeholder to avoid runtime conflicts
         // TODO: Implement a proper sync HTTP client using reqwest blocking
@@ -458,7 +491,10 @@ impl LlmClient {
             },
         ];
 
-        debug!("🤖 LLM_CLIENT: blocking_generate_advice returning {} placeholder improvements", improvements.len());
+        debug!(
+            "🤖 LLM_CLIENT: blocking_generate_advice returning {} placeholder improvements",
+            improvements.len()
+        );
         Ok(improvements)
     }
 
@@ -469,13 +505,19 @@ impl LlmClient {
         _conversation_history: Vec<crate::pane::ChatMessageData>,
         _original_diff: String,
     ) -> Result<crate::pane::ChatMessageData, String> {
-        debug!("🤖 LLM_CLIENT: blocking_send_chat_followup called with question: {}", question);
+        debug!(
+            "🤖 LLM_CLIENT: blocking_send_chat_followup called with question: {}",
+            question
+        );
 
         // Return a placeholder response to avoid runtime conflicts
         Ok(crate::pane::ChatMessageData {
             id: uuid::Uuid::new_v4().to_string(),
             role: crate::pane::MessageRole::Assistant,
-            content: format!("This is a placeholder response for your question: '{}'. Full chat functionality requires implementing a sync HTTP client or refactoring to async architecture.", question),
+            content: format!(
+                "This is a placeholder response for your question: '{}'. Full chat functionality requires implementing a sync HTTP client or refactoring to async architecture.",
+                question
+            ),
             timestamp: std::time::SystemTime::now(),
         })
     }

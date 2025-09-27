@@ -7,10 +7,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::Rect,
+    prelude::Stylize,
     style::{Color, Modifier, Style},
     text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
-    prelude::Stylize,
 };
 
 use crate::git::GitRepo;
@@ -166,7 +166,10 @@ pub struct AdvicePanel {
 }
 
 impl AdvicePanel {
-    pub fn new(_config: crate::config::Config, advice_config: crate::config::AdviceConfig) -> Result<Self, String> {
+    pub fn new(
+        _config: crate::config::Config,
+        advice_config: crate::config::AdviceConfig,
+    ) -> Result<Self, String> {
         Ok(Self {
             visible: false,
             mode: AdviceMode::Chatting,
@@ -190,7 +193,10 @@ impl AdvicePanel {
     }
 
     /// Set the shared state for the advice panel
-    pub fn set_shared_state(&mut self, shared_state: std::sync::Arc<crate::shared_state::LlmSharedState>) {
+    pub fn set_shared_state(
+        &mut self,
+        shared_state: std::sync::Arc<crate::shared_state::LlmSharedState>,
+    ) {
         self.shared_state = Some(shared_state);
     }
 
@@ -234,7 +240,10 @@ impl AdvicePanel {
 
         // Check if we have cached advice
         if let Some(cached_json) = self.load_cached_advice(&diff_hash) {
-            debug!("🎯 ADVICE_PANEL: Using cached advice for diff hash: {}", diff_hash);
+            debug!(
+                "🎯 ADVICE_PANEL: Using cached advice for diff hash: {}",
+                diff_hash
+            );
             return self.parse_cached_advice(&cached_json);
         }
 
@@ -290,7 +299,10 @@ impl AdvicePanel {
 
         // Spawn async task for chat response generation
         let task = tokio::spawn(async move {
-            debug!("🎯 ADVICE_PANEL: Async chat task started for message: {}", message_content);
+            debug!(
+                "🎯 ADVICE_PANEL: Async chat task started for message: {}",
+                message_content
+            );
 
             let result = async {
                 // Try to use LLM client if available
@@ -298,7 +310,10 @@ impl AdvicePanel {
                     let client = llm_client.lock().await;
                     debug!("🎯 ADVICE_PANEL: About to call LLM send_chat_followup");
 
-                    match client.send_chat_followup(message_content, conversation_history, diff_content).await {
+                    match client
+                        .send_chat_followup(message_content, conversation_history, diff_content)
+                        .await
+                    {
                         Ok(ai_message) => {
                             debug!("🎯 ADVICE_PANEL: Successfully generated AI chat response");
                             Ok(ai_message)
@@ -311,13 +326,15 @@ impl AdvicePanel {
                 } else {
                     Err("LLM client not available".to_string())
                 }
-            }.await;
+            }
+            .await;
 
             // Store results in shared state
             if let Some(shared_state) = shared_state_clone {
                 match result {
                     Ok(ai_message) => {
-                        shared_state.store_pending_chat_response(message_id_clone.clone(), ai_message);
+                        shared_state
+                            .store_pending_chat_response(message_id_clone.clone(), ai_message);
                         debug!("🎯 ADVICE_PANEL: Stored chat response in shared state");
                     }
                     Err(e) => {
@@ -329,12 +346,14 @@ impl AdvicePanel {
         });
 
         self.pending_chat_task = Some(task);
-        debug!("🎯 ADVICE_PANEL: Spawned async chat generation task with message ID: {}", user_message_id);
+        debug!(
+            "🎯 ADVICE_PANEL: Spawned async chat generation task with message ID: {}",
+            user_message_id
+        );
 
         Ok(())
     }
 
-    
     pub fn clear_chat_history(&mut self) -> Result<(), String> {
         if let AdviceContent::Chat(messages) = &mut self.content {
             messages.clear();
@@ -355,7 +374,10 @@ impl AdvicePanel {
         // Check if we already have results for this diff
         if let Some(shared_state) = &self.shared_state {
             if let Some(cached_results) = shared_state.get_advice_results(&diff_hash) {
-                debug!("🎯 ADVICE_PANEL: Found cached advice results for diff hash: {}", diff_hash);
+                debug!(
+                    "🎯 ADVICE_PANEL: Found cached advice results for diff hash: {}",
+                    diff_hash
+                );
                 self.content = AdviceContent::Improvements(cached_results);
                 self.update_advice_status(LoadingState::Idle);
                 return Ok(());
@@ -369,7 +391,10 @@ impl AdvicePanel {
         let diff_content = diff.to_string();
 
         let task = tokio::spawn(async move {
-            debug!("🎯 ADVICE_PANEL: Async advice task started with {} chars", diff_content.len());
+            debug!(
+                "🎯 ADVICE_PANEL: Async advice task started with {} chars",
+                diff_content.len()
+            );
 
             let result = async {
                 // Try to use LLM client if available
@@ -379,7 +404,10 @@ impl AdvicePanel {
 
                     match client.generate_advice(diff_content, 3).await {
                         Ok(improvements) => {
-                            debug!("🎯 ADVICE_PANEL: Successfully generated {} improvements", improvements.len());
+                            debug!(
+                                "🎯 ADVICE_PANEL: Successfully generated {} improvements",
+                                improvements.len()
+                            );
                             Ok(improvements)
                         }
                         Err(e) => {
@@ -390,7 +418,8 @@ impl AdvicePanel {
                 } else {
                     Err("LLM client not available".to_string())
                 }
-            }.await;
+            }
+            .await;
 
             // Store results in shared state
             if let Some(shared_state) = shared_state_clone {
@@ -408,7 +437,9 @@ impl AdvicePanel {
         });
 
         self.pending_advice_task = Some(task);
-        debug!("🎯 ADVICE_PANEL: Started async advice generation via start_async_advice_generation");
+        debug!(
+            "🎯 ADVICE_PANEL: Started async advice generation via start_async_advice_generation"
+        );
 
         Ok(())
     }
@@ -419,7 +450,6 @@ impl AdvicePanel {
         self.current_diff_content.borrow().clone()
     }
 
-    
     /// Check and update pending async tasks
     pub fn check_pending_tasks(&mut self) {
         // Check if async advice task has completed
@@ -449,24 +479,31 @@ impl AdvicePanel {
 
     /// Update panel content from shared state when async tasks complete
     fn update_content_from_shared_state(&mut self) {
-        if let (Some(shared_state), Some(diff_hash)) = (&self.shared_state, &self.current_diff_hash) {
+        if let (Some(shared_state), Some(diff_hash)) = (&self.shared_state, &self.current_diff_hash)
+        {
             // Check if we have results for this diff
             if let Some(results) = shared_state.get_advice_results(diff_hash) {
-                debug!("🎯 ADVICE_PANEL: Updating panel with {} improvements from shared state", results.len());
+                debug!(
+                    "🎯 ADVICE_PANEL: Updating panel with {} improvements from shared state",
+                    results.len()
+                );
                 self.content = AdviceContent::Improvements(results);
                 self.update_advice_status(LoadingState::Idle);
-            } else if let Some(error) = shared_state.get_advice_error(&format!("advice_{}", diff_hash)) {
-                debug!("🎯 ADVICE_PANEL: Updating panel with error from shared state: {}", error);
-                let improvements = vec![
-                    AdviceImprovement {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        title: "Advice Generation Failed".to_string(),
-                        description: format!("Failed to generate advice: {}", error),
-                        priority: ImprovementPriority::High,
-                        category: "Error".to_string(),
-                        code_examples: Vec::new(),
-                    },
-                ];
+            } else if let Some(error) =
+                shared_state.get_advice_error(&format!("advice_{}", diff_hash))
+            {
+                debug!(
+                    "🎯 ADVICE_PANEL: Updating panel with error from shared state: {}",
+                    error
+                );
+                let improvements = vec![AdviceImprovement {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    title: "Advice Generation Failed".to_string(),
+                    description: format!("Failed to generate advice: {}", error),
+                    priority: ImprovementPriority::High,
+                    category: "Error".to_string(),
+                    code_examples: Vec::new(),
+                }];
                 self.content = AdviceContent::Improvements(improvements);
                 self.update_advice_status(LoadingState::Idle);
             }
@@ -495,8 +532,13 @@ impl AdvicePanel {
 
                     // Clean up the shared state
                     shared_state.remove_pending_chat_response(&message_id);
-                } else if let Some(error) = shared_state.get_advice_error(&format!("chat_{}", message_id)) {
-                    debug!("🎯 ADVICE_PANEL: Updating chat with error from shared state: {}", error);
+                } else if let Some(error) =
+                    shared_state.get_advice_error(&format!("chat_{}", message_id))
+                {
+                    debug!(
+                        "🎯 ADVICE_PANEL: Updating chat with error from shared state: {}",
+                        error
+                    );
 
                     // Add error message to chat
                     let error_message = ChatMessageData {
@@ -594,8 +636,8 @@ impl AdvicePanel {
 
     /// Format chat content to preserve markdown, code blocks, and spacing
     fn format_chat_content(&self, content: &str) -> Vec<Line> {
-        use ratatui::text::Span;
         use ratatui::style::{Color, Style};
+        use ratatui::text::Span;
 
         let mut lines = Vec::new();
         let mut in_code_block = false;
@@ -613,7 +655,7 @@ impl AdvicePanel {
                         for para_line in textwrap::wrap(&current_paragraph, 76) {
                             lines.push(Line::from(Span::styled(
                                 format!("  {}", para_line),
-                                Style::default().fg(Color::Gray)
+                                Style::default().fg(Color::Gray),
                             )));
                         }
                         current_paragraph.clear();
@@ -621,7 +663,7 @@ impl AdvicePanel {
                     in_code_block = false;
                     lines.push(Line::from(Span::styled(
                         "  ```",
-                        Style::default().fg(Color::Yellow)
+                        Style::default().fg(Color::Yellow),
                     )));
                 } else {
                     // Start of code block - flush any current paragraph
@@ -629,7 +671,7 @@ impl AdvicePanel {
                         for para_line in textwrap::wrap(&current_paragraph, 76) {
                             lines.push(Line::from(Span::styled(
                                 format!("  {}", para_line),
-                                Style::default().fg(Color::Gray)
+                                Style::default().fg(Color::Gray),
                             )));
                         }
                         current_paragraph.clear();
@@ -637,7 +679,7 @@ impl AdvicePanel {
                     in_code_block = true;
                     lines.push(Line::from(Span::styled(
                         "  ```",
-                        Style::default().fg(Color::Yellow)
+                        Style::default().fg(Color::Yellow),
                     )));
                 }
                 continue;
@@ -647,7 +689,7 @@ impl AdvicePanel {
                 // Inside code block - preserve exact formatting and use monospace-like color
                 lines.push(Line::from(Span::styled(
                     format!("  {}", line),
-                    Style::default().fg(Color::Cyan)
+                    Style::default().fg(Color::Cyan),
                 )));
             } else if trimmed.is_empty() {
                 // Empty line - flush current paragraph and add empty line
@@ -655,7 +697,7 @@ impl AdvicePanel {
                     for para_line in textwrap::wrap(&current_paragraph, 76) {
                         lines.push(Line::from(Span::styled(
                             format!("  {}", para_line),
-                            Style::default().fg(Color::Gray)
+                            Style::default().fg(Color::Gray),
                         )));
                     }
                     current_paragraph.clear();
@@ -668,7 +710,7 @@ impl AdvicePanel {
                     for para_line in textwrap::wrap(&current_paragraph, 76) {
                         lines.push(Line::from(Span::styled(
                             format!("  {}", para_line),
-                            Style::default().fg(Color::Gray)
+                            Style::default().fg(Color::Gray),
                         )));
                     }
                     current_paragraph.clear();
@@ -676,7 +718,7 @@ impl AdvicePanel {
                 // Add indented line with code-like formatting
                 lines.push(Line::from(Span::styled(
                     format!("  {}", line),
-                    Style::default().fg(Color::Cyan)
+                    Style::default().fg(Color::Cyan),
                 )));
             } else if line.starts_with("#") || line.starts_with("##") || line.starts_with("###") {
                 // Handle markdown headers
@@ -684,7 +726,7 @@ impl AdvicePanel {
                     for para_line in textwrap::wrap(&current_paragraph, 76) {
                         lines.push(Line::from(Span::styled(
                             format!("  {}", para_line),
-                            Style::default().fg(Color::Gray)
+                            Style::default().fg(Color::Gray),
                         )));
                     }
                     current_paragraph.clear();
@@ -692,7 +734,9 @@ impl AdvicePanel {
                 // Add header with special formatting
                 lines.push(Line::from(Span::styled(
                     format!("  {}", line),
-                    Style::default().fg(Color::Yellow).add_modifier(ratatui::style::Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
                 )));
             } else if line.starts_with("- ") || line.starts_with("* ") {
                 // Handle bullet points
@@ -700,7 +744,7 @@ impl AdvicePanel {
                     for para_line in textwrap::wrap(&current_paragraph, 76) {
                         lines.push(Line::from(Span::styled(
                             format!("  {}", para_line),
-                            Style::default().fg(Color::Gray)
+                            Style::default().fg(Color::Gray),
                         )));
                     }
                     current_paragraph.clear();
@@ -708,7 +752,7 @@ impl AdvicePanel {
                 // Add bullet point
                 lines.push(Line::from(Span::styled(
                     format!("  {}", line),
-                    Style::default().fg(Color::Gray)
+                    Style::default().fg(Color::Gray),
                 )));
             } else {
                 // Regular text - accumulate in paragraph
@@ -726,7 +770,7 @@ impl AdvicePanel {
             for para_line in textwrap::wrap(&current_paragraph, 76) {
                 lines.push(Line::from(Span::styled(
                     format!("  {}", para_line),
-                    Style::default().fg(Color::Gray)
+                    Style::default().fg(Color::Gray),
                 )));
             }
         }
@@ -829,7 +873,10 @@ impl AdvicePanel {
         // Check if we already have results for this diff
         if let Some(shared_state) = &self.shared_state {
             if let Some(cached_results) = shared_state.get_advice_results(&diff_hash) {
-                debug!("🎯 ADVICE_PANEL: Found cached advice results for diff hash: {}", diff_hash);
+                debug!(
+                    "🎯 ADVICE_PANEL: Found cached advice results for diff hash: {}",
+                    diff_hash
+                );
                 self.content = AdviceContent::Improvements(cached_results);
                 self.update_advice_status(LoadingState::Idle);
                 return;
@@ -848,7 +895,10 @@ impl AdvicePanel {
 
         // Spawn async task for LLM advice generation
         let task = tokio::spawn(async move {
-            debug!("🎯 ADVICE_PANEL: Async advice task started with {} chars", diff_content.len());
+            debug!(
+                "🎯 ADVICE_PANEL: Async advice task started with {} chars",
+                diff_content.len()
+            );
 
             let result = async {
                 // Try to use LLM client if available
@@ -858,7 +908,10 @@ impl AdvicePanel {
 
                     match client.generate_advice(diff_content, 3).await {
                         Ok(improvements) => {
-                            debug!("🎯 ADVICE_PANEL: Successfully generated {} improvements", improvements.len());
+                            debug!(
+                                "🎯 ADVICE_PANEL: Successfully generated {} improvements",
+                                improvements.len()
+                            );
                             Ok(improvements)
                         }
                         Err(e) => {
@@ -869,7 +922,8 @@ impl AdvicePanel {
                 } else {
                     Err("LLM client not available".to_string())
                 }
-            }.await;
+            }
+            .await;
 
             // Store results in shared state
             if let Some(shared_state) = shared_state_clone {
@@ -890,7 +944,9 @@ impl AdvicePanel {
         });
 
         self.pending_advice_task = Some(task);
-        debug!("🎯 ADVICE_PANEL: Spawned async advice generation task with shared state communication");
+        debug!(
+            "🎯 ADVICE_PANEL: Spawned async advice generation task with shared state communication"
+        );
 
         // For now, use the fallback improvements while the async task runs
         let improvements = vec![
@@ -915,7 +971,6 @@ impl AdvicePanel {
         self.update_advice_status(LoadingState::Idle);
     }
 
-    
     pub fn get_advice_generation_status(&self) -> String {
         match self.loading_state {
             LoadingState::GeneratingAdvice => "Generating advice...".to_string(),
@@ -1028,15 +1083,24 @@ impl AdvicePanel {
 
         // Try to use LLM client
         let llm_client_clone = self.llm_client.clone();
-        debug!("🎯 ADVICE_PANEL: LLM client available: {}", llm_client_clone.is_some());
+        debug!(
+            "🎯 ADVICE_PANEL: LLM client available: {}",
+            llm_client_clone.is_some()
+        );
         if let Some(llm_client) = llm_client_clone {
             let client = llm_client.lock().await;
-            debug!("🎯 ADVICE_PANEL: About to call LLM generate_advice with diff length: {}", diff.len());
+            debug!(
+                "🎯 ADVICE_PANEL: About to call LLM generate_advice with diff length: {}",
+                diff.len()
+            );
 
             // Generate advice using LLM client
             match client.generate_advice(diff.to_string(), 3).await {
                 Ok(improvements) => {
-                    debug!("🎯 ADVICE_PANEL: Successfully generated {} improvements via LLM", improvements.len());
+                    debug!(
+                        "🎯 ADVICE_PANEL: Successfully generated {} improvements via LLM",
+                        improvements.len()
+                    );
 
                     // Cache the improvements
                     if let Some(ref diff_hash) = self.current_diff_hash {
@@ -1051,7 +1115,10 @@ impl AdvicePanel {
                     return Ok(());
                 }
                 Err(error) => {
-                    debug!("🎯 ADVICE_PANEL: LLM generation failed, using fallback: {}", error);
+                    debug!(
+                        "🎯 ADVICE_PANEL: LLM generation failed, using fallback: {}",
+                        error
+                    );
                     // Fall back to placeholder improvements
                 }
             }
@@ -1064,7 +1131,9 @@ impl AdvicePanel {
             AdviceImprovement {
                 id: uuid::Uuid::new_v4().to_string(),
                 title: "Code Quality Improvement".to_string(),
-                description: "The diff shows opportunities for improving code quality and maintainability.".to_string(),
+                description:
+                    "The diff shows opportunities for improving code quality and maintainability."
+                        .to_string(),
                 priority: ImprovementPriority::Medium,
                 category: "CodeQuality".to_string(),
                 code_examples: Vec::new(),
@@ -1072,7 +1141,9 @@ impl AdvicePanel {
             AdviceImprovement {
                 id: uuid::Uuid::new_v4().to_string(),
                 title: "Performance Optimization".to_string(),
-                description: "Consider optimizing the algorithm or data structures for better performance.".to_string(),
+                description:
+                    "Consider optimizing the algorithm or data structures for better performance."
+                        .to_string(),
                 priority: ImprovementPriority::Medium,
                 category: "Performance".to_string(),
                 code_examples: Vec::new(),
@@ -1170,7 +1241,8 @@ impl PaneRegistry {
         self.register_pane(PaneId::Help, Box::new(HelpPane::new()));
         self.register_pane(PaneId::StatusBar, Box::new(StatusBarPane::new()));
         self.register_pane(PaneId::CommitPicker, Box::new(CommitPickerPane::new()));
-        let mut commit_summary_pane = CommitSummaryPane::new_with_llm_client(Some(llm_client.clone()));
+        let mut commit_summary_pane =
+            CommitSummaryPane::new_with_llm_client(Some(llm_client.clone()));
         commit_summary_pane.set_shared_state(llm_shared_state.clone());
         self.register_pane(PaneId::CommitSummary, Box::new(commit_summary_pane));
 
@@ -1179,7 +1251,9 @@ impl PaneRegistry {
         let mut advice_panel = AdvicePanel::new(crate::config::Config::default(), advice_config)
             .expect("Failed to create AdvicePanel");
         advice_panel.set_shared_state(llm_shared_state.clone());
-        advice_panel.set_llm_client(std::sync::Arc::new(tokio::sync::Mutex::new(llm_client.clone())));
+        advice_panel.set_llm_client(std::sync::Arc::new(tokio::sync::Mutex::new(
+            llm_client.clone(),
+        )));
         self.register_pane(PaneId::Advice, Box::new(advice_panel));
     }
 
@@ -3007,9 +3081,11 @@ impl Pane for AdvicePanel {
 
             for file_diff in files {
                 // Add file header
-                diff_content.push_str(&format!("diff --git a/{} b/{}\n",
+                diff_content.push_str(&format!(
+                    "diff --git a/{} b/{}\n",
                     file_diff.path.to_string_lossy(),
-                    file_diff.path.to_string_lossy()));
+                    file_diff.path.to_string_lossy()
+                ));
 
                 // Add git index line based on status
                 if file_diff.status.contains(git2::Status::WT_NEW) {
@@ -3113,7 +3189,10 @@ impl Pane for AdvicePanel {
                         ImprovementPriority::Critical => "🔴",
                         ImprovementPriority::Unknown => "⚪",
                     };
-                    lines.push(Line::from(format!("  {} {} · {}", priority_emoji, imp.category, imp.priority)));
+                    lines.push(Line::from(format!(
+                        "  {} {} · {}",
+                        priority_emoji, imp.category, imp.priority
+                    )));
                     lines.push(Line::from("")); // Empty line between messages
                 }
                 lines
@@ -3152,7 +3231,9 @@ impl Pane for AdvicePanel {
                 }
 
                 // Add "thinking" indicator if waiting for AI response
-                if self.loading_state == LoadingState::SendingChat && self.pending_chat_message_id.is_some() {
+                if self.loading_state == LoadingState::SendingChat
+                    && self.pending_chat_message_id.is_some()
+                {
                     lines.push(Line::from("[now] AI:").fg(Color::Green));
                     lines.push(Line::from("  🤔 Thinking...".to_string()).fg(Color::Yellow));
                     lines.push(Line::from(""));
@@ -3160,9 +3241,7 @@ impl Pane for AdvicePanel {
 
                 lines
             }
-            AdviceContent::Help(help_text) => {
-                help_text.lines().map(Line::from).collect()
-            }
+            AdviceContent::Help(help_text) => help_text.lines().map(Line::from).collect(),
         };
 
         // Adjust content area when chat input is active to make room for chat input
@@ -3316,7 +3395,9 @@ impl Pane for AdvicePanel {
                                     self.scroll_offset = 0;
                                     true
                                 }
-                                KeyCode::Char('G') if key_event.modifiers.contains(KeyModifiers::SHIFT) => {
+                                KeyCode::Char('G')
+                                    if key_event.modifiers.contains(KeyModifiers::SHIFT) =>
+                                {
                                     // Scroll to actual bottom by calculating content height
                                     let content_lines = match &self.content {
                                         AdviceContent::Chat(messages) => {
@@ -3334,7 +3415,9 @@ impl Pane for AdvicePanel {
                                                 line_count += 1;
                                             }
                                             // Add thinking indicator if present
-                                            if self.loading_state == LoadingState::SendingChat && self.pending_chat_message_id.is_some() {
+                                            if self.loading_state == LoadingState::SendingChat
+                                                && self.pending_chat_message_id.is_some()
+                                            {
                                                 line_count += 3; // "AI:" + "Thinking..." + empty line
                                             }
                                             line_count
@@ -3343,10 +3426,13 @@ impl Pane for AdvicePanel {
                                         _ => 0,
                                     };
                                     let visible_lines = 20; // Approximate visible area height
-                                    self.scroll_offset = content_lines.saturating_sub(visible_lines).max(0);
+                                    self.scroll_offset =
+                                        content_lines.saturating_sub(visible_lines).max(0);
                                     true
                                 }
-                                KeyCode::Char('r') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                                KeyCode::Char('r')
+                                    if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
                                     // Ctrl+R: Refresh diff and clear chat
                                     self.refresh_chat_with_new_diff();
                                     true
@@ -3466,19 +3552,13 @@ mod tests {
         assert_eq!(panel.get_mode(), AdviceMode::Viewing);
 
         // Test key events for mode switching
-        let enter_chat = AppEvent::Key(KeyEvent::new(
-            KeyCode::Char('/'),
-            KeyModifiers::NONE,
-        ));
+        let enter_chat = AppEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
 
         let handled = panel.handle_event(&enter_chat);
         assert!(handled, "Should handle entering chat mode");
         assert_eq!(panel.get_mode(), AdviceMode::Chatting);
 
-        let exit_chat = AppEvent::Key(KeyEvent::new(
-            KeyCode::Esc,
-            KeyModifiers::NONE,
-        ));
+        let exit_chat = AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
         let handled = panel.handle_event(&exit_chat);
         assert!(handled, "Should handle exiting chat mode");
@@ -3809,15 +3889,24 @@ mod tests {
 
         // Test that generate_advice method exists and works
         let result = panel.generate_advice("sample diff content");
-        assert!(result.is_ok(), "generate_advice should not panic and return Result");
+        assert!(
+            result.is_ok(),
+            "generate_advice should not panic and return Result"
+        );
 
         let improvements = result.unwrap();
         // Should return empty vector for now (placeholder implementation)
-        assert!(improvements.is_empty(), "Initial implementation should return empty improvements");
+        assert!(
+            improvements.is_empty(),
+            "Initial implementation should return empty improvements"
+        );
 
         // Test async advice generation methods exist
         let async_result = panel.start_async_advice_generation("sample diff");
-        assert!(async_result.is_ok(), "start_async_advice_generation should work");
+        assert!(
+            async_result.is_ok(),
+            "start_async_advice_generation should work"
+        );
 
         let status = panel.get_advice_generation_status();
         assert_eq!(status, "Ready", "Should report ready status");
@@ -3834,7 +3923,10 @@ mod tests {
         assert!(result.is_ok(), "Should handle empty diff without error");
 
         let improvements = result.unwrap();
-        assert!(improvements.is_empty(), "Empty diff should result in no improvements");
+        assert!(
+            improvements.is_empty(),
+            "Empty diff should result in no improvements"
+        );
     }
 
     #[test]
@@ -3850,7 +3942,10 @@ mod tests {
 
         assert!(result.is_ok(), "Should handle invalid input gracefully");
         let improvements = result.unwrap();
-        assert!(improvements.is_empty(), "Invalid input should result in no improvements");
+        assert!(
+            improvements.is_empty(),
+            "Invalid input should result in no improvements"
+        );
     }
 
     #[test]
@@ -3866,9 +3961,21 @@ mod tests {
 
         // Test chat history management (after sending a message, should have both user and AI messages)
         let history = panel.get_chat_history();
-        assert_eq!(history.len(), 2, "Chat history should contain user message and AI response");
-        assert_eq!(history[0].role, MessageRole::User, "First message should be from user");
-        assert_eq!(history[1].role, MessageRole::Assistant, "Second message should be from AI");
+        assert_eq!(
+            history.len(),
+            2,
+            "Chat history should contain user message and AI response"
+        );
+        assert_eq!(
+            history[0].role,
+            MessageRole::User,
+            "First message should be from user"
+        );
+        assert_eq!(
+            history[1].role,
+            MessageRole::Assistant,
+            "Second message should be from AI"
+        );
 
         // Test clearing chat history
         let clear_result = panel.clear_chat_history();
@@ -3896,9 +4003,20 @@ mod tests {
         // The implementation should now store both user and AI messages
         let history = panel.get_chat_history();
         assert_eq!(history.len(), 2, "Should have user message and AI response");
-        assert_eq!(history[0].role, MessageRole::User, "First message should be from user");
-        assert_eq!(history[1].role, MessageRole::Assistant, "Second message should be from AI");
-        assert!(history[0].content.contains("explain this code change"), "User message should be preserved");
+        assert_eq!(
+            history[0].role,
+            MessageRole::User,
+            "First message should be from user"
+        );
+        assert_eq!(
+            history[1].role,
+            MessageRole::Assistant,
+            "Second message should be from AI"
+        );
+        assert!(
+            history[0].content.contains("explain this code change"),
+            "User message should be preserved"
+        );
     }
 
     #[test]
@@ -3911,9 +4029,9 @@ mod tests {
         // Test various message types
         let long_message = "a".repeat(10000);
         let test_messages = vec![
-            "", // Empty message
-            "   ", // Whitespace-only
-            &long_message, // Very long message
+            "",                                   // Empty message
+            "   ",                                // Whitespace-only
+            &long_message,                        // Very long message
             "Hello 🚀! Special chars: @#$%^&*()", // Unicode and special chars
         ];
 
@@ -3959,21 +4077,31 @@ mod tests {
         }
         let llm_client = crate::llm::LlmClient::new(llm_config).ok();
         let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
-        let mut app = App::new_with_config(true, true, crate::ui::Theme::Dark, llm_client, llm_state);
+        let mut app =
+            App::new_with_config(true, true, crate::ui::Theme::Dark, llm_client, llm_state);
 
         // Test that toggle_pane_visibility works for advice panel
         // This is the core integration contract - Ctrl+L should work
         let result1 = app.toggle_pane_visibility(&PaneId::Advice);
-        assert!(result1.is_ok(), "Should be able to toggle advice panel visibility");
+        assert!(
+            result1.is_ok(),
+            "Should be able to toggle advice panel visibility"
+        );
 
         // Test toggling back
         let result2 = app.toggle_pane_visibility(&PaneId::Advice);
-        assert!(result2.is_ok(), "Should be able to toggle advice panel back to hidden");
+        assert!(
+            result2.is_ok(),
+            "Should be able to toggle advice panel back to hidden"
+        );
 
         // Test error handling for invalid pane ID
         let invalid_result = app.toggle_pane_visibility(&PaneId::FileTree); // FileTree is not togglable
         // This should either succeed or give a meaningful error
-        assert!(invalid_result.is_ok(), "Should handle invalid pane gracefully");
+        assert!(
+            invalid_result.is_ok(),
+            "Should handle invalid pane gracefully"
+        );
     }
 
     #[test]
@@ -3990,7 +4118,8 @@ mod tests {
         }
         let llm_client = crate::llm::LlmClient::new(llm_config).ok();
         let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
-        let mut app = App::new_with_config(true, true, crate::ui::Theme::Dark, llm_client, llm_state);
+        let mut app =
+            App::new_with_config(true, true, crate::ui::Theme::Dark, llm_client, llm_state);
 
         // Test multiple toggles to simulate repeated Ctrl+L presses
         for i in 0..5 {
@@ -4002,21 +4131,29 @@ mod tests {
     #[test]
     fn test_chat_conversation_flow_integration_contract() {
         // Test integration contract for complete chat conversation flow
-        use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
         use crate::pane::AppEvent;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
         let config = Config::default();
         let advice_config = AdviceConfig::default();
         let mut panel = AdvicePanel::new(config, advice_config).unwrap();
 
         // Test initial state - should be in Viewing mode
-        assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should start in Viewing mode");
+        assert_eq!(
+            panel.get_mode(),
+            AdviceMode::Viewing,
+            "Should start in Viewing mode"
+        );
 
         // Step 1: Enter chat mode with '/' key
         let slash_key = AppEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
         let handled = panel.handle_event(&slash_key);
         assert!(handled, "Should handle '/' key to enter chat mode");
-        assert_eq!(panel.get_mode(), AdviceMode::Chatting, "Should be in Chatting mode after '/'");
+        assert_eq!(
+            panel.get_mode(),
+            AdviceMode::Chatting,
+            "Should be in Chatting mode after '/'"
+        );
 
         // Step 2: Test typing in chat input
         let test_chars = vec![
@@ -4033,7 +4170,10 @@ mod tests {
         }
 
         // Chat input should contain the typed text
-        assert_eq!(panel.chat_input, "Hello", "Chat input should reflect typed characters");
+        assert_eq!(
+            panel.chat_input, "Hello",
+            "Chat input should reflect typed characters"
+        );
 
         // Step 3: Test backspace functionality
         let backspace_key = AppEvent::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
@@ -4042,7 +4182,10 @@ mod tests {
             assert!(handled, "Should handle backspace in chat mode");
         }
 
-        assert_eq!(panel.chat_input, "Hel", "Backspace should remove characters");
+        assert_eq!(
+            panel.chat_input, "Hel",
+            "Backspace should remove characters"
+        );
 
         // Step 4: Test sending message with Enter key
         let enter_key = AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -4050,29 +4193,43 @@ mod tests {
         assert!(handled, "Should handle Enter key to send message");
 
         // Chat input should be cleared after sending
-        assert_eq!(panel.chat_input, "", "Chat input should be cleared after sending");
+        assert_eq!(
+            panel.chat_input, "",
+            "Chat input should be cleared after sending"
+        );
 
         // Message should be in chat history (implementation dependent)
         let _history = panel.get_chat_history(); // Method should work
-        assert!(panel.is_chat_available(), "Chat should remain available after sending message");
+        assert!(
+            panel.is_chat_available(),
+            "Chat should remain available after sending message"
+        );
 
         // Step 5: Test exit chat mode with ESC
         let esc_key = AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         let handled = panel.handle_event(&esc_key);
         assert!(handled, "Should handle ESC key to exit chat mode");
-        assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should return to Viewing mode after ESC");
+        assert_eq!(
+            panel.get_mode(),
+            AdviceMode::Viewing,
+            "Should return to Viewing mode after ESC"
+        );
 
         // Step 6: Test re-entering chat mode
         let handled = panel.handle_event(&slash_key);
         assert!(handled, "Should be able to re-enter chat mode");
-        assert_eq!(panel.get_mode(), AdviceMode::Chatting, "Should be back in Chatting mode");
+        assert_eq!(
+            panel.get_mode(),
+            AdviceMode::Chatting,
+            "Should be back in Chatting mode"
+        );
     }
 
     #[test]
     fn test_chat_conversation_error_handling_integration_contract() {
         // Test error handling in chat conversation flow
-        use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
         use crate::pane::AppEvent;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
         let config = Config::default();
         let advice_config = AdviceConfig::default();
@@ -4096,28 +4253,40 @@ mod tests {
         }
 
         // Should still be functional after long input
-        assert_eq!(panel.get_mode(), AdviceMode::Chatting, "Should remain in chat mode");
+        assert_eq!(
+            panel.get_mode(),
+            AdviceMode::Chatting,
+            "Should remain in chat mode"
+        );
         assert!(panel.is_chat_available(), "Chat should still be available");
     }
 
     #[test]
     fn test_help_system_integration_contract() {
         // Test integration contract for help system
-        use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
         use crate::pane::AppEvent;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
         let config = Config::default();
         let advice_config = AdviceConfig::default();
         let mut panel = AdvicePanel::new(config, advice_config).unwrap();
 
         // Test initial state - should be in Viewing mode
-        assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should start in Viewing mode");
+        assert_eq!(
+            panel.get_mode(),
+            AdviceMode::Viewing,
+            "Should start in Viewing mode"
+        );
 
         // Step 1: Enter help mode with '?' key
         let question_key = AppEvent::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
         let handled = panel.handle_event(&question_key);
         assert!(handled, "Should handle '?' key to enter help mode");
-        assert_eq!(panel.get_mode(), AdviceMode::Help, "Should be in Help mode after '?'");
+        assert_eq!(
+            panel.get_mode(),
+            AdviceMode::Help,
+            "Should be in Help mode after '?'"
+        );
 
         // Step 2: Test navigation in help mode
         let nav_keys = vec![
@@ -4129,26 +4298,38 @@ mod tests {
             let handled = panel.handle_event(&nav_key);
             assert!(handled, "Should handle navigation keys in help mode");
             // Should remain in help mode during navigation
-            assert_eq!(panel.get_mode(), AdviceMode::Help, "Should stay in Help mode during navigation");
+            assert_eq!(
+                panel.get_mode(),
+                AdviceMode::Help,
+                "Should stay in Help mode during navigation"
+            );
         }
 
         // Step 3: Test exit help mode with ESC
         let esc_key = AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         let handled = panel.handle_event(&esc_key);
         assert!(handled, "Should handle ESC key to exit help mode");
-        assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should return to Viewing mode after ESC");
+        assert_eq!(
+            panel.get_mode(),
+            AdviceMode::Viewing,
+            "Should return to Viewing mode after ESC"
+        );
 
         // Step 4: Test re-entering help mode
         let handled = panel.handle_event(&question_key);
         assert!(handled, "Should be able to re-enter help mode");
-        assert_eq!(panel.get_mode(), AdviceMode::Help, "Should be back in Help mode");
+        assert_eq!(
+            panel.get_mode(),
+            AdviceMode::Help,
+            "Should be back in Help mode"
+        );
     }
 
     #[test]
     fn test_help_system_from_different_modes_integration_contract() {
         // Test help system accessibility from different modes
-        use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
         use crate::pane::AppEvent;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
         let config = Config::default();
         let advice_config = AdviceConfig::default();
@@ -4170,7 +4351,11 @@ mod tests {
         // Exit and test again
         let handled = panel.handle_event(&esc_key);
         assert!(handled, "Should exit help mode");
-        assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should return to viewing mode");
+        assert_eq!(
+            panel.get_mode(),
+            AdviceMode::Viewing,
+            "Should return to viewing mode"
+        );
 
         // Test entering help mode multiple times
         for i in 0..3 {
@@ -4180,15 +4365,19 @@ mod tests {
 
             let handled = panel.handle_event(&esc_key);
             assert!(handled, "Should exit help mode on attempt {}", i + 1);
-            assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should return to viewing mode");
+            assert_eq!(
+                panel.get_mode(),
+                AdviceMode::Viewing,
+                "Should return to viewing mode"
+            );
         }
     }
 
     #[test]
     fn test_help_system_error_handling_integration_contract() {
         // Test error handling in help system
-        use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
         use crate::pane::AppEvent;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
         let config = Config::default();
         let advice_config = AdviceConfig::default();
@@ -4202,8 +4391,8 @@ mod tests {
         let test_keys = vec![
             AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)), // Regular char
             AppEvent::Key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE)), // Number
-            AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),  // Enter
-            AppEvent::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),    // Tab
+            AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),     // Enter
+            AppEvent::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),       // Tab
             AppEvent::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)), // Backspace
         ];
 
@@ -4212,13 +4401,24 @@ mod tests {
             // Most keys should not be handled in help mode (only j, k, ESC)
             // but should not cause errors
             // The important thing is that the panel remains stable
-            assert_eq!(panel.get_mode(), AdviceMode::Help, "Should remain in help mode after key input");
+            assert_eq!(
+                panel.get_mode(),
+                AdviceMode::Help,
+                "Should remain in help mode after key input"
+            );
         }
 
         // Test that we can still exit normally
         let esc_key = AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         let handled = panel.handle_event(&esc_key);
-        assert!(handled, "Should be able to exit help mode after various key inputs");
-        assert_eq!(panel.get_mode(), AdviceMode::Viewing, "Should return to viewing mode");
+        assert!(
+            handled,
+            "Should be able to exit help mode after various key inputs"
+        );
+        assert_eq!(
+            panel.get_mode(),
+            AdviceMode::Viewing,
+            "Should return to viewing mode"
+        );
     }
 }
