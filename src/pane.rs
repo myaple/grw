@@ -76,7 +76,6 @@ pub enum AppEvent {
 // Advice Panel Data Structures
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdviceMode {
-    Viewing,
     Chatting,
     Help,
 }
@@ -166,7 +165,7 @@ impl AdvicePanel {
     pub fn new(_config: crate::config::Config, advice_config: crate::config::AdviceConfig) -> Result<Self, String> {
         Ok(Self {
             visible: false,
-            mode: AdviceMode::Viewing,
+            mode: AdviceMode::Chatting,
             content: AdviceContent::Loading,
             chat_input: String::new(),
             config: advice_config,
@@ -521,6 +520,57 @@ impl AdvicePanel {
 
     /// Trigger initial advice generation when panel opens (spawns async task)
     fn trigger_initial_advice(&mut self) {
+        debug!("🎯 ADVICE_PANEL: Triggering initial chat message");
+
+        // Always start in chat mode with empty history
+        self.mode = AdviceMode::Chatting;
+        self.content = AdviceContent::Chat(Vec::new());
+
+        // Get current diff for context
+        let diff_content = self.get_current_diff_context().unwrap_or_default();
+
+        if diff_content.is_empty() {
+            // No diff available, add a system message
+            let system_message = ChatMessageData {
+                id: uuid::Uuid::new_v4().to_string(),
+                role: MessageRole::System,
+                content: "No code changes are currently available to analyze. Make some code changes and stage them with `git add` to get AI-powered improvement suggestions. You can still ask me general questions about programming best practices!".to_string(),
+                timestamp: std::time::SystemTime::now(),
+            };
+
+            if let AdviceContent::Chat(messages) = &mut self.content {
+                messages.push(system_message);
+            }
+            self.update_advice_status(LoadingState::Idle);
+            return;
+        }
+
+        // Send initial message asking for 3 actionable improvements
+        let initial_message = format!(
+            "Please provide 3 actionable improvements for the following code changes:\n\n```diff\n{}\n```\n\nFocus on practical, specific suggestions that would improve code quality, performance, or maintainability.",
+            diff_content
+        );
+
+        // Send the initial message automatically
+        if let Err(e) = self.send_chat_message(&initial_message) {
+            // If sending fails, add an error message
+            let error_message = ChatMessageData {
+                id: uuid::Uuid::new_v4().to_string(),
+                role: MessageRole::System,
+                content: format!("Failed to send initial request to AI: {}", e),
+                timestamp: std::time::SystemTime::now(),
+            };
+
+            if let AdviceContent::Chat(messages) = &mut self.content {
+                messages.push(error_message);
+            }
+            self.update_advice_status(LoadingState::Idle);
+        } else {
+            debug!("🎯 ADVICE_PANEL: Successfully sent initial chat message for advice");
+        }
+    }
+
+    fn trigger_initial_advice_old(&mut self) {
         debug!("🎯 ADVICE_PANEL: Triggering initial advice generation");
 
         // Set loading state
@@ -2714,7 +2764,6 @@ impl Pane for CommitSummaryPane {
 impl Pane for AdvicePanel {
     fn title(&self) -> String {
         match self.mode {
-            AdviceMode::Viewing => "Advice Panel".to_string(),
             AdviceMode::Chatting => "Chat".to_string(),
             AdviceMode::Help => "Help".to_string(),
         }
@@ -2913,30 +2962,6 @@ impl Pane for AdvicePanel {
         match event {
             AppEvent::Key(key_event) => {
                 match self.mode {
-                    AdviceMode::Viewing => {
-                        match key_event.code {
-                            KeyCode::Char('/') => {
-                                self.mode = AdviceMode::Chatting;
-                                true
-                            }
-                            KeyCode::Char('?') => {
-                                self.mode = AdviceMode::Help;
-                                true
-                            }
-                            KeyCode::Char('j') | KeyCode::Down => {
-                                self.scroll_offset = self.scroll_offset.saturating_add(1);
-                                true
-                            }
-                            KeyCode::Char('k') | KeyCode::Up => {
-                                self.scroll_offset = self.scroll_offset.saturating_sub(1);
-                                true
-                            }
-                            KeyCode::Esc => {
-                                false // Let parent handle Esc
-                            }
-                            _ => false,
-                        }
-                    }
                     AdviceMode::Chatting => {
                         match key_event.code {
                             KeyCode::Enter => {
@@ -2948,9 +2973,12 @@ impl Pane for AdvicePanel {
                                 }
                                 true
                             }
-                            KeyCode::Esc => {
-                                self.mode = AdviceMode::Viewing;
+                            KeyCode::Char('?') => {
+                                self.mode = AdviceMode::Help;
                                 true
+                            }
+                            KeyCode::Esc => {
+                                false // Let parent handle Esc
                             }
                             KeyCode::Char(c) => {
                                 self.chat_input.push(c);
@@ -2966,7 +2994,7 @@ impl Pane for AdvicePanel {
                     AdviceMode::Help => {
                         match key_event.code {
                             KeyCode::Esc => {
-                                self.mode = AdviceMode::Viewing;
+                                self.mode = AdviceMode::Chatting;
                                 true
                             }
                             KeyCode::Char('j') | KeyCode::Down => {
