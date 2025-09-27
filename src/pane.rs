@@ -212,8 +212,52 @@ impl AdvicePanel {
         Ok(Vec::new()) // Return empty for now, will be populated async
     }
 
-    pub fn send_chat_message(&mut self, _message: &str) -> Result<(), String> {
-        // Placeholder implementation - will be connected to LLM later
+    pub fn send_chat_message(&mut self, message: &str) -> Result<(), String> {
+        debug!("🎯 ADVICE_PANEL: Sending chat message: {}", message);
+
+        // Add user message to chat history
+        let user_message = ChatMessageData {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: MessageRole::User,
+            content: message.to_string(),
+            timestamp: std::time::SystemTime::now(),
+        };
+
+        // Update chat history
+        match &mut self.content {
+            AdviceContent::Chat(messages) => {
+                messages.push(user_message);
+            }
+            _ => {
+                // If not in chat mode, initialize chat content
+                self.content = AdviceContent::Chat(vec![user_message]);
+            }
+        }
+
+        // Set loading state
+        self.update_advice_status(LoadingState::SendingChat);
+
+        // Get original diff for context
+        let original_diff = self.get_current_diff_context().unwrap_or_default();
+
+        // Generate AI response (works with or without shared state)
+        let ai_response = self.generate_mock_ai_response(message, &original_diff);
+
+        let ai_message = ChatMessageData {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: MessageRole::Assistant,
+            content: ai_response,
+            timestamp: std::time::SystemTime::now(),
+        };
+
+        // Add AI response to chat
+        if let AdviceContent::Chat(messages) = &mut self.content {
+            messages.push(ai_message);
+        }
+
+        debug!("🎯 ADVICE_PANEL: AI response generated and added to chat");
+
+        self.update_advice_status(LoadingState::Idle);
         Ok(())
     }
 
@@ -234,6 +278,81 @@ impl AdvicePanel {
         self.generate_advice_sync(diff)?;
 
         Ok(())
+    }
+
+    /// Get the current diff context for LLM
+    fn get_current_diff_context(&self) -> Option<String> {
+        // This would normally get the current diff from the App
+        // For now, we'll return a placeholder or stored diff
+        self.current_diff_hash.clone()
+    }
+
+    /// Trigger initial advice generation when panel opens
+    fn trigger_initial_advice(&mut self) {
+        debug!("🎯 ADVICE_PANEL: Triggering initial advice generation");
+
+        // Set loading state
+        self.update_advice_status(LoadingState::GeneratingAdvice);
+        self.content = AdviceContent::Loading;
+
+        // Generate some initial improvements to show the user
+        let improvements = vec![
+            AdviceImprovement {
+                id: uuid::Uuid::new_v4().to_string(),
+                title: "Code Quality Review".to_string(),
+                description: "The code changes show good structure but consider adding more documentation and error handling for robustness.".to_string(),
+                priority: ImprovementPriority::Medium,
+                category: "CodeQuality".to_string(),
+                code_examples: Vec::new(),
+            },
+            AdviceImprovement {
+                id: uuid::Uuid::new_v4().to_string(),
+                title: "Performance Considerations".to_string(),
+                description: "Review the algorithm efficiency and consider optimizing database queries or memory usage if applicable.".to_string(),
+                priority: ImprovementPriority::Low,
+                category: "Performance".to_string(),
+                code_examples: Vec::new(),
+            },
+            AdviceImprovement {
+                id: uuid::Uuid::new_v4().to_string(),
+                title: "Security Best Practices".to_string(),
+                description: "Ensure proper input validation, authentication, and authorization checks are in place for security.".to_string(),
+                priority: ImprovementPriority::High,
+                category: "Security".to_string(),
+                code_examples: Vec::new(),
+            },
+        ];
+
+        // Update content with improvements
+        self.content = AdviceContent::Improvements(improvements);
+        self.update_advice_status(LoadingState::Idle);
+
+        debug!("🎯 ADVICE_PANEL: Initial advice generation completed");
+    }
+
+    /// Generate a mock AI response for testing (will be replaced with real LLM integration)
+    fn generate_mock_ai_response(&self, message: &str, _diff: &str) -> String {
+        debug!("🎯 ADVICE_PANEL: Generating mock AI response for: {}", message);
+
+        // Simple mock responses based on message content
+        if message.to_lowercase().contains("hello") || message.to_lowercase().contains("hi") {
+            return "Hello! I'm here to help you with your code review. What would you like to know about the current changes?".to_string();
+        }
+
+        if message.to_lowercase().contains("improv") {
+            return "Based on the code changes, I recommend:\n1. Adding error handling for edge cases\n2. Improving variable naming for clarity\n3. Adding documentation for complex logic\n4. Consider refactoring large functions into smaller ones".to_string();
+        }
+
+        if message.to_lowercase().contains("bug") || message.to_lowercase().contains("issue") {
+            return "I notice a potential issue in the changes. Make sure to:\n- Test all code paths\n- Handle error cases properly\n- Validate input data\n- Consider concurrency implications".to_string();
+        }
+
+        if message.to_lowercase().contains("perform") {
+            return "For better performance:\n- Consider using more efficient algorithms\n- Optimize database queries\n- Use caching where appropriate\n- Minimize memory allocations".to_string();
+        }
+
+        // Default response
+        format!("I've analyzed your question about '{}'. Based on the code changes, I'd suggest reviewing the implementation carefully and considering potential edge cases. Would you like me to elaborate on any specific aspect?", message)
     }
 
     pub fn get_advice_generation_status(&self) -> String {
@@ -339,7 +458,7 @@ impl AdvicePanel {
     }
 
     /// Generate advice synchronously (placeholder for async implementation)
-    fn generate_advice_sync(&mut self, diff: &str) -> Result<(), String> {
+    fn generate_advice_sync(&mut self, _diff: &str) -> Result<(), String> {
         debug!("🎯 ADVICE_PANEL: Generating advice synchronously");
 
         // For now, create placeholder improvements since we can't easily access LlmClient here
@@ -2423,7 +2542,14 @@ impl Pane for AdvicePanel {
     }
 
     fn set_visible(&mut self, visible: bool) {
+        let was_visible = self.visible;
         self.visible = visible;
+
+        // When panel becomes visible, trigger initial advice generation
+        if visible && !was_visible {
+            debug!("🎯 ADVICE_PANEL: Panel became visible, triggering initial advice generation");
+            self.trigger_initial_advice();
+        }
     }
 
     fn as_advice_pane(&self) -> Option<&AdvicePanel> {
@@ -2889,9 +3015,11 @@ mod tests {
         let send_result = panel.send_chat_message("Hello, AI!");
         assert!(send_result.is_ok(), "send_chat_message should work");
 
-        // Test chat history management
+        // Test chat history management (after sending a message, should have both user and AI messages)
         let history = panel.get_chat_history();
-        assert!(history.is_empty(), "Initial chat history should be empty");
+        assert_eq!(history.len(), 2, "Chat history should contain user message and AI response");
+        assert_eq!(history[0].role, MessageRole::User, "First message should be from user");
+        assert_eq!(history[1].role, MessageRole::Assistant, "Second message should be from AI");
 
         // Test clearing chat history
         let clear_result = panel.clear_chat_history();
@@ -2916,10 +3044,12 @@ mod tests {
         let result = panel.send_chat_message("Can you explain this code change?");
         assert!(result.is_ok(), "Should send chat message without error");
 
-        // Since this is a placeholder implementation, the message won't actually be stored
-        // but the method should exist and not panic
+        // The implementation should now store both user and AI messages
         let history = panel.get_chat_history();
-        assert!(history.is_empty(), "Placeholder implementation returns empty history");
+        assert_eq!(history.len(), 2, "Should have user message and AI response");
+        assert_eq!(history[0].role, MessageRole::User, "First message should be from user");
+        assert_eq!(history[1].role, MessageRole::Assistant, "Second message should be from AI");
+        assert!(history[0].content.contains("explain this code change"), "User message should be preserved");
     }
 
     #[test]
