@@ -5,6 +5,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Modifier, Style},
+    text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
@@ -39,6 +40,12 @@ pub trait Pane {
     fn as_commit_summary_pane_mut(&mut self) -> Option<&mut CommitSummaryPane> {
         None
     }
+    fn as_advice_pane(&self) -> Option<&AdvicePanel> {
+        None
+    }
+    fn as_advice_pane_mut(&mut self) -> Option<&mut AdvicePanel> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,6 +58,7 @@ pub enum PaneId {
     StatusBar,
     CommitPicker,
     CommitSummary,
+    Advice,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +67,144 @@ pub enum AppEvent {
     Key(KeyEvent),
     DataUpdated((), String),
     ThemeChanged(()),
+}
+
+// Advice Panel Data Structures
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdviceMode {
+    Viewing,
+    Chatting,
+    Help,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageRole {
+    User,
+    Assistant,
+    System,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImprovementPriority {
+    Low,
+    Medium,
+    High,
+    Critical,
+    Unknown,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdviceImprovement {
+    pub title: String,
+    pub description: String,
+    pub priority: ImprovementPriority,
+    pub category: String,
+    pub code_examples: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChatMessageData {
+    pub role: MessageRole,
+    pub content: String,
+    pub timestamp: std::time::SystemTime,
+}
+
+#[derive(Debug, Clone)]
+pub enum AdviceContent {
+    Improvements(Vec<AdviceImprovement>),
+    Chat(Vec<ChatMessageData>),
+    Help(String),
+    Loading,
+    Error(String),
+}
+
+#[derive(Debug)]
+pub struct AdvicePanel {
+    pub visible: bool,
+    pub mode: AdviceMode,
+    pub content: AdviceContent,
+    pub chat_input: String,
+    pub config: crate::config::AdviceConfig,
+    pub scroll_offset: usize,
+}
+
+impl AdvicePanel {
+    pub fn new(_config: crate::config::Config, advice_config: crate::config::AdviceConfig) -> Result<Self, String> {
+        Ok(Self {
+            visible: true,
+            mode: AdviceMode::Viewing,
+            content: AdviceContent::Loading,
+            chat_input: String::new(),
+            config: advice_config,
+            scroll_offset: 0,
+        })
+    }
+
+    pub fn get_mode(&self) -> AdviceMode {
+        self.mode
+    }
+
+    pub fn get_chat_history(&self) -> Vec<ChatMessageData> {
+        match &self.content {
+            AdviceContent::Chat(messages) => messages.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn get_improvements(&self) -> Vec<AdviceImprovement> {
+        match &self.content {
+            AdviceContent::Improvements(improvements) => improvements.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn generate_advice(&mut self, _diff: &str) -> Result<Vec<AdviceImprovement>, String> {
+        // Placeholder implementation - will be connected to LLM later
+        Ok(Vec::new())
+    }
+
+    pub fn send_chat_message(&mut self, _message: &str) -> Result<(), String> {
+        // Placeholder implementation - will be connected to LLM later
+        Ok(())
+    }
+
+    pub fn clear_chat_history(&mut self) -> Result<(), String> {
+        if let AdviceContent::Chat(messages) = &mut self.content {
+            messages.clear();
+        }
+        Ok(())
+    }
+
+    pub fn start_async_advice_generation(&mut self, _diff: &str) -> Result<(), String> {
+        // Placeholder implementation
+        Ok(())
+    }
+
+    pub fn get_advice_generation_status(&self) -> String {
+        // Placeholder implementation
+        "Ready".to_string()
+    }
+
+    pub fn get_last_chat_error(&self) -> Option<String> {
+        // Placeholder implementation
+        None
+    }
+
+    pub fn is_chat_available(&self) -> bool {
+        true
+    }
+
+    pub fn get_visibility(&self) -> bool {
+        self.visible
+    }
+
+    pub fn toggle_visibility(&mut self) {
+        self.visible = !self.visible;
+    }
+
+    pub fn set_visibility(&mut self, visible: bool) {
+        self.visible = visible;
+    }
 }
 
 pub struct PaneRegistry {
@@ -101,6 +247,12 @@ impl PaneRegistry {
         let mut commit_summary_pane = CommitSummaryPane::new_with_llm_client(Some(llm_client));
         commit_summary_pane.set_shared_state(llm_shared_state);
         self.register_pane(PaneId::CommitSummary, Box::new(commit_summary_pane));
+
+        // Create advice panel with configuration
+        let advice_config = crate::config::AdviceConfig::default();
+        let advice_panel = AdvicePanel::new(crate::config::Config::default(), advice_config)
+            .expect("Failed to create AdvicePanel");
+        self.register_pane(PaneId::Advice, Box::new(advice_panel));
     }
 
     pub fn register_pane(&mut self, id: PaneId, pane: Box<dyn Pane>) {
@@ -1903,9 +2055,257 @@ impl Pane for CommitSummaryPane {
     }
 }
 
+impl Pane for AdvicePanel {
+    fn title(&self) -> String {
+        match self.mode {
+            AdviceMode::Viewing => "Advice Panel".to_string(),
+            AdviceMode::Chatting => "Chat".to_string(),
+            AdviceMode::Help => "Help".to_string(),
+        }
+    }
+
+    fn render(
+        &self,
+        f: &mut Frame,
+        app: &App,
+        area: Rect,
+        _git_repo: &GitRepo,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let theme = app.get_theme();
+
+        let block = Block::default()
+            .title(self.title())
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.border_color()));
+
+        let content = match &self.content {
+            AdviceContent::Loading => {
+                vec![Line::from("Loading advice...".to_string())]
+            }
+            AdviceContent::Error(error) => {
+                vec![Line::from(format!("Error: {}", error))]
+            }
+            AdviceContent::Improvements(improvements) => {
+                improvements.iter().enumerate().map(|(i, imp)| {
+                    Line::from(format!("{}. {} ({})", i + 1, imp.title, imp.category))
+                }).collect()
+            }
+            AdviceContent::Chat(messages) => {
+                messages.iter().map(|msg| {
+                    let prefix = match msg.role {
+                        MessageRole::User => "You: ",
+                        MessageRole::Assistant => "AI: ",
+                        MessageRole::System => "System: ",
+                    };
+                    Line::from(format!("{}{}", prefix, msg.content))
+                }).collect()
+            }
+            AdviceContent::Help(help_text) => {
+                help_text.lines().map(Line::from).collect()
+            }
+        };
+
+        let paragraph = Paragraph::new(content)
+            .block(block)
+            .wrap(Wrap { trim: true })
+            .scroll((self.scroll_offset as u16, 0));
+
+        f.render_widget(paragraph, area);
+
+        // Show chat input when in chat mode
+        if self.mode == AdviceMode::Chatting {
+            let input_area = Rect {
+                x: area.x,
+                y: area.bottom().saturating_sub(3),
+                width: area.width,
+                height: 3,
+            };
+
+            let input_block = Block::default()
+                .title("Chat Input")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_color()));
+
+            let input_text = format!("> {}", self.chat_input);
+            let input_paragraph = Paragraph::new(input_text)
+                .block(input_block)
+                .wrap(Wrap { trim: false });
+
+            f.render_widget(input_paragraph, input_area);
+        }
+
+        Ok(())
+    }
+
+    fn handle_event(&mut self, event: &AppEvent) -> bool {
+        match event {
+            AppEvent::Key(key_event) => {
+                match self.mode {
+                    AdviceMode::Viewing => {
+                        match key_event.code {
+                            KeyCode::Char('/') => {
+                                self.mode = AdviceMode::Chatting;
+                                true
+                            }
+                            KeyCode::Char('?') => {
+                                self.mode = AdviceMode::Help;
+                                true
+                            }
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                self.scroll_offset = self.scroll_offset.saturating_add(1);
+                                true
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                                true
+                            }
+                            KeyCode::Esc => {
+                                false // Let parent handle Esc
+                            }
+                            _ => false,
+                        }
+                    }
+                    AdviceMode::Chatting => {
+                        match key_event.code {
+                            KeyCode::Enter => {
+                                if !self.chat_input.is_empty() {
+                                    let message = self.chat_input.clone();
+                                    self.chat_input.clear();
+                                    // This will be connected to LLM later
+                                    let _ = self.send_chat_message(&message);
+                                }
+                                true
+                            }
+                            KeyCode::Esc => {
+                                self.mode = AdviceMode::Viewing;
+                                true
+                            }
+                            KeyCode::Char(c) => {
+                                self.chat_input.push(c);
+                                true
+                            }
+                            KeyCode::Backspace => {
+                                self.chat_input.pop();
+                                true
+                            }
+                            _ => false,
+                        }
+                    }
+                    AdviceMode::Help => {
+                        match key_event.code {
+                            KeyCode::Esc => {
+                                self.mode = AdviceMode::Viewing;
+                                true
+                            }
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                self.scroll_offset = self.scroll_offset.saturating_add(1);
+                                true
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                                true
+                            }
+                            _ => false,
+                        }
+                    }
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn visible(&self) -> bool {
+        self.visible
+    }
+
+    fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
+    fn as_advice_pane(&self) -> Option<&AdvicePanel> {
+        Some(self)
+    }
+
+    fn as_advice_pane_mut(&mut self) -> Option<&mut AdvicePanel> {
+        Some(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{AdviceConfig, Config};
+
+    #[test]
+    fn test_advice_panel_creation() {
+        // Test that AdvicePanel can be created with default configuration
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+
+        let panel = AdvicePanel::new(config, advice_config);
+
+        assert!(panel.is_ok(), "Failed to create AdvicePanel");
+
+        let panel = panel.unwrap();
+        assert!(panel.visible());
+        assert_eq!(panel.get_mode(), AdviceMode::Viewing);
+        assert!(panel.get_improvements().is_empty());
+        assert!(panel.get_chat_history().is_empty());
+    }
+
+    #[test]
+    fn test_advice_panel_visibility() {
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        // Initially visible
+        assert!(panel.visible());
+
+        // Toggle to hide
+        panel.toggle_visibility();
+        assert!(!panel.visible());
+
+        // Toggle to show
+        panel.toggle_visibility();
+        assert!(panel.visible());
+
+        // Set explicitly
+        panel.set_visibility(false);
+        assert!(!panel.visible());
+        panel.set_visibility(true);
+        assert!(panel.visible());
+    }
+
+    #[test]
+    fn test_advice_panel_modes() {
+        let config = Config::default();
+        let advice_config = AdviceConfig::default();
+        let mut panel = AdvicePanel::new(config, advice_config).unwrap();
+
+        // Start in viewing mode
+        assert_eq!(panel.get_mode(), AdviceMode::Viewing);
+
+        // Test key events for mode switching
+        let enter_chat = AppEvent::Key(KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::NONE,
+        ));
+
+        let handled = panel.handle_event(&enter_chat);
+        assert!(handled, "Should handle entering chat mode");
+        assert_eq!(panel.get_mode(), AdviceMode::Chatting);
+
+        let exit_chat = AppEvent::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        ));
+
+        let handled = panel.handle_event(&exit_chat);
+        assert!(handled, "Should handle exiting chat mode");
+        assert_eq!(panel.get_mode(), AdviceMode::Viewing);
+    }
+
     use crate::config::LlmConfig;
     use std::env;
     use std::sync::Arc;
@@ -1923,12 +2323,13 @@ mod tests {
     #[test]
     fn test_pane_registry_creation() {
         let registry = create_test_pane_registry();
-        assert_eq!(registry.panes.len(), 8); // Default panes + commit picker + commit summary (removed advice pane)
+        assert_eq!(registry.panes.len(), 9); // Default panes + commit picker + commit summary + advice pane
         assert!(registry.get_pane(&PaneId::FileTree).is_some());
         assert!(registry.get_pane(&PaneId::Monitor).is_some());
         assert!(registry.get_pane(&PaneId::Diff).is_some());
         assert!(registry.get_pane(&PaneId::CommitPicker).is_some());
         assert!(registry.get_pane(&PaneId::CommitSummary).is_some());
+        assert!(registry.get_pane(&PaneId::Advice).is_some());
     }
 
     #[test]

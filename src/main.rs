@@ -658,6 +658,13 @@ fn handle_key_event(
             }
             false
         }
+        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            debug!("User pressed Ctrl+L - toggling advice panel");
+            if let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Advice) {
+                log::warn!("Failed to toggle advice panel: {}", e);
+            }
+            false
+        }
         _ => false,
     }
 }
