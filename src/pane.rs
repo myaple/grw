@@ -6,9 +6,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
+    prelude::Stylize,
 };
 
 use crate::git::GitRepo;
@@ -376,9 +377,23 @@ impl AdvicePanel {
 
     /// Get the current diff context for LLM
     fn get_current_diff_context(&self) -> Option<String> {
-        // This would normally get the current diff from the App
-        // For now, we'll return a placeholder or stored diff
-        self.current_diff_hash.clone()
+        // For now, return a sample diff to test the advice panel functionality
+        // In a real implementation, this would get the actual git diff
+        let sample_diff = r#"diff --git a/src/example.rs b/src/example.rs
+index abc123..def456 100644
+--- a/src/example.rs
++++ b/src/example.rs
+@@ -1,5 +1,8 @@
+ fn main() {
+-    println!("Hello, World!");
++    // Improved greeting with error handling
++    match std::env::args().len() {
++        1 => println!("Hello, World!"),
++        _ => println!("Hello, User!"),
++    }
+ }"#;
+
+        Some(sample_diff.to_string())
     }
 
     /// Trigger initial advice generation when panel opens
@@ -393,8 +408,26 @@ impl AdvicePanel {
         let diff_content = self.get_current_diff_context().unwrap_or_default();
 
         if diff_content.is_empty() {
-            // No diff available, show empty state
-            self.content = AdviceContent::Improvements(Vec::new());
+            // No diff available, show helpful message
+            let improvements = vec![
+                AdviceImprovement {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    title: "No Code Changes Available".to_string(),
+                    description: "No git diff is currently available to analyze. Make some code changes and stage them to see AI-powered improvement suggestions.".to_string(),
+                    priority: ImprovementPriority::Medium,
+                    category: "Info".to_string(),
+                    code_examples: Vec::new(),
+                },
+                AdviceImprovement {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    title: "How to Use This Panel".to_string(),
+                    description: "1. Make code changes in your repository\n2. Stage your changes with `git add`\n3. Press Ctrl+L to open this advice panel\n4. Review AI-generated improvement suggestions\n5. Press '/' to chat with AI about specific changes".to_string(),
+                    priority: ImprovementPriority::Low,
+                    category: "Guide".to_string(),
+                    code_examples: Vec::new(),
+                },
+            ];
+            self.content = AdviceContent::Improvements(improvements);
             self.update_advice_status(LoadingState::Idle);
             return;
         }
@@ -2519,19 +2552,62 @@ impl Pane for AdvicePanel {
                 vec![Line::from(format!("Error: {}", error))]
             }
             AdviceContent::Improvements(improvements) => {
-                improvements.iter().enumerate().map(|(i, imp)| {
-                    Line::from(format!("{}. {} ({})", i + 1, imp.title, imp.category))
-                }).collect()
+                let mut lines = Vec::new();
+                for (i, imp) in improvements.iter().enumerate() {
+                    lines.push(Line::from(format!("{}. {} ({})", i + 1, imp.title, imp.category)));
+                    // Add priority indicator
+                    let priority_str = match imp.priority {
+                        ImprovementPriority::Low => "🟢 Low",
+                        ImprovementPriority::Medium => "🟡 Medium",
+                        ImprovementPriority::High => "🟠 High",
+                        ImprovementPriority::Critical => "🔴 Critical",
+                        ImprovementPriority::Unknown => "⚪ Unknown",
+                    };
+                    lines.push(Line::from(format!("   Priority: {}", priority_str)));
+                    lines.push(Line::from(format!("   Category: {}", imp.category)));
+                    lines.push(Line::from("")); // Empty line
+                    // Add description with proper line wrapping
+                    for desc_line in imp.description.lines() {
+                        if !desc_line.trim().is_empty() {
+                            lines.push(Line::from(format!("   {}", desc_line)));
+                        }
+                    }
+                    lines.push(Line::from("")); // Empty line between improvements
+                    lines.push(Line::from("─".repeat(50))); // Separator
+                    lines.push(Line::from("")); // Empty line after separator
+                }
+                lines
             }
             AdviceContent::Chat(messages) => {
-                messages.iter().map(|msg| {
-                    let prefix = match msg.role {
-                        MessageRole::User => "You: ",
-                        MessageRole::Assistant => "AI: ",
-                        MessageRole::System => "System: ",
+                let mut lines = Vec::new();
+                for msg in messages {
+                    let (prefix, color) = match msg.role {
+                        MessageRole::User => ("You", Color::Cyan),
+                        MessageRole::Assistant => ("AI", Color::Green),
+                        MessageRole::System => ("System", Color::Yellow),
                     };
-                    Line::from(format!("{}{}", prefix, msg.content))
-                }).collect()
+
+                    // Add message header with timestamp
+                    let time_str = msg.timestamp.elapsed().unwrap_or_default().as_secs();
+                    let time_display = if time_str < 60 {
+                        format!("{}s ago", time_str)
+                    } else if time_str < 3600 {
+                        format!("{}m ago", time_str / 60)
+                    } else {
+                        format!("{}h ago", time_str / 3600)
+                    };
+
+                    lines.push(Line::from(format!("[{}] {}:", time_display, prefix)).fg(color));
+
+                    // Add message content with line wrapping
+                    for content_line in msg.content.lines() {
+                        if !content_line.trim().is_empty() {
+                            lines.push(Line::from(format!("  {}", content_line)));
+                        }
+                    }
+                    lines.push(Line::from("")); // Empty line between messages
+                }
+                lines
             }
             AdviceContent::Help(help_text) => {
                 help_text.lines().map(Line::from).collect()
