@@ -547,6 +547,17 @@ fn handle_key_event(
         KeyCode::Esc => {
             if app.is_showing_help() {
                 app.toggle_help();
+            } else if app.is_advice_panel_visible() {
+                debug!("User pressed Escape - hiding advice panel and showing diff pane");
+                // Hide advice panel and show diff pane (same behavior as Ctrl+D)
+                if let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Advice) {
+                    log::warn!("Failed to hide advice panel: {}", e);
+                }
+                if !app.is_diff_panel_visible()
+                    && let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Diff)
+                {
+                    log::warn!("Failed to show diff pane: {}", e);
+                }
             }
             false
         }

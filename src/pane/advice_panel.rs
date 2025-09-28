@@ -933,7 +933,7 @@ impl Pane for AdvicePanel {
                                         "  Ctrl+L             - Toggle advice panel",
                                         "  Ctrl+D             - Return to diff pane",
                                         "  Ctrl+R             - Refresh diff and clear chat",
-                                        "  Esc                - Exit advice pane",
+                                        "  Esc                - Return to diff pane",
                                         "  ?                  - Show this help",
                                         "",
                                         "Tips:",
