@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::git::{CommitInfo, FileDiff, GitRepo, PreloadConfig, SummaryPreloader, TreeNode};
 use crate::llm::LlmClient;
 use crate::pane::{PaneId, PaneRegistry};
@@ -808,15 +806,6 @@ impl App {
         self.last_active_pane
     }
 
-    pub fn poll_llm_summaries(&mut self) {
-        self.pane_registry
-            .with_pane_mut(&PaneId::CommitSummary, |pane| {
-                if let Some(commit_summary_pane) = pane.as_commit_summary_pane_mut() {
-                    commit_summary_pane.poll_llm_summary();
-                }
-            });
-    }
-
     // Commit picker mode state management methods
     pub fn enter_commit_picker_mode(&mut self) {
         // Validate that we can enter commit picker mode
@@ -916,10 +905,6 @@ impl App {
     // Getter methods for commit picker state access
     pub fn is_in_commit_picker_mode(&self) -> bool {
         self.app_mode == AppMode::CommitPicker
-    }
-
-    pub fn get_app_mode(&self) -> AppMode {
-        self.app_mode
     }
 
     pub fn get_selected_commit(&self) -> Option<&CommitInfo> {
@@ -1090,15 +1075,6 @@ impl App {
     }
 
     /// Poll for LLM summary updates from CommitSummaryPane
-    pub fn poll_commit_summary_updates(&mut self) {
-        self.pane_registry
-            .with_pane_mut(&PaneId::CommitSummary, |pane| {
-                if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
-                    commit_summary.poll_llm_summary();
-                }
-            });
-    }
-
     /// Check for async advice panel task completion and update content
     pub fn check_advice_panel_tasks(&mut self) {
         self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
@@ -1287,20 +1263,8 @@ impl App {
             .preload_around_index(commits, current_index);
     }
 
-    pub fn is_summary_loading(&self, commit_sha: &str) -> bool {
-        self.summary_preloader.is_loading(commit_sha)
-    }
-
     pub fn set_preload_config(&mut self, config: PreloadConfig) {
         self.summary_preloader.set_config(config);
-    }
-
-    pub fn get_preload_config(&self) -> &PreloadConfig {
-        self.summary_preloader.get_config()
-    }
-
-    pub fn clear_preloader_active_tasks(&mut self) {
-        self.summary_preloader.clear_active_tasks();
     }
 
     pub fn get_commit_picker_state(&self) -> Option<(Vec<CommitInfo>, usize)> {

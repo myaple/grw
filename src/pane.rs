@@ -36,10 +36,6 @@ pub trait Pane {
     fn as_commit_picker_pane_mut(&mut self) -> Option<&mut CommitPickerPane> {
         None
     }
-    #[allow(dead_code)]
-    fn as_commit_summary_pane(&self) -> Option<&CommitSummaryPane> {
-        None
-    }
     fn as_commit_summary_pane_mut(&mut self) -> Option<&mut CommitSummaryPane> {
         None
     }
@@ -62,7 +58,6 @@ pub enum PaneId {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum AppEvent {
     Key(KeyEvent),
     DataUpdated((), String),
@@ -1515,8 +1510,6 @@ mod help_tests {
             sha: "abc123".to_string(),
             short_sha: "abc123".to_string(),
             message: "Test commit".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-01".to_string(),
             files_changed: vec![],
         };
         app.select_commit(test_commit);
@@ -1538,8 +1531,6 @@ mod help_tests {
             sha: "abc123".to_string(),
             short_sha: "abc123".to_string(),
             message: "Test commit".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-01".to_string(),
             files_changed: vec![],
         };
 
@@ -1730,23 +1721,12 @@ impl CommitPickerPane {
         self.render_cache_valid = false;
     }
 
-    #[allow(dead_code)]
     pub fn set_error(&mut self, error: String) {
         self.loading_state = CommitPickerLoadingState::Error;
         self.error_message = Some(error);
         self.commits.clear();
         self.current_index = 0;
         self.scroll_offset = 0;
-    }
-
-    #[allow(dead_code)]
-    pub fn is_loading(&self) -> bool {
-        matches!(self.loading_state, CommitPickerLoadingState::Loading)
-    }
-
-    #[allow(dead_code)]
-    pub fn has_error(&self) -> bool {
-        matches!(self.loading_state, CommitPickerLoadingState::Error)
     }
 
     pub fn get_current_commit(&self) -> Option<&crate::git::CommitInfo> {
@@ -2079,11 +2059,7 @@ pub struct CommitSummaryPane {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommitSummaryLoadingState {
     NoCommit,
-    #[allow(dead_code)]
-    LoadingSummary,
     Loaded,
-    #[allow(dead_code)]
-    Error,
 }
 
 impl Default for CommitSummaryPane {
@@ -2158,27 +2134,9 @@ impl CommitSummaryPane {
         self.llm_shared_state = Some(llm_shared_state);
     }
 
-    #[allow(dead_code)]
-    pub fn set_error(&mut self, error: String) {
-        self.loading_state = CommitSummaryLoadingState::Error;
-        if let Some(shared_state) = &self.llm_shared_state {
-            shared_state.set_error("commit_summary".to_string(), error);
-        }
-        self.is_loading_summary = false;
-        self.pending_summary_sha = None;
-    }
-
     pub fn clear_error(&mut self) {
         if let Some(shared_state) = &self.llm_shared_state {
             shared_state.clear_error("commit_summary");
-        }
-    }
-
-    pub fn get_error(&self) -> Option<String> {
-        if let Some(shared_state) = &self.llm_shared_state {
-            shared_state.get_error("commit_summary")
-        } else {
-            None
         }
     }
 
@@ -2188,12 +2146,6 @@ impl CommitSummaryPane {
             self.llm_summary =
                 Some("LLM summary generation not yet implemented with shared state".to_string());
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn poll_llm_summary(&mut self) {
-        // This method is now deprecated - use shared state instead
-        // The actual summary polling is handled through shared state in the main loop
     }
 
     /// Set a cached summary directly without generating a new one
@@ -2217,12 +2169,6 @@ impl CommitSummaryPane {
         } else {
             false
         }
-    }
-
-    /// Get the current commit SHA if available
-    #[allow(dead_code)]
-    pub fn get_current_commit_sha(&self) -> Option<String> {
-        self.current_commit.as_ref().map(|c| c.sha.clone())
     }
 
     /// Force generation of a new summary (bypassing cache)
@@ -2260,37 +2206,15 @@ impl Pane for CommitSummaryPane {
         let theme = app.get_theme();
 
         // Handle different loading states
-        match self.loading_state {
-            CommitSummaryLoadingState::NoCommit => {
-                let paragraph = Paragraph::new("No commit selected").block(
-                    Block::default()
-                        .title(self.title())
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border_color())),
-                );
-                f.render_widget(paragraph, area);
-                return Ok(());
-            }
-
-            CommitSummaryLoadingState::Error => {
-                let error_text = if let Some(error) = self.get_error() {
-                    format!("❌ Error loading commit details:\n{}", error)
-                } else {
-                    "❌ Error loading commit details".to_string()
-                };
-
-                let paragraph = Paragraph::new(error_text)
-                    .block(
-                        Block::default()
-                            .title(self.title())
-                            .borders(Borders::ALL)
-                            .border_style(Style::default().fg(theme.error_color())),
-                    )
-                    .style(Style::default().fg(theme.error_color()));
-                f.render_widget(paragraph, area);
-                return Ok(());
-            }
-            _ => {} // Continue with normal rendering for LoadingSummary and Loaded states
+        if self.loading_state == CommitSummaryLoadingState::NoCommit {
+            let paragraph = Paragraph::new("No commit selected").block(
+                Block::default()
+                    .title(self.title())
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color())),
+            );
+            f.render_widget(paragraph, area);
+            return Ok(());
         }
 
         if let Some(commit) = &self.current_commit {
@@ -2501,10 +2425,6 @@ impl Pane for CommitSummaryPane {
 
     fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
-    }
-
-    fn as_commit_summary_pane(&self) -> Option<&CommitSummaryPane> {
-        Some(self)
     }
 
     fn as_commit_summary_pane_mut(&mut self) -> Option<&mut CommitSummaryPane> {
@@ -2997,16 +2917,12 @@ mod tests {
                 sha: "abc123".to_string(),
                 short_sha: "abc123".to_string(),
                 message: "First commit".to_string(),
-                author: "Test Author".to_string(),
-                date: "2023-01-01".to_string(),
                 files_changed: vec![],
             },
             crate::git::CommitInfo {
                 sha: "def456".to_string(),
                 short_sha: "def456".to_string(),
                 message: "Second commit".to_string(),
-                author: "Test Author".to_string(),
-                date: "2023-01-02".to_string(),
                 files_changed: vec![],
             },
         ];
@@ -3036,16 +2952,12 @@ mod tests {
                 sha: "abc123".to_string(),
                 short_sha: "abc123".to_string(),
                 message: "First commit".to_string(),
-                author: "Test Author".to_string(),
-                date: "2023-01-01".to_string(),
                 files_changed: vec![],
             },
             crate::git::CommitInfo {
                 sha: "def456".to_string(),
                 short_sha: "def456".to_string(),
                 message: "Second commit".to_string(),
-                author: "Test Author".to_string(),
-                date: "2023-01-02".to_string(),
                 files_changed: vec![],
             },
         ];
@@ -3089,8 +3001,6 @@ mod tests {
             sha: "abc123".to_string(),
             short_sha: "abc123".to_string(),
             message: "Test commit".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-01".to_string(),
             files_changed: vec![crate::git::CommitFileChange {
                 path: std::path::PathBuf::from("test.rs"),
                 status: crate::git::FileChangeStatus::Modified,
@@ -3114,8 +3024,6 @@ mod tests {
             sha: "abc123".to_string(),
             short_sha: "abc123".to_string(),
             message: "Test commit".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-01".to_string(),
             files_changed: (0..20)
                 .map(|i| crate::git::CommitFileChange {
                     path: std::path::PathBuf::from(format!("file{}.rs", i)),
@@ -3178,8 +3086,10 @@ mod tests {
         use crate::config::LlmConfig;
 
         // Create a test LLM client
-        let mut llm_config = LlmConfig::default();
-        llm_config.api_key = Some("test_key".to_string());
+        let llm_config = LlmConfig {
+            api_key: Some("test_key".to_string()),
+            ..Default::default()
+        };
         let llm_client = LlmClient::new(llm_config).ok();
 
         let pane = CommitSummaryPane::new_with_llm_client(llm_client);
@@ -3205,8 +3115,6 @@ mod tests {
             sha: "abc123".to_string(),
             short_sha: "abc123".to_string(),
             message: "Test commit".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-01".to_string(),
             files_changed: vec![
                 crate::git::CommitFileChange {
                     path: std::path::PathBuf::from("src/main.rs"),

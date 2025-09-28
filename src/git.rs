@@ -15,13 +15,10 @@ pub struct FileDiff {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct CommitInfo {
     pub sha: String,
     pub short_sha: String,
     pub message: String,
-    pub author: String,
-    pub date: String,
     pub files_changed: Vec<CommitFileChange>,
 }
 
@@ -407,24 +404,6 @@ impl SummaryPreloader {
     pub fn set_config(&mut self, config: PreloadConfig) {
         self.config = config;
     }
-
-    /// Check if a summary is currently being loaded
-    #[allow(dead_code)]
-    pub fn is_loading(&self, commit_sha: &str) -> bool {
-        self.llm_state.is_summary_loading(commit_sha)
-    }
-
-    /// Get current configuration
-    #[allow(dead_code)]
-    pub fn get_config(&self) -> &PreloadConfig {
-        &self.config
-    }
-
-    /// Clear all active tasks (useful for cleanup)
-    #[allow(dead_code)]
-    pub fn clear_active_tasks(&self) {
-        self.llm_state.clear_all_active_tasks();
-    }
 }
 
 #[cfg(test)]
@@ -458,7 +437,7 @@ mod tests {
         };
         let mut preloader = SummaryPreloader::new(None, create_test_llm_state());
         preloader.set_config(config.clone());
-        assert_eq!(preloader.config.enabled, false);
+        assert!(!preloader.config.enabled);
         assert_eq!(preloader.config.count, 10);
     }
 
@@ -475,15 +454,11 @@ mod tests {
             sha: "abc123".to_string(),
             short_sha: "abc123".to_string(),
             message: "Test commit".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-01".to_string(),
             files_changed: vec![],
         }];
 
         // Should not start any tasks when disabled
         preloader.preload_summaries(&commits);
-        // With shared state, we can check if the task is loading
-        assert!(!preloader.is_loading("abc123"));
     }
 
     #[test]
@@ -494,15 +469,11 @@ mod tests {
             sha: "abc123".to_string(),
             short_sha: "abc123".to_string(),
             message: "Test commit".to_string(),
-            author: "Test Author".to_string(),
-            date: "2023-01-01".to_string(),
             files_changed: vec![],
         }];
 
         // Should not start any tasks without LLM client
         preloader.preload_summaries(&commits);
-        // With shared state, we can check if the task is loading
-        assert!(!preloader.is_loading("abc123"));
     }
 
     #[test]
@@ -514,51 +485,17 @@ mod tests {
                 sha: "abc123".to_string(),
                 short_sha: "abc123".to_string(),
                 message: "Test commit 1".to_string(),
-                author: "Test Author".to_string(),
-                date: "2023-01-01".to_string(),
                 files_changed: vec![],
             },
             CommitInfo {
                 sha: "def456".to_string(),
                 short_sha: "def456".to_string(),
                 message: "Test commit 2".to_string(),
-                author: "Test Author".to_string(),
-                date: "2023-01-02".to_string(),
                 files_changed: vec![],
             },
         ];
 
         // Should not start any tasks without LLM client
         preloader.preload_around_index(&commits, 0);
-        // With shared state, we can check if the task is loading
-        assert!(!preloader.is_loading("abc123"));
-        assert!(!preloader.is_loading("def456"));
-    }
-
-    #[test]
-    fn test_is_loading() {
-        let preloader = SummaryPreloader::new(None, create_test_llm_state());
-
-        // Initially nothing is loading
-        assert!(!preloader.is_loading("abc123"));
-
-        // Manually add to active tasks for testing using shared state
-        preloader.llm_state.start_summary_task("abc123".to_string());
-        assert!(preloader.is_loading("abc123"));
-        assert!(!preloader.is_loading("def456"));
-    }
-
-    #[test]
-    fn test_clear_active_tasks() {
-        let preloader = SummaryPreloader::new(None, create_test_llm_state());
-
-        // Add some active tasks using shared state
-        preloader.llm_state.start_summary_task("abc123".to_string());
-        preloader.llm_state.start_summary_task("def456".to_string());
-        assert_eq!(preloader.llm_state.active_summary_task_count(), 2);
-
-        // Clear all tasks
-        preloader.clear_active_tasks();
-        assert_eq!(preloader.llm_state.active_summary_task_count(), 0);
     }
 }

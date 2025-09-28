@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::git::{CommitFileChange, CommitInfo, FileChangeStatus, FileDiff, GitRepo, ViewMode};
 use crate::shared_state::GitSharedState;
 use color_eyre::eyre::Result;
@@ -63,18 +61,6 @@ impl GitWorker {
 
             // Sleep for the configured interval
             tokio::time::sleep(update_interval).await;
-        }
-    }
-
-    /// Continuous run loop with default interval (1 second)
-    pub async fn run_continuous_default(&mut self) -> Result<()> {
-        self.run_continuous(1000).await
-    }
-
-    /// Update git state once
-    pub async fn run(&mut self) {
-        if let Err(e) = self.update_shared_state() {
-            debug!("Error during git status update: {}", e);
         }
     }
 
@@ -579,13 +565,6 @@ impl GitWorker {
 
             let short_sha = sha.chars().take(7).collect::<String>();
             let message = commit.summary().unwrap_or("<no message>").to_string();
-            let author = commit.author().name().unwrap_or("Unknown").to_string();
-
-            // Format date as a readable string with error handling
-            let timestamp = commit.time();
-            let date = chrono::DateTime::from_timestamp(timestamp.seconds(), 0)
-                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                .unwrap_or_else(|| "Unknown date".to_string());
 
             // Get file changes for this commit using a separate method that doesn't require mutable self
             let files_changed =
@@ -602,8 +581,6 @@ impl GitWorker {
                 sha: sha.clone(),
                 short_sha,
                 message,
-                author,
-                date,
                 files_changed,
             };
 
@@ -788,234 +765,6 @@ impl GitWorker {
         Ok(file_changes)
     }
 
-    /// Get the full diff content for a specific commit
-    /// Returns the complete diff as a string that can be used for LLM analysis
-    pub fn get_commit_full_diff(&self, commit_sha: &str) -> Result<String> {
-        debug!("Getting full diff for commit: {}", commit_sha);
-
-        // Validate commit SHA format
-        if commit_sha.is_empty() {
-            debug!("Empty commit SHA provided");
-            return Err(color_eyre::eyre::eyre!("Empty commit SHA"));
-        }
-
-        // Use git show to get the full diff content
-        let output = std::process::Command::new("git")
-            .args([
-                "show",
-                "--format=", // Don't show commit message, just the diff
-                "--no-color",
-                commit_sha,
-            ])
-            .current_dir(&self.path)
-            .output()
-            .map_err(|e| color_eyre::eyre::eyre!("Failed to execute git show: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(color_eyre::eyre::eyre!("Git show failed: {}", stderr));
-        }
-
-        let diff_content = String::from_utf8_lossy(&output.stdout).to_string();
-        debug!(
-            "Retrieved {} bytes of diff content for commit {}",
-            diff_content.len(),
-            commit_sha
-        );
-
-        Ok(diff_content)
-    }
-
-    /// Get file modifications for a specific commit
-    /// Returns a list of files changed in the commit with their change status and line counts
-    /// Uses caching to improve performance for repeated requests
-    pub fn get_commit_file_changes(&mut self, commit_sha: &str) -> Result<Vec<CommitFileChange>> {
-        debug!("Getting file changes for commit: {}", commit_sha);
-
-        // Check shared state cache first
-        let cache_key = format!("commit_changes_{}", commit_sha);
-        if let Some(cached_diffs) = self.shared_state.get_cached_file_diff(&cache_key) {
-            debug!("Using cached file changes for commit: {}", commit_sha);
-            // Convert FileDiff to CommitFileChange (simplified for now)
-            let file_changes: Vec<CommitFileChange> = cached_diffs
-                .into_iter()
-                .map(|diff| {
-                    CommitFileChange {
-                        path: diff.path,
-                        status: FileChangeStatus::Modified, // Simplified mapping
-                        additions: diff.additions,
-                        deletions: diff.deletions,
-                    }
-                })
-                .collect();
-            return Ok(file_changes);
-        }
-
-        let mut file_changes = Vec::new();
-
-        // Validate commit SHA format
-        if commit_sha.is_empty() {
-            debug!("Empty commit SHA provided");
-            return Err(color_eyre::eyre::eyre!("Empty commit SHA"));
-        }
-
-        let oid = match git2::Oid::from_str(commit_sha) {
-            Ok(oid) => oid,
-            Err(e) => {
-                debug!("Invalid commit SHA format '{}': {}", commit_sha, e);
-                return Err(e.into());
-            }
-        };
-
-        let commit = match self.repo.find_commit(oid) {
-            Ok(commit) => commit,
-            Err(e) => {
-                debug!("Commit {} not found: {}", commit_sha, e);
-                return Err(e.into());
-            }
-        };
-
-        // Get the commit's tree with error handling
-        let commit_tree = match commit.tree() {
-            Ok(tree) => tree,
-            Err(e) => {
-                debug!("Failed to get tree for commit {}: {}", commit_sha, e);
-                return Err(e.into());
-            }
-        };
-
-        // Get parent tree (if exists) for comparison with error handling
-        let parent_tree = if commit.parent_count() > 0 {
-            match commit.parent(0).and_then(|parent| parent.tree()) {
-                Ok(tree) => Some(tree),
-                Err(e) => {
-                    debug!("Failed to get parent tree for commit {}: {}", commit_sha, e);
-                    // For commits without accessible parents (like initial commit), compare against empty tree
-                    None
-                }
-            }
-        } else {
-            // Initial commit - no parent
-            None
-        };
-
-        // Create diff between parent and current commit with error handling
-        let diff = match self.repo.diff_tree_to_tree(
-            parent_tree.as_ref(),
-            Some(&commit_tree),
-            Some(&mut DiffOptions::new()),
-        ) {
-            Ok(diff) => diff,
-            Err(e) => {
-                debug!("Failed to create diff for commit {}: {}", commit_sha, e);
-                return Err(e.into());
-            }
-        };
-
-        // Process each delta (file change) in the diff
-        let mut errors_encountered = 0;
-        const MAX_FILE_ERRORS: usize = 10; // Allow some file processing errors
-
-        for delta in diff.deltas() {
-            let status = match delta.status() {
-                git2::Delta::Added => FileChangeStatus::Added,
-                git2::Delta::Deleted => FileChangeStatus::Deleted,
-                git2::Delta::Modified => FileChangeStatus::Modified,
-                git2::Delta::Renamed => FileChangeStatus::Renamed,
-                git2::Delta::Copied => FileChangeStatus::Modified, // Treat copied as modified
-                git2::Delta::Ignored => continue,                  // Skip ignored files
-                git2::Delta::Untracked => continue,                // Skip untracked files
-                git2::Delta::Typechange => FileChangeStatus::Modified, // Treat type changes as modified
-                _ => {
-                    debug!(
-                        "Unknown delta status for file in commit {}: {:?}",
-                        commit_sha,
-                        delta.status()
-                    );
-                    FileChangeStatus::Modified // Default for unknown types
-                }
-            };
-
-            // Get the file path (prefer new file path for renames) with validation
-            let file_path = if let Some(new_file_path) = delta.new_file().path() {
-                self.path.join(new_file_path)
-            } else if let Some(old_file_path) = delta.old_file().path() {
-                self.path.join(old_file_path)
-            } else {
-                debug!(
-                    "No valid file path found for delta in commit {}",
-                    commit_sha
-                );
-                errors_encountered += 1;
-                if errors_encountered >= MAX_FILE_ERRORS {
-                    debug!("Too many file processing errors, stopping");
-                    break;
-                }
-                continue; // Skip if no path available
-            };
-
-            // Get line count statistics using git diff-tree with error handling
-            let (additions, deletions) = match self.get_commit_file_stats(commit_sha, &file_path) {
-                Ok(stats) => stats,
-                Err(e) => {
-                    debug!(
-                        "Failed to get file stats for {} in commit {}: {}",
-                        file_path.display(),
-                        commit_sha,
-                        e
-                    );
-                    errors_encountered += 1;
-                    if errors_encountered >= MAX_FILE_ERRORS {
-                        debug!("Too many file processing errors, stopping");
-                        break;
-                    }
-                    // Continue with zero stats rather than failing completely
-                    (0, 0)
-                }
-            };
-
-            file_changes.push(CommitFileChange {
-                path: file_path,
-                status,
-                additions,
-                deletions,
-            });
-        }
-
-        if errors_encountered > 0 {
-            debug!(
-                "Found {} file changes for commit {} with {} errors",
-                file_changes.len(),
-                commit_sha,
-                errors_encountered
-            );
-        } else {
-            debug!(
-                "Found {} file changes for commit {}",
-                file_changes.len(),
-                commit_sha
-            );
-        }
-
-        // Cache the file changes in shared state for future use
-        let cache_key = format!("commit_changes_{}", commit_sha);
-        let file_diffs: Vec<FileDiff> = file_changes
-            .iter()
-            .map(|change| {
-                FileDiff {
-                    path: change.path.clone(),
-                    status: git2::Status::from_bits_truncate(4), // INDEX_MODIFIED
-                    line_strings: vec![],                        // Simplified for caching
-                    additions: change.additions,
-                    deletions: change.deletions,
-                }
-            })
-            .collect();
-        self.shared_state.cache_file_diff(cache_key, file_diffs);
-
-        Ok(file_changes)
-    }
-
     /// Static helper method to get addition/deletion counts for a specific file in a commit
     fn get_commit_file_stats_static(
         repo_path: &Path,
@@ -1106,11 +855,6 @@ impl GitWorker {
             relative_path, commit_sha
         );
         Ok((0, 0))
-    }
-
-    /// Helper method to get addition/deletion counts for a specific file in a commit
-    fn get_commit_file_stats(&self, commit_sha: &str, file_path: &Path) -> Result<(usize, usize)> {
-        Self::get_commit_file_stats_static(&self.path, commit_sha, file_path)
     }
 }
 
@@ -1207,7 +951,7 @@ mod tests {
 
         // Create GitWorker
         let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
+        let mut git_worker = GitWorker::new(repo_path.clone(), shared_state)?;
 
         // Test get_commit_history
         let commits = git_worker.get_commit_history(10)?;
@@ -1226,8 +970,6 @@ mod tests {
             assert!(!commit.sha.is_empty());
             assert_eq!(commit.short_sha.len(), 7);
             assert!(commit.sha.starts_with(&commit.short_sha));
-            assert!(!commit.author.is_empty());
-            assert!(!commit.date.is_empty());
         }
 
         Ok(())
@@ -1249,7 +991,7 @@ mod tests {
         }
 
         let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
+        let mut git_worker = GitWorker::new(repo_path.clone(), shared_state)?;
 
         // Test with limit
         let commits = git_worker.get_commit_history(3)?;
@@ -1304,17 +1046,16 @@ mod tests {
             &[&parent_commit],
         )?;
 
-        let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
-
         // Test file changes for first commit (should show file1.txt as added)
-        let changes1 = git_worker.get_commit_file_changes(&commit1_id.to_string())?;
+        let changes1 =
+            GitWorker::get_commit_file_changes_static(&repo, &repo_path, &commit1_id.to_string())?;
         assert_eq!(changes1.len(), 1);
         assert!(changes1[0].path.ends_with("file1.txt"));
         assert!(matches!(changes1[0].status, FileChangeStatus::Added));
 
         // Test file changes for second commit (should show file1.txt modified and file2.txt added)
-        let changes2 = git_worker.get_commit_file_changes(&commit2_id.to_string())?;
+        let changes2 =
+            GitWorker::get_commit_file_changes_static(&repo, &repo_path, &commit2_id.to_string())?;
         assert_eq!(changes2.len(), 2);
 
         // Find the changes for each file
@@ -1375,11 +1116,9 @@ mod tests {
             &[&parent_commit],
         )?;
 
-        let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
-
         // Test file changes for deletion commit
-        let changes = git_worker.get_commit_file_changes(&commit3_id.to_string())?;
+        let changes =
+            GitWorker::get_commit_file_changes_static(&repo, &repo_path, &commit3_id.to_string())?;
         assert_eq!(changes.len(), 1);
         assert!(changes[0].path.ends_with("file1.txt"));
         assert!(matches!(changes[0].status, FileChangeStatus::Deleted));
@@ -1392,7 +1131,7 @@ mod tests {
         let (_temp_dir, _repo, repo_path) = create_test_repo()?;
 
         let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
+        let mut git_worker = GitWorker::new(repo_path.clone(), shared_state)?;
 
         // Test get_commit_history on empty repo
         let commits = git_worker.get_commit_history(10)?;
@@ -1408,15 +1147,12 @@ mod tests {
         // Create a commit first
         create_commit(&repo, &repo_path, "test.txt", "content", "Test commit")?;
 
-        let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
-
         // Test with invalid commit SHA
-        let result = git_worker.get_commit_file_changes("invalid_sha");
+        let result = GitWorker::get_commit_file_changes_static(&repo, &repo_path, "invalid_sha");
         assert!(result.is_err());
 
         // Test with empty commit SHA
-        let result = git_worker.get_commit_file_changes("");
+        let result = GitWorker::get_commit_file_changes_static(&repo, &repo_path, "");
         assert!(result.is_err());
 
         Ok(())
@@ -1451,7 +1187,7 @@ mod tests {
         create_commit(&repo, &repo_path, "file3.txt", "content3", "Third commit")?;
 
         let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
+        let mut git_worker = GitWorker::new(repo_path.clone(), shared_state)?;
 
         // First call should populate cache
         let commits1 = git_worker.get_commit_history(10)?;
@@ -1480,7 +1216,7 @@ mod tests {
         create_commit(&repo, &repo_path, "file2.txt", "content2", "Commit 2")?;
 
         let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new(repo_path, shared_state)?;
+        let mut git_worker = GitWorker::new(repo_path.clone(), shared_state)?;
 
         // Test that we can still get commits even if some operations fail
         let commits = git_worker.get_commit_history(10)?;
@@ -1491,8 +1227,6 @@ mod tests {
             assert!(!commit.sha.is_empty());
             assert!(!commit.short_sha.is_empty());
             assert_eq!(commit.short_sha.len(), 7);
-            assert!(!commit.author.is_empty());
-            assert!(!commit.date.is_empty());
         }
 
         Ok(())
@@ -1547,58 +1281,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_llm_summary_cache_eviction() -> Result<()> {
-        let (_temp_dir, repo, repo_path) = create_test_repo()?;
-
-        // Create multiple commits
-        let mut commit_ids = Vec::new();
-        for i in 1..=5 {
-            let commit_id = create_commit(
-                &repo,
-                &repo_path,
-                &format!("file{}.txt", i),
-                "content",
-                &format!("Commit {}", i),
-            )?;
-            commit_ids.push(commit_id);
-        }
-
-        let shared_state = Arc::new(GitSharedState::new());
-        let _git_worker = GitWorker::new(repo_path, shared_state)?;
-
-        // Cache operations are now handled by shared state
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_llm_summary_cache_integration_with_existing_caches() -> Result<()> {
-        let (_temp_dir, repo, repo_path) = create_test_repo()?;
-
-        // Create commits
-        let commit1_id = create_commit(&repo, &repo_path, "file1.txt", "content1", "First commit")?;
-        let commit2_id =
-            create_commit(&repo, &repo_path, "file2.txt", "content2", "Second commit")?;
-
-        let shared_state = Arc::new(GitSharedState::new());
-        let _git_worker = GitWorker::new(repo_path, shared_state)?;
-
-        let _commit1_sha = commit1_id.to_string();
-        let _commit2_sha = commit2_id.to_string();
-
-        // Get commit data (now handled by shared state)
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_llm_summary_cache_with_invalid_commit_sha() -> Result<()> {
-        let (_temp_dir, _repo, repo_path) = create_test_repo()?;
+        let (_temp_dir, _repo, _repo_path) = create_test_repo()?;
 
-        // Create shared state and GitWorker with new constructor
-        let git_shared_state = Arc::new(crate::shared_state::GitSharedState::new());
+        // Create shared state for testing
         let llm_shared_state = Arc::new(crate::shared_state::LlmSharedState::new());
-        let _git_worker = GitWorker::new(repo_path, git_shared_state)?;
 
         // Test with invalid commit SHA using LLM shared state
         let invalid_sha = "invalid_commit_sha";
@@ -1755,7 +1442,7 @@ mod tests {
 
         // Create GitWorker with shared state
         let shared_state = Arc::new(GitSharedState::new());
-        let mut git_worker = GitWorker::new(repo_path, shared_state.clone())?;
+        let mut git_worker = GitWorker::new(repo_path.clone(), shared_state.clone())?;
 
         // Test commit history retrieval and caching
         let commits1 = git_worker.get_commit_history(5)?;
@@ -1773,15 +1460,13 @@ mod tests {
         assert_eq!(commits2.len(), 3);
         assert_eq!(commits1[0].sha, commits2[0].sha);
 
-        // Test file diff caching
+        // Test file diff retrieval using static method
         let commit_sha = &commits1[0].sha;
-        let file_changes = git_worker.get_commit_file_changes(commit_sha)?;
+        let file_changes =
+            GitWorker::get_commit_file_changes_static(&_repo, &repo_path, commit_sha)?;
 
-        // Verify file changes were cached in shared state
-        let cache_key = format!("commit_changes_{}", commit_sha);
-        let cached_diffs = shared_state.get_cached_file_diff(&cache_key);
-        assert!(cached_diffs.is_some());
-        assert_eq!(cached_diffs.unwrap().len(), file_changes.len());
+        // Verify file changes were retrieved successfully
+        assert!(!file_changes.is_empty());
 
         Ok(())
     }

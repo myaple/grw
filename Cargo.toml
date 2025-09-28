@@ -9,8 +9,6 @@ crossterm = "0.28"
 git2 = { version = "0.19", default-features = false, features = ["https"] }
 color-eyre = "0.6"
 tokio = { version = "1.42", features = ["full"] }
-futures = "0.3"
-ansi-to-tui = "7.0"
 clap = { version = "4.5", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
@@ -21,7 +19,6 @@ dirs = "5.0"
 openai-api-rs = "6.0.11"
 scc = "2.1"
 uuid = { version = "1.11", features = ["v4"] }
-md5 = "0.7"
 textwrap = "0.16"
 
 [dev-dependencies]

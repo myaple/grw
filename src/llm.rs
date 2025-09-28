@@ -248,8 +248,10 @@ mod tests {
 
     #[test]
     fn test_llm_client_new_with_api_key() {
-        let mut config = LlmConfig::default();
-        config.api_key = Some("test-key".to_string());
+        let config = LlmConfig {
+            api_key: Some("test-key".to_string()),
+            ..Default::default()
+        };
         let _result = LlmClient::new(config);
         // This might fail due to network issues, but should at least get past the API key check
         // In a real test, you'd mock the HTTP client

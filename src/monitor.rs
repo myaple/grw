@@ -1,25 +1,16 @@
-#![allow(dead_code)]
-
 use log::debug;
 use std::time::{Duration, Instant};
 use tokio::process::Command as AsyncCommand;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct MonitorOutput {
     pub output: String,
     pub timestamp: Instant,
-    pub execution_time: Duration,
-    pub has_error: bool,
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct AsyncMonitorCommand {
-    command: String,
-    interval: u64,
-    output_tx: mpsc::Sender<MonitorOutput>,
     last_run: std::sync::Arc<std::sync::RwLock<Option<Instant>>>,
 }
 
@@ -44,7 +35,7 @@ impl AsyncMonitorCommand {
 
                 if should_run {
                     debug!("Running async monitor command: {command_clone}");
-                    let start_time = Instant::now();
+                    let _start_time = Instant::now();
 
                     let result = if cfg!(target_os = "windows") {
                         AsyncCommand::new("cmd")
@@ -57,8 +48,6 @@ impl AsyncMonitorCommand {
                             .output()
                             .await
                     };
-
-                    let elapsed = start_time.elapsed();
 
                     let monitor_output = match result {
                         Ok(output) => {
@@ -76,8 +65,6 @@ impl AsyncMonitorCommand {
                                 MonitorOutput {
                                     output: output_str,
                                     timestamp: Instant::now(),
-                                    execution_time: elapsed,
-                                    has_error: false,
                                 }
                             } else {
                                 let error_str = format!(
@@ -87,8 +74,6 @@ impl AsyncMonitorCommand {
                                 MonitorOutput {
                                     output: error_str,
                                     timestamp: Instant::now(),
-                                    execution_time: elapsed,
-                                    has_error: true,
                                 }
                             }
                         }
@@ -99,8 +84,6 @@ impl AsyncMonitorCommand {
                             MonitorOutput {
                                 output: error_str,
                                 timestamp: Instant::now(),
-                                execution_time: elapsed,
-                                has_error: true,
                             }
                         }
                     };
@@ -122,15 +105,7 @@ impl AsyncMonitorCommand {
             }
         });
 
-        (
-            Self {
-                command,
-                interval,
-                output_tx,
-                last_run,
-            },
-            output_rx,
-        )
+        (Self { last_run }, output_rx)
     }
 
     pub fn get_elapsed_since_last_run(&self) -> Option<Duration> {
@@ -148,14 +123,6 @@ impl AsyncMonitorCommand {
             false
         }
     }
-
-    pub fn get_command(&self) -> &str {
-        &self.command
-    }
-
-    pub fn get_interval(&self) -> u64 {
-        self.interval
-    }
 }
 
 #[cfg(test)]
@@ -167,8 +134,6 @@ mod tests {
     async fn test_monitor_command_creation() {
         let (monitor, mut rx) = AsyncMonitorCommand::new("echo test".to_string(), 1);
 
-        assert_eq!(monitor.get_command(), "echo test");
-        assert_eq!(monitor.get_interval(), 1);
         assert!(!monitor.has_run_yet());
         assert!(monitor.get_elapsed_since_last_run().is_none());
 
@@ -191,8 +156,6 @@ mod tests {
         let monitor_output = output.unwrap();
         assert!(monitor_output.output.contains("hello world"));
         assert!(monitor_output.output.contains("echo hello world"));
-        assert!(!monitor_output.has_error);
-        assert!(monitor_output.execution_time.as_millis() >= 0);
 
         // Check that monitor state was updated
         assert!(monitor.has_run_yet());
@@ -213,8 +176,6 @@ mod tests {
 
         let monitor_output = output.unwrap();
         assert!(monitor_output.output.contains("nonexistent_command_12345"));
-        assert!(monitor_output.has_error);
-        assert!(monitor_output.execution_time.as_millis() >= 0);
     }
 
     #[tokio::test]
@@ -272,8 +233,6 @@ mod tests {
         assert!(output.output.contains("echo structured_output"));
         assert!(output.output.starts_with("$ echo structured_output"));
         assert!(!output.output.is_empty());
-        assert!(output.execution_time > Duration::from_millis(0));
-        assert!(!output.has_error);
     }
 
     #[tokio::test]
@@ -289,7 +248,6 @@ mod tests {
         // Should contain both stdout and stderr
         assert!(output.output.contains("stdout"));
         assert!(output.output.contains("stderr"));
-        assert!(!output.has_error);
     }
 
     #[tokio::test]

@@ -161,11 +161,13 @@ impl Config {
 
 /// Configuration for shared state components
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct SharedStateConfig {
     pub commit_cache_size: usize,
     pub commit_history_limit: usize,
+    // TODO: These fields are reserved for future use
+    #[allow(dead_code)]
     pub summary_preload_enabled: bool,
+    #[allow(dead_code)]
     pub summary_preload_count: usize,
     pub cache_cleanup_interval: u64,
     pub stale_task_threshold: u64,
