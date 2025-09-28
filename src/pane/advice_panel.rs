@@ -170,7 +170,6 @@ impl AdvicePanel {
         self.update_advice_status(LoadingState::SendingChat);
 
         // Get context for the LLM
-        let original_diff = self.get_current_diff_context().unwrap_or_default();
         let conversation_history = self.get_chat_history();
 
         // Store the message ID for tracking the response
@@ -181,7 +180,6 @@ impl AdvicePanel {
         let llm_client_clone = self.llm_client.clone();
         let message_id_clone = user_message_id.clone();
         let message_content = message.to_string();
-        let diff_content = original_diff.clone();
 
         // Spawn async task for chat response generation
         let task = tokio::spawn(async move {
@@ -197,7 +195,7 @@ impl AdvicePanel {
                     debug!("🎯 ADVICE_PANEL: About to call LLM send_chat_followup");
 
                     match client
-                        .send_chat_followup(message_content, conversation_history, diff_content)
+                        .send_chat_followup(message_content, conversation_history)
                         .await
                     {
                         Ok(ai_message) => {
@@ -238,12 +236,6 @@ impl AdvicePanel {
         );
 
         Ok(())
-    }
-
-    /// Get the current diff context for LLM
-    fn get_current_diff_context(&self) -> Option<String> {
-        // Return the stored diff content that was updated during rendering
-        self.current_diff_content.borrow().clone()
     }
 
     /// Check and update pending async tasks

@@ -134,39 +134,26 @@ impl LlmClient {
         &self,
         question: String,
         conversation_history: Vec<crate::pane::ChatMessageData>,
-        original_diff: String,
     ) -> Result<crate::pane::ChatMessageData, String> {
         let start_time = tokio::time::Instant::now();
         debug!("🤖 LLM_CLIENT: Processing chat follow-up: {}", question);
 
         // Build conversation context
-        let mut context_messages = vec![
-            ChatCompletionMessage {
-                role: chat_completion::MessageRole::system,
-                content: chat_completion::Content::Text(
-                    "You are an expert software engineer helping with code improvements. \
+        let mut context_messages = vec![ChatCompletionMessage {
+            role: chat_completion::MessageRole::system,
+            content: chat_completion::Content::Text(
+                "You are an expert software engineer helping with code improvements. \
                     The user is asking about specific code changes and improvements. \
                     Be helpful, specific, and provide practical advice. \
                     Keep your responses concise but thorough."
-                        .to_string(),
-                ),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-            },
-            ChatCompletionMessage {
-                role: chat_completion::MessageRole::user,
-                content: chat_completion::Content::Text(format!(
-                    "Here is the original git diff for context:\n\n{}",
-                    original_diff
-                )),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-            },
-        ];
+                    .to_string(),
+            ),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+        }];
 
-        // Add conversation history
+        // Add conversation history (which already contains the initial message with diff context)
         for msg in conversation_history {
             let role = match msg.role {
                 crate::pane::MessageRole::User => chat_completion::MessageRole::user,
