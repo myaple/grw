@@ -408,7 +408,7 @@ impl AdvicePanel {
         }
     }
 
-    fn refresh_chat_with_new_diff(&mut self) {
+    pub fn refresh_chat_with_new_diff(&mut self) {
         debug!("🎯 ADVICE_PANEL: Refreshing chat with new diff");
 
         // Clear existing chat content
@@ -871,182 +871,17 @@ impl Pane for AdvicePanel {
     fn handle_event(&mut self, event: &AppEvent) -> bool {
         match event {
             AppEvent::Key(key_event) => {
-                match self.mode {
-                    AdviceMode::Chatting => {
-                        if self.chat_input_active {
-                            // Chat input is active, handle input keys
-                            match key_event.code {
-                                KeyCode::Enter => {
-                                    if !self.chat_input.is_empty() {
-                                        let message = self.chat_input.clone();
-                                        self.chat_input.clear();
-                                        self.chat_input_active = false;
-                                        // Send the message
-                                        let _ = self.send_chat_message(&message);
-                                    }
-                                    true
-                                }
-                                KeyCode::Esc => {
-                                    self.chat_input_active = false;
-                                    self.chat_input.clear();
-                                    true
-                                }
-                                KeyCode::Char(c) => {
-                                    self.chat_input.push(c);
-                                    true
-                                }
-                                KeyCode::Backspace => {
-                                    self.chat_input.pop();
-                                    true
-                                }
-                                _ => false,
-                            }
-                        } else {
-                            // Chat input is not active, handle navigation and activation keys
-                            match key_event.code {
-                                KeyCode::Char('/') => {
-                                    self.chat_input_active = true;
-                                    true
-                                }
-                                KeyCode::Char('?') => {
-                                    self.mode = AdviceMode::Help;
-                                    // Reset scroll offset when entering help mode
-                                    self.scroll_offset = 0;
-                                    // Backup current chat content before switching to help
-                                    self.chat_content_backup = Some(self.content.clone());
-                                    // Set help content when entering help mode
-                                    let help_text = vec![
-                                        "Git Repository Watcher - Chat Interface Help",
-                                        "",
-                                        "Navigation:",
-                                        "  j / k / ↑ / ↓     - Scroll up/down",
-                                        "  PageUp / PageDown  - Scroll faster",
-                                        "  g                  - Go to top",
-                                        "  Shift+G            - Go to bottom",
-                                        "",
-                                        "Chat Interface:",
-                                        "  /                  - Activate chat input",
-                                        "  Enter              - Send message (when input active)",
-                                        "  Esc                - Deactivate chat input",
-                                        "",
-                                        "Panel Controls:",
-                                        "  Ctrl+L             - Toggle advice panel",
-                                        "  Ctrl+D             - Return to diff pane",
-                                        "  Ctrl+R             - Refresh diff and clear chat",
-                                        "  Esc                - Return to diff pane",
-                                        "  ?                  - Show this help",
-                                        "",
-                                        "Tips:",
-                                        "- Chat history is preserved across panel activations",
-                                        "- Initial message with diff is sent automatically on first visit",
-                                        "- Use Ctrl+R to refresh with latest diff and start fresh conversation",
-                                    ].join("\n");
-                                    self.content = AdviceContent::Help(help_text);
-                                    true
-                                }
-                                KeyCode::Esc => {
-                                    if self.chat_input_active {
-                                        // Deactivate chat input
-                                        self.chat_input_active = false;
-                                        self.chat_input.clear();
-                                        true
-                                    } else {
-                                        false // Let parent handle Esc for panel closing
-                                    }
-                                }
-                                // Navigation keys - always work when chat input is inactive
-                                KeyCode::Char('j') | KeyCode::Down => {
-                                    self.scroll_offset = self.scroll_offset.saturating_add(1);
-                                    true
-                                }
-                                KeyCode::Char('k') | KeyCode::Up => {
-                                    self.scroll_offset = self.scroll_offset.saturating_sub(1);
-                                    true
-                                }
-                                KeyCode::PageDown => {
-                                    self.scroll_offset = self.scroll_offset.saturating_add(10);
-                                    true
-                                }
-                                KeyCode::PageUp => {
-                                    self.scroll_offset = self.scroll_offset.saturating_sub(10);
-                                    true
-                                }
-                                KeyCode::Char('g') => {
-                                    self.scroll_offset = 0;
-                                    true
-                                }
-                                KeyCode::Char('G')
-                                    if key_event.modifiers.contains(KeyModifiers::SHIFT) =>
-                                {
-                                    // Scroll to actual bottom by calculating content height
-                                    let content_lines = match &self.content {
-                                        AdviceContent::Chat(messages) => {
-                                            let mut line_count = 0;
-                                            for msg in messages {
-                                                // Skip user messages that contain the diff pattern
-                                                if msg.role == MessageRole::User && msg.content.contains("Please provide 3 actionable improvements for the following code changes:") {
-                                                    continue;
-                                                }
-                                                // Count header line
-                                                line_count += 1;
-                                                // Count content lines
-                                                line_count += msg.content.lines().count();
-                                                // Add empty line between messages
-                                                line_count += 1;
-                                            }
-                                            // Add thinking indicator if present
-                                            if self.loading_state == LoadingState::SendingChat
-                                                && self.pending_chat_message_id.is_some()
-                                            {
-                                                line_count += 3; // "AI:" + "Thinking..." + empty line
-                                            }
-                                            line_count
-                                        }
-                                        AdviceContent::Help(help_text) => help_text.lines().count(),
-                                        _ => 0,
-                                    };
-                                    let visible_lines = 20; // Approximate visible area height
-                                    self.scroll_offset =
-                                        content_lines.saturating_sub(visible_lines).max(0);
-                                    true
-                                }
-                                KeyCode::Char('r')
-                                    if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
-                                {
-                                    // Ctrl+R: Refresh diff and clear chat
-                                    self.refresh_chat_with_new_diff();
-                                    true
-                                }
-                                _ => false,
-                            }
-                        }
-                    }
-                    AdviceMode::Help => {
-                        match key_event.code {
-                            KeyCode::Esc => {
-                                // Exit help mode and restore chat content
-                                self.mode = AdviceMode::Chatting;
-                                // Restore backed up chat content if available
-                                if let Some(backup_content) = self.chat_content_backup.take() {
-                                    self.content = backup_content;
-                                } else {
-                                    // Fallback to empty chat if no backup
-                                    self.content = AdviceContent::Chat(Vec::new());
-                                }
-                                false // Let parent handle Esc for panel closing
-                            }
-                            KeyCode::Char('j') | KeyCode::Down => {
-                                self.scroll_offset = self.scroll_offset.saturating_add(1);
-                                true
-                            }
-                            KeyCode::Char('k') | KeyCode::Up => {
-                                self.scroll_offset = self.scroll_offset.saturating_sub(1);
-                                true
-                            }
-                            _ => false,
-                        }
-                    }
+                // Handle Ctrl+R refresh separately (needs access to self method)
+                if key_event.code == KeyCode::Char('r')
+                    && key_event.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    // Ctrl+R: Refresh diff and clear chat
+                    self.refresh_chat_with_new_diff();
+                    return true;
                 }
+
+                // Use the keys module for all other advice panel key handling
+                super::keys::AdvicePanelKeyHandler::handle_advice_panel_keys(self, key_event)
             }
             _ => false,
         }

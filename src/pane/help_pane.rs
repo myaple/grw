@@ -91,6 +91,7 @@ impl Pane for HelpPane {
                         "  PageUp            - Page up",
                         "  g g               - Go to top",
                         "  Shift+G           - Go to bottom",
+                        "  Ctrl+L            - Open LLM advice panel",
                     ],
                 ),
             }

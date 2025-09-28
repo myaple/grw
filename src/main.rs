@@ -398,304 +398,89 @@ fn handle_key_event(
     config: &Config,
     shared_state_manager: &SharedStateManager,
 ) -> bool {
-    // Handle commit picker mode key events first
-    if app.is_in_commit_picker_mode() {
-        // Handle quit keys (q and Ctrl+C) even in commit picker mode
-        match key.code {
-            KeyCode::Char('q') => {
-                log::info!("User requested quit from commit picker mode");
-                return true;
+    // Handle Ctrl+P commit picker activation separately as it needs access to config and shared_state_manager
+    if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        debug!("User pressed Ctrl+P - activating commit picker");
+        // Only activate commit picker when in appropriate diff mode
+        if app.is_showing_diff_panel() && !app.is_in_commit_picker_mode() {
+            if let Some(repo) = shared_state_manager.git_state().get_repo() {
+                // Enter commit picker mode first and show loading state
+                app.enter_commit_picker_mode();
+                app.set_commit_picker_loading();
+                // Create a temporary GitWorker to load commit history using shared state
+                match crate::git_worker::GitWorker::new(
+                    repo.path.clone(),
+                    Arc::clone(shared_state_manager.git_state()),
+                ) {
+                    Ok(mut git_worker) => {
+                        // Use configurable commit history limit
+                        let commit_limit = config.get_commit_history_limit();
+                        match git_worker.get_commit_history(commit_limit) {
+                            Ok(commits) => {
+                                debug!("Successfully loaded {} commits", commits.len());
+                                app.update_commit_picker_commits(commits.clone());
+                                // Configure and trigger summary pre-loading
+                                let preload_config = config.get_summary_preload_config();
+                                app.set_preload_config(preload_config);
+                                // Start pre-loading summaries for the first few commits
+                                debug!(
+                                    "Starting summary pre-loading for {} commits",
+                                    commits.len()
+                                );
+                                app.preload_summaries(&commits);
+                            }
+                            Err(e) => {
+                                error!("Failed to load commit history: {}", e);
+                                let error_msg = if e.to_string().contains("not a git repository") {
+                                    "This directory is not a Git repository".to_string()
+                                } else if e.to_string().contains("no commits")
+                                    || e.to_string().contains("HEAD")
+                                {
+                                    "No commits found in this repository".to_string()
+                                } else if e.to_string().contains("permission") {
+                                    "Permission denied accessing Git repository".to_string()
+                                } else {
+                                    format!("Git error: {}", e)
+                                };
+                                app.set_commit_picker_error(error_msg);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to create GitWorker: {}", e);
+                        app.set_commit_picker_error(format!(
+                            "Failed to access Git repository: {}",
+                            e
+                        ));
+                    }
+                }
+            } else {
+                app.set_commit_picker_error("No Git repository available".to_string());
             }
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                log::info!("User requested quit via Ctrl+C from commit picker mode");
-                return true;
-            }
-            KeyCode::Char('?') => {
-                debug!("User pressed '?' in commit picker mode, toggling help");
-                app.toggle_help();
-                return false;
-            }
-            KeyCode::Esc => {
-                debug!("User pressed Escape in commit picker mode, exiting");
-                app.exit_commit_picker_mode();
-                return false;
-            }
-            _ => {}
         }
-
-        // Forward key events to commit picker pane with error handling
-        let picker_handled = app.forward_key_to_commit_picker(key);
-
-        // Also forward to commit summary pane for scrolling if not handled by picker
-        if !picker_handled {
-            app.forward_key_to_commit_summary(key);
-        }
-
-        return false; // Don't quit, stay in commit picker mode
-    }
-
-    let panes_handled = app.forward_key_to_panes(key);
-    if panes_handled {
         return false;
     }
 
-    match key.code {
-        KeyCode::Char('q') => {
-            log::info!("User requested quit");
-            true
-        }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            log::info!("User requested quit via Ctrl+C");
-            true
-        }
-        KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-            // This should have been handled by forward_key_to_panes above
-            app.scroll_to_bottom(app.current_diff_height);
-            false
-        }
-        KeyCode::Char('j') if key.modifiers.is_empty() => {
-            // This should have been handled by forward_key_to_panes above
-            app.scroll_down(app.current_diff_height);
-            false
-        }
-        KeyCode::Down => {
-            // This should have been handled by forward_key_to_panes above
-            app.scroll_down(app.current_diff_height);
-            false
-        }
-        KeyCode::Char('k') if key.modifiers.is_empty() => {
-            // This should have been handled by forward_key_to_panes above
-            app.scroll_up();
-            false
-        }
-        KeyCode::Up => {
-            // This should have been handled by forward_key_to_panes above
-            app.scroll_up();
-            false
-        }
-        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            // This should have been handled by forward_key_to_panes above
-            app.scroll_down(app.current_diff_height);
-            false
-        }
-        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            // This should have been handled by forward_key_to_panes above
-            app.scroll_up();
-            false
-        }
-        KeyCode::Char('g') => {
-            if app.handle_g_press() {
-                false
-            } else {
-                // g was pressed, wait for next key
-                false
-            }
-        }
-        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            debug!("User pressed Ctrl+T - toggling theme");
-            app.toggle_theme();
-            false
-        }
-        KeyCode::Char('t') => {
-            // Check if g was pressed recently
-            if let Some(last_time) = app.last_g_press
-                && std::time::Instant::now()
-                    .duration_since(last_time)
-                    .as_millis()
-                    < 500
-            {
-                debug!("User triggered 'gt' key combination - next file");
-                app.next_file();
-            }
-            false
-        }
-        KeyCode::Char('T') => {
-            // Check if g was pressed recently
-            if let Some(last_time) = app.last_g_press
-                && std::time::Instant::now()
-                    .duration_since(last_time)
-                    .as_millis()
-                    < 500
-            {
-                debug!("User triggered 'gT' key combination - previous file");
-                app.prev_file();
-            }
-            false
-        }
-        KeyCode::PageDown => {
-            app.page_down(app.current_diff_height);
-            false
-        }
-        KeyCode::PageUp => {
-            app.page_up(app.current_diff_height);
-            false
-        }
-        KeyCode::Tab => {
-            debug!("User pressed Tab - next file");
-            app.next_file();
-            false
-        }
-        KeyCode::BackTab => {
-            debug!("User pressed Shift+Tab - previous file");
-            app.prev_file();
-            false
-        }
-        KeyCode::Char('?') => {
-            app.toggle_help();
-            false
-        }
-        KeyCode::Esc => {
-            if app.is_showing_help() {
-                app.toggle_help();
-            } else if app.is_advice_panel_visible() {
-                debug!("User pressed Escape - hiding advice panel and showing diff pane");
-                // Hide advice panel and show diff pane (same behavior as Ctrl+D)
-                if let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Advice) {
-                    log::warn!("Failed to hide advice panel: {}", e);
-                }
-                if !app.is_diff_panel_visible()
-                    && let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Diff)
-                {
-                    log::warn!("Failed to show diff pane: {}", e);
-                }
-            }
-            false
-        }
-        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.set_side_by_side_diff();
-            false
-        }
-        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.toggle_diff_panel();
-            false
-        }
-        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.toggle_changed_files_pane();
-            false
-        }
-        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::ALT) => {
-            app.scroll_monitor_down();
-            false
-        }
-        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::ALT) => {
-            app.scroll_monitor_up();
-            false
-        }
-        KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            debug!("User pressed Ctrl+O - toggling monitor pane");
-            app.toggle_monitor_pane();
-            debug!("Monitor pane is now: {}", app.is_showing_monitor_pane());
-            false
-        }
-        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            debug!("User pressed Ctrl+W - returning to working directory view");
-            app.clear_selected_commit();
-            false
-        }
-        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            debug!("User pressed Ctrl+P - activating commit picker");
-            // Only activate commit picker when in appropriate diff mode
-            if app.is_showing_diff_panel() && !app.is_in_commit_picker_mode() {
-                if let Some(repo) = shared_state_manager.git_state().get_repo() {
-                    // Enter commit picker mode first and show loading state
-                    app.enter_commit_picker_mode();
-                    app.set_commit_picker_loading();
+    // Handle Ctrl+O monitor pane toggle separately as it needs special handling
+    if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        debug!("User pressed Ctrl+O - toggling monitor pane");
+        app.toggle_monitor_pane();
+        debug!("Monitor pane is now: {}", app.is_showing_monitor_pane());
+        return false;
+    }
 
-                    // Create a temporary GitWorker to load commit history using shared state
-                    match crate::git_worker::GitWorker::new(
-                        repo.path.clone(),
-                        Arc::clone(shared_state_manager.git_state()),
-                    ) {
-                        Ok(mut git_worker) => {
-                            // Use configurable commit history limit
-                            let commit_limit = config.get_commit_history_limit();
-                            match git_worker.get_commit_history(commit_limit) {
-                                Ok(commits) => {
-                                    debug!("Successfully loaded {} commits", commits.len());
-                                    app.update_commit_picker_commits(commits.clone());
+    // Handle Ctrl+W returning to working directory view separately
+    if key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        debug!("User pressed Ctrl+W - returning to working directory view");
+        app.clear_selected_commit();
+        return false;
+    }
 
-                                    // Configure and trigger summary pre-loading
-                                    let preload_config = config.get_summary_preload_config();
-                                    app.set_preload_config(preload_config);
-
-                                    // Start pre-loading summaries for the first few commits
-                                    debug!(
-                                        "Starting summary pre-loading for {} commits",
-                                        commits.len()
-                                    );
-                                    app.preload_summaries(&commits);
-                                }
-                                Err(e) => {
-                                    error!("Failed to load commit history: {}", e);
-                                    let error_msg =
-                                        if e.to_string().contains("not a git repository") {
-                                            "This directory is not a Git repository".to_string()
-                                        } else if e.to_string().contains("no commits")
-                                            || e.to_string().contains("HEAD")
-                                        {
-                                            "No commits found in this repository".to_string()
-                                        } else if e.to_string().contains("permission") {
-                                            "Permission denied accessing Git repository".to_string()
-                                        } else {
-                                            format!("Git error: {}", e)
-                                        };
-                                    app.set_commit_picker_error(error_msg);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to create GitWorker: {}", e);
-                            let error_msg = if e.to_string().contains("not a git repository") {
-                                "This directory is not a Git repository".to_string()
-                            } else if e.to_string().contains("permission") {
-                                "Permission denied accessing Git repository".to_string()
-                            } else {
-                                format!("Failed to initialize Git operations: {}", e)
-                            };
-                            app.set_commit_picker_error(error_msg);
-                        }
-                    }
-                } else {
-                    debug!("No git repository available for commit picker");
-                    app.enter_commit_picker_mode();
-                    app.set_commit_picker_error("No Git repository loaded".to_string());
-                }
-            } else if !app.is_showing_diff_panel() {
-                debug!("Commit picker requires diff panel to be visible");
-                // Could show a status message here in the future
-            } else if app.is_in_commit_picker_mode() {
-                debug!("Already in commit picker mode");
-            }
-            false
-        }
-        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            debug!("User pressed Ctrl+L - toggling advice panel");
-            if let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Advice) {
-                log::warn!("Failed to toggle advice panel: {}", e);
-            }
-            false
-        }
-        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            debug!("User pressed Ctrl+D - switching to diff pane");
-            // Only handle Ctrl+D for advice panel navigation when advice panel is visible
-            if app.is_advice_panel_visible() {
-                // Hide advice panel and show diff pane
-                if let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Advice) {
-                    log::warn!("Failed to hide advice panel: {}", e);
-                }
-                if !app.is_diff_panel_visible()
-                    && let Err(e) = app.toggle_pane_visibility(&pane::PaneId::Diff)
-                {
-                    log::warn!("Failed to show diff pane: {}", e);
-                }
-                true // Handled this key
-            } else {
-                // Fall through to default Ctrl+D behavior (single pane diff)
-                app.set_single_pane_diff();
-                false
-            }
-        }
-        _ => false,
+    // Use the new keys module for all other key handling
+    match pane::GlobalKeyHandler::handle_global_key(app, &key) {
+        pane::KeyResult::Quit => true,
+        pane::KeyResult::Handled => false,
+        pane::KeyResult::NotHandled => false,
     }
 }
 
