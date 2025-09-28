@@ -105,6 +105,7 @@ pub struct AdvicePanel {
     pub initial_message_sent: bool,
     pub first_visit: bool,
     pub chat_content_backup: Option<AdviceContent>,
+    pub needs_initialization: bool,
 }
 
 impl AdvicePanel {
@@ -127,6 +128,7 @@ impl AdvicePanel {
             initial_message_sent: false,
             first_visit: true,
             chat_content_backup: None,
+            needs_initialization: false,
         })
     }
 
@@ -424,8 +426,9 @@ impl AdvicePanel {
         // Reset first visit flag so it will send a new initial message
         self.first_visit = true;
         self.initial_message_sent = false;
+        self.needs_initialization = true;
 
-        // The new message will be sent on the next render when we have fresh diff data
+        // The new message will be sent on the next initialization cycle
     }
 
     /// Format chat content to preserve markdown, code blocks, and spacing
@@ -604,6 +607,71 @@ impl AdvicePanel {
             _ => Vec::new(),
         }
     }
+
+    /// Initialize the panel with current diff content when it becomes visible
+    pub fn initialize_with_current_diff(&mut self, files: &[crate::git::FileDiff]) {
+        if !self.needs_initialization {
+            return;
+        }
+
+        // Build diff content from files
+        let mut diff_content = String::new();
+        if !files.is_empty() {
+            for file_diff in files {
+                // Add file header
+                diff_content.push_str(&format!(
+                    "diff --git a/{} b/{}\n",
+                    file_diff.path.to_string_lossy(),
+                    file_diff.path.to_string_lossy()
+                ));
+
+                // Add git index line based on status
+                if file_diff.status.contains(git2::Status::WT_NEW) {
+                    diff_content.push_str("new file mode 100644\n");
+                } else if file_diff.status.contains(git2::Status::WT_DELETED) {
+                    diff_content.push_str("deleted file mode 100644\n");
+                } else if file_diff.status.contains(git2::Status::WT_RENAMED) {
+                    diff_content.push_str("similarity index 100%\n");
+                    diff_content.push_str("rename from old_name\n");
+                    diff_content.push_str("rename to new_name\n");
+                } else {
+                    diff_content.push_str("index 0000000..1111111 100644\n");
+                }
+
+                // Add file change markers
+                diff_content.push_str(&format!("--- a/{}\n", file_diff.path.to_string_lossy()));
+                diff_content.push_str(&format!("+++ b/{}\n", file_diff.path.to_string_lossy()));
+
+                // Add the actual diff content
+                for line in &file_diff.line_strings {
+                    diff_content.push_str(line);
+                    diff_content.push('\n');
+                }
+
+                diff_content.push('\n'); // Add separator between files
+            }
+        }
+
+        // Store the diff content
+        *self.current_diff_content.borrow_mut() = if diff_content.trim().is_empty() {
+            None
+        } else {
+            Some(diff_content.clone())
+        };
+
+        // Send initial message if we have content and haven't sent it yet
+        if !self.initial_message_sent && self.first_visit {
+            if !diff_content.trim().is_empty() {
+                self.send_initial_message_with_diff(&diff_content);
+            } else {
+                self.send_no_changes_message();
+            }
+            self.initial_message_sent = true;
+            self.first_visit = false;
+        }
+
+        self.needs_initialization = false;
+    }
 }
 
 impl Pane for AdvicePanel {
@@ -623,7 +691,7 @@ impl Pane for AdvicePanel {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let theme = app.get_theme();
 
-        // Update the current diff content from the app's files
+        // Update the current diff content from the app's files (read-only operation)
         let files = app.get_files();
         if !files.is_empty() {
             let mut diff_content = String::new();
@@ -669,32 +737,6 @@ impl Pane for AdvicePanel {
             };
         } else {
             *self.current_diff_content.borrow_mut() = None;
-        }
-
-        // Check if we need to send the initial message (only on first visit)
-        // Use a mutable reference to self for this operation
-        if self.visible && !self.initial_message_sent && self.first_visit {
-            // This is a workaround to call a method that requires &mut self from &self
-            unsafe {
-                let self_mut = self as *const AdvicePanel as *mut AdvicePanel;
-                if let Some(diff_content) = (*self_mut).current_diff_content.borrow().as_ref() {
-                    if !diff_content.is_empty() {
-                        (*self_mut).send_initial_message_with_diff(diff_content);
-                        (*self_mut).initial_message_sent = true;
-                        (*self_mut).first_visit = false;
-                    } else if files.is_empty() {
-                        // No files available, send message about no changes
-                        (*self_mut).send_no_changes_message();
-                        (*self_mut).initial_message_sent = true;
-                        (*self_mut).first_visit = false;
-                    }
-                } else if files.is_empty() {
-                    // No files available, send message about no changes
-                    (*self_mut).send_no_changes_message();
-                    (*self_mut).initial_message_sent = true;
-                    (*self_mut).first_visit = false;
-                }
-            }
         }
 
         let block = Block::default()
@@ -1030,6 +1072,7 @@ impl Pane for AdvicePanel {
         if visible && !was_visible {
             debug!("🎯 ADVICE_PANEL: Panel became visible");
             self.chat_input_active = false;
+            self.needs_initialization = true;
         }
     }
 

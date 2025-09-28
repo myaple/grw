@@ -1077,8 +1077,14 @@ impl App {
     /// Poll for LLM summary updates from CommitSummaryPane
     /// Check for async advice panel task completion and update content
     pub fn check_advice_panel_tasks(&mut self) {
+        // Get files for initialization
+        let files = self.get_files().clone();
+
         self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
             if let Some(advice_panel) = pane.as_advice_pane_mut() {
+                // Initialize with current diff if needed
+                advice_panel.initialize_with_current_diff(&files);
+                // Check for pending async tasks
                 advice_panel.check_pending_tasks();
             }
         });
