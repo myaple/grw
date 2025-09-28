@@ -185,3 +185,53 @@ impl Pane for HelpPane {
         self.visible = visible;
     }
 }
+#[cfg(test)]
+mod tests {
+
+    use crate::ui::{App, Theme};
+    use std::sync::Arc;
+
+    fn create_test_llm_state() -> Arc<crate::shared_state::LlmSharedState> {
+        Arc::new(crate::shared_state::LlmSharedState::new())
+    }
+
+    #[test]
+    fn test_help_detects_commit_picker_mode() {
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
+
+        // Test normal mode
+        assert!(!app.is_in_commit_picker_mode());
+
+        // Enter commit picker mode
+        app.enter_commit_picker_mode();
+        assert!(app.is_in_commit_picker_mode());
+
+        // Exit commit picker mode
+        app.exit_commit_picker_mode();
+        assert!(!app.is_in_commit_picker_mode());
+    }
+
+    #[test]
+    fn test_help_detects_selected_commit() {
+        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
+
+        // Initially no commit selected
+        assert!(app.get_selected_commit().is_none());
+
+        // Create a test commit and select it
+        let test_commit = crate::git::CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            files_changed: vec![],
+        };
+        app.select_commit(test_commit);
+
+        // Now should have a selected commit
+        assert!(app.get_selected_commit().is_some());
+
+        // Clear the selected commit
+        app.clear_selected_commit();
+        assert!(app.get_selected_commit().is_none());
+    }
+}

@@ -395,3 +395,213 @@ impl Pane for CommitSummaryPane {
         Some(self)
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pane::AppEvent;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn test_commit_summary_pane_creation() {
+        let pane = CommitSummaryPane::new();
+        assert!(!pane.visible());
+        assert!(pane.current_commit.is_none());
+        assert_eq!(pane.scroll_offset, 0);
+        assert!(pane.llm_summary.is_none());
+    }
+
+    #[test]
+    fn test_commit_summary_pane_update_commit() {
+        let mut pane = CommitSummaryPane::new();
+
+        let commit = crate::git::CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            files_changed: vec![crate::git::CommitFileChange {
+                path: std::path::PathBuf::from("test.rs"),
+                status: crate::git::FileChangeStatus::Modified,
+                additions: 5,
+                deletions: 2,
+            }],
+        };
+
+        pane.update_commit(Some(commit.clone()));
+        assert!(pane.current_commit.is_some());
+        assert_eq!(pane.current_commit.as_ref().unwrap().sha, "abc123");
+        assert_eq!(pane.scroll_offset, 0);
+        assert!(pane.llm_summary.is_none());
+    }
+
+    #[test]
+    fn test_commit_summary_pane_scrolling() {
+        let mut pane = CommitSummaryPane::new();
+
+        let commit = crate::git::CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            files_changed: (0..20)
+                .map(|i| crate::git::CommitFileChange {
+                    path: std::path::PathBuf::from(format!("file{}.rs", i)),
+                    status: crate::git::FileChangeStatus::Modified,
+                    additions: i,
+                    deletions: i / 2,
+                })
+                .collect(),
+        };
+
+        pane.update_commit(Some(commit));
+
+        // Test j key (scroll down)
+        let j_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&j_event));
+        assert_eq!(pane.scroll_offset, 1);
+
+        // Test k key (scroll up)
+        let k_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&k_event));
+        assert_eq!(pane.scroll_offset, 0);
+
+        // Test page down
+        let page_down_event = AppEvent::Key(KeyEvent::from(KeyCode::PageDown));
+        assert!(pane.handle_event(&page_down_event));
+        assert_eq!(pane.scroll_offset, 10);
+
+        // Test page up
+        let page_up_event = AppEvent::Key(KeyEvent::from(KeyCode::PageUp));
+        assert!(pane.handle_event(&page_up_event));
+        assert_eq!(pane.scroll_offset, 0);
+
+        // Test go to bottom (Shift+G)
+        let bottom_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
+        assert!(pane.handle_event(&bottom_event));
+        assert_eq!(pane.scroll_offset, 19);
+
+        // Test go to top (g)
+        let top_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&top_event));
+        assert_eq!(pane.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_commit_summary_pane_llm_summary() {
+        let mut pane = CommitSummaryPane::new();
+
+        // Test that initially there's no summary
+        assert!(pane.llm_summary.is_none());
+        assert!(!pane.is_loading_summary);
+
+        // Test that we can manually set a summary (for testing purposes)
+        pane.llm_summary = Some("This is a test summary".to_string());
+        assert!(pane.llm_summary.is_some());
+        assert_eq!(pane.llm_summary.as_ref().unwrap(), "This is a test summary");
+    }
+
+    #[test]
+    fn test_commit_summary_pane_with_llm_client() {
+        use crate::config::LlmConfig;
+
+        // Create a test LLM client
+        let llm_config = LlmConfig {
+            api_key: Some("test_key".to_string()),
+            ..Default::default()
+        };
+        let llm_client = crate::llm::LlmClient::new(llm_config).ok();
+
+        let pane = CommitSummaryPane::new_with_llm_client(llm_client);
+
+        // Test that the pane has an LLM client
+        assert!(pane.llm_client.is_some());
+        assert!(pane.llm_summary.is_none());
+        assert!(!pane.is_loading_summary);
+
+        // Test that a pane without LLM client works too
+        let pane_no_llm = CommitSummaryPane::new_with_llm_client(None);
+        assert!(pane_no_llm.llm_client.is_none());
+        assert!(pane_no_llm.llm_summary.is_none());
+        assert!(!pane_no_llm.is_loading_summary);
+    }
+
+    #[test]
+    fn test_commit_files_display_immediately() {
+        let mut pane = CommitSummaryPane::new();
+
+        // Create a commit with file changes (simulating data from get_commit_history)
+        let commit = crate::git::CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            files_changed: vec![
+                crate::git::CommitFileChange {
+                    path: std::path::PathBuf::from("src/main.rs"),
+                    status: crate::git::FileChangeStatus::Modified,
+                    additions: 10,
+                    deletions: 5,
+                },
+                crate::git::CommitFileChange {
+                    path: std::path::PathBuf::from("src/lib.rs"),
+                    status: crate::git::FileChangeStatus::Added,
+                    additions: 20,
+                    deletions: 0,
+                },
+            ],
+        };
+
+        // Update the pane with the commit
+        pane.update_commit(Some(commit.clone()));
+
+        // Verify that the pane is immediately in Loaded state (not LoadingFiles)
+        assert_eq!(pane.loading_state, CommitSummaryLoadingState::Loaded);
+
+        // Verify that the commit data is available
+        assert!(pane.current_commit.is_some());
+        let current_commit = pane.current_commit.as_ref().unwrap();
+        assert_eq!(current_commit.files_changed.len(), 2);
+        assert_eq!(
+            current_commit.files_changed[0].path,
+            std::path::PathBuf::from("src/main.rs")
+        );
+        assert_eq!(
+            current_commit.files_changed[1].path,
+            std::path::PathBuf::from("src/lib.rs")
+        );
+
+        // LLM summary should still be None (not loaded yet)
+        assert!(pane.llm_summary.is_none());
+
+        // But the files should be immediately available for display
+        // (This would be verified in the render method, which would show files immediately)
+    }
+
+    #[test]
+    fn test_commit_summary_pane_cached_summary() {
+        let mut pane = CommitSummaryPane::new_with_llm_client(None);
+
+        // Create a test commit
+        let test_commit = crate::git::CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            files_changed: vec![],
+        };
+
+        // Update with commit
+        pane.update_commit(Some(test_commit));
+
+        // Initially should need summary
+        assert!(pane.needs_summary());
+        assert!(pane.llm_summary.is_none());
+
+        // Set a cached summary
+        pane.set_cached_summary("abc123", "This is a cached summary".to_string());
+
+        // Should no longer need summary and should have the cached one
+        assert!(!pane.needs_summary());
+        assert_eq!(
+            pane.llm_summary,
+            Some("This is a cached summary".to_string())
+        );
+        assert_eq!(pane.loading_state, CommitSummaryLoadingState::Loaded);
+    }
+}

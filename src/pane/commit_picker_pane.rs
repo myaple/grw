@@ -394,3 +394,93 @@ impl Pane for CommitPickerPane {
         Some(self)
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pane::AppEvent;
+    use crossterm::event::{KeyEvent, KeyModifiers};
+
+    #[test]
+    fn test_commit_picker_pane_navigation() {
+        let mut pane = CommitPickerPane::new();
+
+        // Test with empty commits
+        assert_eq!(pane.current_index, 0);
+        pane.navigate_next();
+        assert_eq!(pane.current_index, 0);
+        pane.navigate_prev();
+        assert_eq!(pane.current_index, 0);
+
+        // Add some test commits
+        let commits = vec![
+            crate::git::CommitInfo {
+                sha: "abc123".to_string(),
+                short_sha: "abc123".to_string(),
+                message: "First commit".to_string(),
+                files_changed: vec![],
+            },
+            crate::git::CommitInfo {
+                sha: "def456".to_string(),
+                short_sha: "def456".to_string(),
+                message: "Second commit".to_string(),
+                files_changed: vec![],
+            },
+        ];
+
+        pane.update_commits(commits);
+
+        // Test navigation
+        assert_eq!(pane.current_index, 0);
+        pane.navigate_next();
+        assert_eq!(pane.current_index, 1);
+        pane.navigate_next();
+        assert_eq!(pane.current_index, 0); // Should wrap around
+
+        pane.navigate_prev();
+        assert_eq!(pane.current_index, 1); // Should wrap around backwards
+        pane.navigate_prev();
+        assert_eq!(pane.current_index, 0);
+    }
+
+    #[test]
+    fn test_commit_picker_pane_key_handling() {
+        let mut pane = CommitPickerPane::new();
+
+        // Add test commits
+        let commits = vec![
+            crate::git::CommitInfo {
+                sha: "abc123".to_string(),
+                short_sha: "abc123".to_string(),
+                message: "First commit".to_string(),
+                files_changed: vec![],
+            },
+            crate::git::CommitInfo {
+                sha: "def456".to_string(),
+                short_sha: "def456".to_string(),
+                message: "Second commit".to_string(),
+                files_changed: vec![],
+            },
+        ];
+
+        pane.update_commits(commits);
+
+        // Test j key (next)
+        let j_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&j_event));
+        assert_eq!(pane.current_index, 1);
+
+        // Test k key (prev)
+        let k_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&k_event));
+        assert_eq!(pane.current_index, 0);
+
+        // Test g+t combination
+        let g_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&g_event));
+
+        // Immediately follow with t
+        let t_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        assert!(pane.handle_event(&t_event));
+        assert_eq!(pane.current_index, 1); // Should navigate next
+    }
+}

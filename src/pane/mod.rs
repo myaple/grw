@@ -172,3 +172,116 @@ impl PaneRegistry {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::LlmConfig;
+    use std::env;
+    use std::sync::Arc;
+
+    fn create_test_pane_registry() -> PaneRegistry {
+        let mut llm_config = LlmConfig::default();
+        if env::var("OPENAI_API_KEY").is_err() {
+            llm_config.api_key = Some("dummy_key".to_string());
+        }
+        let llm_client = crate::llm::LlmClient::new(llm_config).unwrap();
+        let llm_shared_state = Arc::new(crate::shared_state::LlmSharedState::new());
+        PaneRegistry::new(crate::ui::Theme::Dark, llm_client, llm_shared_state)
+    }
+
+    #[test]
+    fn test_pane_registry_creation() {
+        let registry = create_test_pane_registry();
+        assert_eq!(registry.panes.len(), 9); // Default panes + commit picker + commit summary + advice pane
+        assert!(registry.get_pane(&PaneId::FileTree).is_some());
+        assert!(registry.get_pane(&PaneId::Monitor).is_some());
+        assert!(registry.get_pane(&PaneId::Diff).is_some());
+        assert!(registry.get_pane(&PaneId::CommitPicker).is_some());
+        assert!(registry.get_pane(&PaneId::CommitSummary).is_some());
+        assert!(registry.get_pane(&PaneId::Advice).is_some());
+    }
+
+    #[test]
+    fn test_pane_visibility() {
+        let registry = create_test_pane_registry();
+
+        let file_tree = registry.get_pane(&PaneId::FileTree).unwrap();
+        assert!(file_tree.visible());
+
+        let monitor = registry.get_pane(&PaneId::Monitor).unwrap();
+        assert!(!monitor.visible());
+
+        let status_bar = registry.get_pane(&PaneId::StatusBar).unwrap();
+        assert!(status_bar.visible());
+    }
+
+    #[test]
+    fn test_pane_ids() {
+        assert_eq!(PaneId::FileTree, PaneId::FileTree);
+        assert_ne!(PaneId::FileTree, PaneId::Monitor);
+    }
+
+    #[test]
+    fn test_panel_opening_integration_contract() {
+        // Test integration contract for panel opening flow
+        use crate::ui::App;
+        use std::sync::Arc;
+
+        // Create app using the same pattern as existing tests
+        let mut llm_config = crate::config::LlmConfig::default();
+        if std::env::var("OPENAI_API_KEY").is_err() {
+            llm_config.api_key = Some("dummy_key".to_string());
+        }
+        let llm_client = crate::llm::LlmClient::new(llm_config).ok();
+        let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
+        let mut app =
+            App::new_with_config(true, true, crate::ui::Theme::Dark, llm_client, llm_state);
+
+        // Test that toggle_pane_visibility works for advice panel
+        // This is the core integration contract - Ctrl+L should work
+        let result1 = app.toggle_pane_visibility(&PaneId::Advice);
+        assert!(
+            result1.is_ok(),
+            "Should be able to toggle advice panel visibility"
+        );
+
+        // Test toggling back
+        let result2 = app.toggle_pane_visibility(&PaneId::Advice);
+        assert!(
+            result2.is_ok(),
+            "Should be able to toggle advice panel back to hidden"
+        );
+
+        // Test error handling for invalid pane ID
+        let invalid_result = app.toggle_pane_visibility(&PaneId::FileTree); // FileTree is not togglable
+        // This should either succeed or give a meaningful error
+        assert!(
+            invalid_result.is_ok(),
+            "Should handle invalid pane gracefully"
+        );
+    }
+
+    #[test]
+    fn test_panel_opening_keyboard_integration_contract() {
+        // Test contract for keyboard integration - this represents what happens in main.rs
+        // We can't directly test key events here, but we can test the method that gets called
+        use crate::ui::App;
+        use std::sync::Arc;
+
+        // Create app with same pattern as tests
+        let mut llm_config = crate::config::LlmConfig::default();
+        if std::env::var("OPENAI_API_KEY").is_err() {
+            llm_config.api_key = Some("dummy_key".to_string());
+        }
+        let llm_client = crate::llm::LlmClient::new(llm_config).ok();
+        let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
+        let mut app =
+            App::new_with_config(true, true, crate::ui::Theme::Dark, llm_client, llm_state);
+
+        // Test multiple toggles to simulate repeated Ctrl+L presses
+        for i in 0..5 {
+            let result = app.toggle_pane_visibility(&PaneId::Advice);
+            assert!(result.is_ok(), "Ctrl+L toggle {} should succeed", i + 1);
+        }
+    }
+}
