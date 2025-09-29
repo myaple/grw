@@ -15,21 +15,32 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 - **Logging**: Comprehensive logging with debug mode for troubleshooting
 - **Responsive UI**: Adapts to terminal size with intelligent header wrapping
 - **Light/Dark themes**: Toggle between light and dark themes
+- **AI-Powered Advice**: Get actionable suggestions for improving your code changes from an integrated AI assistant.
+
+## AI-Powered Advice Panel
+
+GRW includes an AI-powered advice panel that provides actionable suggestions for improving your code changes. It analyzes your diff and offers feedback to enhance code quality, performance, and readability.
+
+- **Activation**: Press `Ctrl+l` to open the advice panel.
+- **Interaction**: Use the chat interface to ask questions or request further clarification.
+- **Configuration**: Requires an LLM API key and can be configured via command-line arguments or the `config.json` file.
 
 ## Keybindings
 
 ### General
 - `?` - Show/hide help
-- `Esc` - Exit help page
+- `Esc` - Exit help page or active panel (like Advice Panel)
 - `Ctrl+h` - Toggle diff panel visibility
-- `Ctrl+o` - Toggle monitor pane visibility
+- `Ctrl+b` - Toggle changed files pane visibility
+- `Ctrl+o` / `Ctrl+m` - Toggle monitor pane visibility
+- `Ctrl+l` - Toggle AI advice panel
 - `Ctrl+t` - Toggle light/dark theme
 - `Ctrl+P` - Enter commit picker mode
-- `Ctrl+W` - Return to working directory
+- `Ctrl+W` - Return to working directory view
 - `q` / `Ctrl+c` - Quit application
 
 ### Pane Modes
-- `Ctrl+d` - Switch to inline diff view
+- `Ctrl+d` - Switch to inline diff view (or exit Advice Panel)
 - `Ctrl+s` - Switch to side-by-side diff view
 
 ### File Tree
@@ -54,6 +65,12 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 - `g T` - Previous commit
 - `Enter` - Select commit
 - `Esc` - Exit commit picker
+
+### Advice Panel
+- `/` - Activate chat input
+- `Enter` - Send message (when input is active)
+- `Esc` - Deactivate chat input
+- `?` - Show help
 
 ## Installation
 
@@ -85,13 +102,20 @@ grw
 - `-h, --help` - Print help information
 - `-d, --debug` - Enable debug logging
 - `--no-diff` - Hide diff panel, show only file tree
+- `--hide-changed-files-pane` - Hide changed files pane, show only diff
 - `--monitor-command <COMMAND>` - Command to run in monitor pane
 - `--monitor-interval <SECONDS>` - Interval in seconds for monitor command refresh
 - `--theme <THEME>` - Set initial theme (light or dark)
-- `--llm-provider <PROVIDER>` - LLM provider to use for commit summaries (e.g., openai)
-- `--llm-model <MODEL>` - LLM model to use for commit summaries
+- `--llm-provider <PROVIDER>` - LLM provider to use for AI features (e.g., openai)
+- `--llm-model <MODEL>` - Default LLM model for all AI features
+- `--llm-summary-model <MODEL>` - Specific model for commit summaries
+- `--llm-advice-model <MODEL>` - Specific model for generating advice
 - `--llm-api-key <KEY>` - API key for the LLM provider
 - `--llm-base-url <URL>` - Base URL for the LLM provider
+- `--commit-history-limit <NUMBER>` - Maximum number of commits to load (default: 100)
+- `--commit-cache-size <NUMBER>` - Maximum number of commits to cache (default: 200)
+- `--summary-preload-enabled <BOOL>` - Enable summary pre-loading (default: true)
+- `--summary-preload-count <NUMBER>` - Number of summaries to pre-load (default: 5)
 
 ### Examples
 
@@ -147,6 +171,7 @@ Or a minimal configuration with only some settings:
 Configuration options:
 - `debug` (boolean): Enable debug logging (optional, default: false)
 - `no_diff` (boolean): Hide diff panel, show only file tree (optional, default: false)
+- `hide_changed_files_pane` (boolean): Hide changed files pane, show only diff (optional, default: false)
 - `monitor_command` (string): Command to run in monitor pane (optional)
 - `monitor_interval` (number): Interval in seconds for monitor command refresh (optional)
 - `theme` (string): Initial theme setting (light or dark) (optional)
@@ -156,10 +181,17 @@ Configuration options:
 - `summary_preload_count` (number): Number of summaries to preload ahead (optional, default: 5)
 - `llm` (object): LLM provider configuration (optional)
   - `provider` (string): LLM provider (e.g., "openai")
-  - `model` (string): LLM model name
+  - `model` (string): Default LLM model name
   - `summary_model` (string): Specific model for commit summaries (optional)
+  - `advice_model` (string): Specific model for generating advice (optional)
   - `api_key` (string): API key for the LLM provider
   - `base_url` (string): Base URL for the LLM provider
+- `advice` (object): Configuration for the AI advice panel (optional)
+  - `enabled` (boolean): Enable the advice panel feature (optional, default: true)
+  - `max_improvements` (number): Number of improvement suggestions to request (optional, default: 3)
+  - `chat_history_limit` (number): Max number of messages in chat history (optional, default: 10)
+  - `timeout_seconds` (number): Timeout for AI requests in seconds (optional, default: 60)
+  - `context_lines` (number): Lines of context to include around changes (optional, default: 3)
 
 A full configuration with LLM settings and shared state tuning might look like this:
 
@@ -167,6 +199,7 @@ A full configuration with LLM settings and shared state tuning might look like t
 {
   "debug": false,
   "no_diff": false,
+  "hide_changed_files_pane": false,
   "monitor_command": "git status --short",
   "monitor_interval": 5,
   "theme": "dark",
@@ -178,8 +211,16 @@ A full configuration with LLM settings and shared state tuning might look like t
     "provider": "openai",
     "model": "gpt-4o-mini",
     "summary_model": "gpt-4o-mini",
+    "advice_model": "gpt-4-turbo",
     "api_key": "your-api-key-here",
     "base_url": "https://api.openai.com/v1"
+  },
+  "advice": {
+    "enabled": true,
+    "max_improvements": 5,
+    "chat_history_limit": 20,
+    "timeout_seconds": 90,
+    "context_lines": 5
   }
 }
 ```
