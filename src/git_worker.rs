@@ -6,6 +6,14 @@ use log::debug;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Types of diffs that can be generated
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DiffType {
+    WorkingTree,
+    Staged,
+    DirtyDirectory,
+}
+
 pub struct GitWorker {
     repo: Repository,
     path: PathBuf,
@@ -212,51 +220,82 @@ impl GitWorker {
         Ok(())
     }
 
-    fn get_file_diff(&self, path: &Path, status: Status) -> FileDiff {
-        debug!("Computing diff for file: {path:?} (status: {status:?})");
+    /// Unified diff generation method that handles all diff types
+    fn generate_diff(&self, path: &Path, status: Status, diff_type: DiffType) -> FileDiff {
+        debug!("Computing diff for file: {path:?} (status: {status:?}, type: {diff_type:?})");
 
         let mut line_strings = Vec::new();
         let mut additions = 0;
         let mut deletions = 0;
 
-        if status.is_wt_new() {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                let line_count = content.lines().count();
-                debug!("New file has {line_count} lines");
-                for line in content.lines() {
-                    line_strings.push(format!("+ {line}"));
-                    additions += 1;
-                }
-            }
-        } else if status.is_wt_modified() {
-            if let Ok(output) = std::process::Command::new("git")
-                .args(["diff", "--no-color", path.to_str().unwrap_or("")])
-                .output()
-            {
-                let diff_text = String::from_utf8_lossy(&output.stdout);
-                for line in diff_text.lines() {
-                    if line.starts_with('+') && !line.starts_with("++") {
-                        additions += 1;
-                    } else if line.starts_with('-') && !line.starts_with("--") {
-                        deletions += 1;
+        match diff_type {
+            DiffType::WorkingTree => {
+                if status.is_wt_new() {
+                    if let Ok(content) = std::fs::read_to_string(path) {
+                        let line_count = content.lines().count();
+                        debug!("New file has {line_count} lines");
+                        for line in content.lines() {
+                            line_strings.push(format!("+ {line}"));
+                            additions += 1;
+                        }
                     }
-                    line_strings.push(line.to_string());
+                } else if status.is_wt_modified() || status.is_wt_deleted() {
+                    if let Ok(output) = std::process::Command::new("git")
+                        .args(["diff", "--no-color", path.to_str().unwrap_or("")])
+                        .output()
+                    {
+                        let diff_text = String::from_utf8_lossy(&output.stdout);
+                        for line in diff_text.lines() {
+                            if line.starts_with('+') && !line.starts_with("++") {
+                                additions += 1;
+                            } else if line.starts_with('-') && !line.starts_with("--") {
+                                deletions += 1;
+                            }
+                            line_strings.push(line.to_string());
+                        }
+                        debug!("Working tree file: +{additions} -{deletions}");
+                    }
                 }
-                debug!("Modified file: +{additions} -{deletions}");
             }
-        } else if status.is_wt_deleted()
-            && let Ok(output) = std::process::Command::new("git")
-                .args(["diff", "--no-color", path.to_str().unwrap_or("")])
-                .output()
-        {
-            let diff_text = String::from_utf8_lossy(&output.stdout);
-            for line in diff_text.lines() {
-                if line.starts_with('-') && !line.starts_with("--") {
-                    deletions += 1;
+            DiffType::Staged => {
+                if let Ok(output) = std::process::Command::new("git")
+                    .args([
+                        "diff",
+                        "--cached",
+                        "--no-color",
+                        path.to_str().unwrap_or(""),
+                    ])
+                    .output()
+                {
+                    let diff_text = String::from_utf8_lossy(&output.stdout);
+                    for line in diff_text.lines() {
+                        if line.starts_with('+') && !line.starts_with("++") {
+                            additions += 1;
+                        } else if line.starts_with('-') && !line.starts_with("--") {
+                            deletions += 1;
+                        }
+                        line_strings.push(line.to_string());
+                    }
+                    debug!("Staged file: +{additions} -{deletions}");
                 }
-                line_strings.push(line.to_string());
             }
-            debug!("Deleted file: -{deletions} lines");
+            DiffType::DirtyDirectory => {
+                if let Ok(output) = std::process::Command::new("git")
+                    .args(["diff", "--no-color", path.to_str().unwrap_or("")])
+                    .output()
+                {
+                    let diff_text = String::from_utf8_lossy(&output.stdout);
+                    for line in diff_text.lines() {
+                        if line.starts_with('+') && !line.starts_with("++") {
+                            additions += 1;
+                        } else if line.starts_with('-') && !line.starts_with("--") {
+                            deletions += 1;
+                        }
+                        line_strings.push(line.to_string());
+                    }
+                    debug!("Dirty directory file: +{additions} -{deletions}");
+                }
+            }
         }
 
         FileDiff {
@@ -268,75 +307,19 @@ impl GitWorker {
         }
     }
 
+    /// Get file diff for working tree (maintains backward compatibility)
+    fn get_file_diff(&self, path: &Path, status: Status) -> FileDiff {
+        self.generate_diff(path, status, DiffType::WorkingTree)
+    }
+
+    /// Get file diff for staged files (maintains backward compatibility)
     fn get_staged_file_diff(&self, path: &Path, status: Status) -> FileDiff {
-        debug!("Computing staged diff for file: {path:?} (status: {status:?})");
-
-        let mut line_strings = Vec::new();
-        let mut additions = 0;
-        let mut deletions = 0;
-
-        // Use git diff --cached to get staged changes
-        if let Ok(output) = std::process::Command::new("git")
-            .args([
-                "diff",
-                "--cached",
-                "--no-color",
-                path.to_str().unwrap_or(""),
-            ])
-            .output()
-        {
-            let diff_text = String::from_utf8_lossy(&output.stdout);
-            for line in diff_text.lines() {
-                if line.starts_with('+') && !line.starts_with("++") {
-                    additions += 1;
-                } else if line.starts_with('-') && !line.starts_with("--") {
-                    deletions += 1;
-                }
-                line_strings.push(line.to_string());
-            }
-            debug!("Staged file: +{additions} -{deletions}");
-        }
-
-        FileDiff {
-            path: path.to_path_buf(),
-            status,
-            line_strings,
-            additions,
-            deletions,
-        }
+        self.generate_diff(path, status, DiffType::Staged)
     }
 
+    /// Get file diff for dirty directory files (maintains backward compatibility)
     fn get_dirty_directory_diff(&self, path: &Path) -> FileDiff {
-        debug!("Computing dirty directory diff for file: {path:?}");
-
-        let mut line_strings = Vec::new();
-        let mut additions = 0;
-        let mut deletions = 0;
-
-        // Use git diff to show what would be committed
-        if let Ok(output) = std::process::Command::new("git")
-            .args(["diff", "--no-color", path.to_str().unwrap_or("")])
-            .output()
-        {
-            let diff_text = String::from_utf8_lossy(&output.stdout);
-            for line in diff_text.lines() {
-                if line.starts_with('+') && !line.starts_with("++") {
-                    additions += 1;
-                } else if line.starts_with('-') && !line.starts_with("--") {
-                    deletions += 1;
-                }
-                line_strings.push(line.to_string());
-            }
-            debug!("Dirty directory file: +{additions} -{deletions}");
-        }
-
-        FileDiff {
-            path: path.to_path_buf(),
-            status: Status::from_bits_truncate(2), // WT_MODIFIED
-            line_strings,
-            additions,
-            deletions,
-        }
+        self.generate_diff(path, Status::from_bits_truncate(2), DiffType::DirtyDirectory)
     }
 
     fn is_file_in_dirty_directory(&self, path: &Path) -> bool {
