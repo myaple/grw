@@ -151,25 +151,33 @@ async fn main() -> Result<()> {
                 changed_files.len()
             );
 
-            // Handle view mode changes automatically
+            // Handle view mode changes automatically, but preserve user-selected commits
             match repo.current_view_mode {
                 ViewMode::WorkingTree | ViewMode::Staged | ViewMode::DirtyDirectory => {
                     // Working directory has changes
                     if app.get_selected_commit().is_some() {
-                        // Clear selected commit to show working directory changes
+                        // User has explicitly selected a commit, preserve it
                         debug!(
-                            "Switching to working directory view (mode: {:?})",
+                            "Preserving user-selected commit despite working directory changes (mode: {:?})",
                             repo.current_view_mode
                         );
-                        app.clear_selected_commit();
+                        // Don't clear the selected commit or update files/tree
+                    } else {
+                        // No commit selected, show working directory changes
+                        app.update_files(changed_files.clone());
+                        app.update_tree(&tree);
                     }
-                    // Update to show current working directory state
-                    app.update_files(changed_files.clone());
-                    app.update_tree(&tree);
                 }
                 ViewMode::LastCommit => {
-                    // Working directory is clean, automatically show last commit
-                    if app.get_selected_commit().is_none() && !repo.last_commit_files.is_empty() {
+                    // Working directory is clean
+                    if app.get_selected_commit().is_some() {
+                        // User has explicitly selected a commit, preserve it
+                        debug!(
+                            "Preserving user-selected commit instead of auto-showing last commit"
+                        );
+                        // Don't override user selection
+                    } else if !repo.last_commit_files.is_empty() {
+                        // No commit selected, automatically show last commit
                         debug!("Switching to last commit view");
                         // Create a simple commit info for the last commit
                         if let Some(commit_id) = &repo.last_commit_id {
@@ -181,10 +189,10 @@ async fn main() -> Result<()> {
                             };
                             app.select_commit(commit_info);
                         }
+                        // Update to show last commit files
+                        app.update_files(changed_files.clone());
+                        app.update_tree(&tree);
                     }
-                    // Update to show last commit files
-                    app.update_files(changed_files.clone());
-                    app.update_tree(&tree);
                 }
             }
         }
