@@ -177,19 +177,10 @@ async fn main() -> Result<()> {
                         );
                         // Don't override user selection
                     } else if !repo.last_commit_files.is_empty() {
-                        // No commit selected, automatically show last commit
+                        // No commit selected, automatically show last commit files
                         debug!("Switching to last commit view");
-                        // Create a simple commit info for the last commit
-                        if let Some(commit_id) = &repo.last_commit_id {
-                            let commit_info = crate::git::CommitInfo {
-                                sha: commit_id.clone(),
-                                short_sha: repo.commit_info.0.clone(),
-                                message: repo.commit_info.1.clone(),
-                                files_changed: vec![], // Not needed for display
-                            };
-                            app.select_commit(commit_info);
-                        }
-                        // Update to show last commit files
+                        // Update to show last commit files WITHOUT selecting a commit
+                        // This ensures we stay in last commit mode, not commit picked mode
                         app.update_files(changed_files.clone());
                         app.update_tree(&tree);
                     }
