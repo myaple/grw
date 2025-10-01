@@ -41,8 +41,10 @@ impl GitSharedState {
 
     /// Update repository data
     pub fn update_repo(&self, repo: GitRepo) {
-        let key = "current".to_string(); // Use default key for current repo
-        let _ = self.repo_data.insert(key, repo);
+        use log::trace;
+        let key = "current".to_string();
+        self.repo_data.upsert(key, repo);
+        trace!("Updated repo data in shared state");
     }
 
     /// Get current repository data
@@ -52,7 +54,7 @@ impl GitSharedState {
 
     /// Cache commit information
     pub fn cache_commit(&self, sha: String, commit: CommitInfo) {
-        let _ = self.commit_cache.insert(sha, commit);
+        self.commit_cache.upsert(sha, commit);
     }
 
     /// Get cached commit information
@@ -62,7 +64,7 @@ impl GitSharedState {
 
     /// Set error state
     pub fn set_error(&self, key: String, error: String) {
-        let _ = self.error_state.insert(key, error);
+        self.error_state.upsert(key, error);
     }
 
     /// Clear error state
@@ -144,7 +146,7 @@ impl LlmSharedState {
 
     /// Cache a summary for a specific commit SHA
     pub fn cache_summary(&self, commit_sha: String, summary: String) {
-        let _ = self.summary_cache.insert(commit_sha, summary);
+        self.summary_cache.upsert(commit_sha, summary);
     }
 
     /// Get a cached summary for a specific commit SHA
@@ -163,7 +165,7 @@ impl LlmSharedState {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let _ = self.active_summary_tasks.insert(commit_sha, timestamp);
+        self.active_summary_tasks.upsert(commit_sha, timestamp);
     }
 
     /// Complete a summary generation task and remove it from tracking
@@ -173,7 +175,7 @@ impl LlmSharedState {
 
     /// Set error state for a specific operation
     pub fn set_error(&self, key: String, error: String) {
-        let _ = self.error_state.insert(key, error);
+        self.error_state.upsert(key, error);
     }
 
     /// Clear error state for a specific operation
@@ -203,7 +205,7 @@ impl LlmSharedState {
     /// Clean up stale tasks older than the specified threshold (in seconds)
     /// Set advice panel error state
     pub fn set_advice_error(&self, key: String, error: String) {
-        let _ = self.advice_error_state.insert(key, error);
+        self.advice_error_state.upsert(key, error);
     }
 
     /// Get advice panel error state
@@ -222,7 +224,7 @@ impl LlmSharedState {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let _ = self.active_advice_tasks.insert(diff_hash, timestamp);
+        self.active_advice_tasks.upsert(diff_hash, timestamp);
     }
 
     /// Complete an advice generation task
@@ -245,7 +247,7 @@ impl LlmSharedState {
         message_id: String,
         response: crate::pane::ChatMessageData,
     ) {
-        let _ = self.pending_chat_responses.insert(message_id, response);
+        self.pending_chat_responses.upsert(message_id, response);
     }
 
     /// Retrieve a pending chat response for a specific message ID
@@ -313,7 +315,7 @@ impl MonitorSharedState {
 
     /// Set configuration value
     pub fn set_config(&self, key: String, value: String) {
-        let _ = self.config.insert(key, value);
+        self.config.upsert(key, value);
     }
 }
 

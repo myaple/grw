@@ -178,6 +178,7 @@ impl GitWorker {
         }
 
         // Determine view mode based on priority
+        let old_view_mode = self.current_view_mode;
         if !new_changed_files.is_empty() {
             self.current_view_mode = ViewMode::WorkingTree;
         } else if !new_dirty_directory_files.is_empty() {
@@ -193,8 +194,15 @@ impl GitWorker {
         self.staged_files = new_staged_files;
         self.dirty_directory_files = new_dirty_directory_files;
 
-        debug!(
-            "Update complete: working_tree={}, staged={}, dirty_directory={}, view_mode={:?}",
+        if old_view_mode != self.current_view_mode {
+            debug!(
+                "View mode changed: {:?} -> {:?}",
+                old_view_mode, self.current_view_mode
+            );
+        }
+
+        log::trace!(
+            "Git update: working_tree={}, staged={}, dirty_directory={}, view_mode={:?}",
             self.changed_files.len(),
             self.staged_files.len(),
             self.dirty_directory_files.len(),
