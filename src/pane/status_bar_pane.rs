@@ -57,7 +57,7 @@ impl Pane for StatusBarPane {
 
         let status_text = if let Some(selected_commit) = app.get_selected_commit() {
             format!(
-                "📂 {repo_name} | 🌿 {branch} | {view_mode_text} | 🎯 {} > {} | 📊 {} files (+{}/-{}) | Press Ctrl+W to return to working directory",
+                "📂 {repo_name} | 🌿 {branch} | {view_mode_text} | 🎯 {} > {} | 📊 {} files (+{}/-{})",
                 selected_commit.short_sha,
                 selected_commit.message.lines().next().unwrap_or(""),
                 selected_commit.files_changed.len(),
