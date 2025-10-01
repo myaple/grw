@@ -122,6 +122,20 @@ impl GitWorker {
 
     /// Internal update logic that handles git status directly
     fn update_internal_direct(&mut self) -> Result<()> {
+        // Force a re-read of the index from disk to ensure we have the latest changes
+        match self.repo.index() {
+            Ok(mut index) => {
+                if let Err(e) = index.read(true) {
+                    debug!("Error reading index: {}", e);
+                    // This is not a fatal error, so we'll just log it and continue
+                }
+            }
+            Err(e) => {
+                debug!("Error getting index: {}", e);
+                // Also not a fatal error, proceed with potentially stale data
+            }
+        }
+
         // Get all statuses including staged files
         let statuses = self.repo.statuses(Some(
             StatusOptions::new()
