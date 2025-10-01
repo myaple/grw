@@ -136,30 +136,64 @@ async fn main() -> Result<()> {
     execute!(io::stdout(), EnterAlternateScreen)?;
 
     loop {
-        // Read git updates from shared state (but skip if a commit is selected to avoid overriding commit files)
-        if app.get_selected_commit().is_none() {
-            // Check for git updates from shared state
-            if let Some(repo) = shared_state_manager.git_state().get_repo() {
-                let changed_files = repo.get_display_files();
-                let tree = repo.get_file_tree();
+        // Read git updates from shared state
+        if let Some(repo) = shared_state_manager.git_state().get_repo() {
+            use crate::git::ViewMode;
 
-                app.update_files(changed_files.clone());
-                app.update_tree(&tree);
-            }
+            // Always update files and tree based on current view mode
+            let changed_files = repo.get_display_files();
+            let tree = repo.get_file_tree();
 
-            // Check for git errors in shared state
-            if let Some(error) = shared_state_manager.git_state().get_error("git_status") {
-                error!("Git shared state error: {error}");
-                // Clear the error after handling it
-                shared_state_manager.git_state().clear_error("git_status");
+            log::trace!(
+                "Main loop: view_mode={:?}, selected_commit={}, files={}",
+                repo.current_view_mode,
+                app.get_selected_commit().is_some(),
+                changed_files.len()
+            );
+
+            // Handle view mode changes automatically
+            match repo.current_view_mode {
+                ViewMode::WorkingTree | ViewMode::Staged | ViewMode::DirtyDirectory => {
+                    // Working directory has changes
+                    if app.get_selected_commit().is_some() {
+                        // Clear selected commit to show working directory changes
+                        debug!(
+                            "Switching to working directory view (mode: {:?})",
+                            repo.current_view_mode
+                        );
+                        app.clear_selected_commit();
+                    }
+                    // Update to show current working directory state
+                    app.update_files(changed_files.clone());
+                    app.update_tree(&tree);
+                }
+                ViewMode::LastCommit => {
+                    // Working directory is clean, automatically show last commit
+                    if app.get_selected_commit().is_none() && !repo.last_commit_files.is_empty() {
+                        debug!("Switching to last commit view");
+                        // Create a simple commit info for the last commit
+                        if let Some(commit_id) = &repo.last_commit_id {
+                            let commit_info = crate::git::CommitInfo {
+                                sha: commit_id.clone(),
+                                short_sha: repo.commit_info.0.clone(),
+                                message: repo.commit_info.1.clone(),
+                                files_changed: vec![], // Not needed for display
+                            };
+                            app.select_commit(commit_info);
+                        }
+                    }
+                    // Update to show last commit files
+                    app.update_files(changed_files.clone());
+                    app.update_tree(&tree);
+                }
             }
-        } else {
-            // Check for git errors in shared state
-            if let Some(error) = shared_state_manager.git_state().get_error("git_status") {
-                error!("Git shared state error: {error}");
-                // Clear the error after handling it
-                shared_state_manager.git_state().clear_error("git_status");
-            }
+        }
+
+        // Check for git errors in shared state
+        if let Some(error) = shared_state_manager.git_state().get_error("git_status") {
+            error!("Git shared state error: {error}");
+            // Clear the error after handling it
+            shared_state_manager.git_state().clear_error("git_status");
         }
 
         // Update monitor command if it exists
