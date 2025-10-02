@@ -236,11 +236,20 @@ impl GitWorker {
         let mut additions = 0;
         let mut deletions = 0;
 
+        // Convert absolute path to relative path for git_operations
+        let relative_path = match path.strip_prefix(&self.path) {
+            Ok(rel_path) => rel_path,
+            Err(_) => {
+                debug!("Failed to convert absolute path to relative: {:?} (repo path: {:?})", path, self.path);
+                path
+            }
+        };
+
         match diff_type {
             DiffType::WorkingTree => {
                 if status.is_wt_new() {
                     // For new files, use the same git_operations function
-                    match git_operations::get_working_tree_diff(&self.repo, path) {
+                    match git_operations::get_working_tree_diff(&self.repo, relative_path) {
                         Ok((lines, added, deleted)) => {
                             line_strings = lines;
                             additions = added;
@@ -248,11 +257,11 @@ impl GitWorker {
                             debug!("New working tree file: +{additions} -{deletions}");
                         }
                         Err(e) => {
-                            debug!("Failed to get working tree diff for new file {:?}: {}", path, e);
+                            debug!("Failed to get working tree diff for new file {:?}: {}", relative_path, e);
                         }
                     }
                 } else if status.is_wt_modified() || status.is_wt_deleted() {
-                    match git_operations::get_working_tree_diff(&self.repo, path) {
+                    match git_operations::get_working_tree_diff(&self.repo, relative_path) {
                         Ok((lines, added, deleted)) => {
                             line_strings = lines;
                             additions = added;
@@ -260,13 +269,13 @@ impl GitWorker {
                             debug!("Working tree file: +{additions} -{deletions}");
                         }
                         Err(e) => {
-                            debug!("Failed to get working tree diff for {:?}: {}", path, e);
+                            debug!("Failed to get working tree diff for {:?}: {}", relative_path, e);
                         }
                     }
                 }
             }
             DiffType::Staged => {
-                match git_operations::get_staged_diff(&self.repo, path) {
+                match git_operations::get_staged_diff(&self.repo, relative_path) {
                     Ok((lines, added, deleted)) => {
                         line_strings = lines;
                         additions = added;
@@ -274,12 +283,12 @@ impl GitWorker {
                         debug!("Staged file: +{additions} -{deletions}");
                     }
                     Err(e) => {
-                        debug!("Failed to get staged diff for {:?}: {}", path, e);
+                        debug!("Failed to get staged diff for {:?}: {}", relative_path, e);
                     }
                 }
             }
             DiffType::DirtyDirectory => {
-                match git_operations::get_working_tree_diff(&self.repo, path) {
+                match git_operations::get_working_tree_diff(&self.repo, relative_path) {
                     Ok((lines, added, deleted)) => {
                         line_strings = lines;
                         additions = added;
@@ -287,7 +296,7 @@ impl GitWorker {
                         debug!("Dirty directory file: +{additions} -{deletions}");
                     }
                     Err(e) => {
-                        debug!("Failed to get dirty directory diff for {:?}: {}", path, e);
+                        debug!("Failed to get dirty directory diff for {:?}: {}", relative_path, e);
                     }
                 }
             }
