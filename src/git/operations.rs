@@ -4,7 +4,62 @@
 use color_eyre::eyre::Result;
 use git2::{DiffOptions, Repository, StatusOptions};
 use log::debug;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Discover git repository from current working directory using git2
+/// Returns the repository and its workdir path
+pub fn discover_repository() -> Result<(Repository, PathBuf)> {
+    debug!("Discovering git repository using git2");
+
+    let repo = Repository::open_from_env()
+        .or_else(|_| Repository::open("."))
+        .map_err(|e| color_eyre::eyre::eyre!("Could not discover git repository: {}", e))?;
+
+    let workdir = repo.workdir()
+        .ok_or_else(|| color_eyre::eyre::eyre!("Repository has no working directory"))?
+        .to_path_buf();
+
+    debug!("Repository discovered at: {:?}", workdir);
+    Ok((repo, workdir))
+}
+
+/// Discover repository and get workdir (convenience function)
+pub fn discover_repository_workdir() -> Result<PathBuf> {
+    let (_, workdir) = discover_repository()?;
+    Ok(workdir)
+}
+
+/// Convert absolute path to relative path from repository root
+/// Returns the relative path if possible, otherwise the original path
+pub fn to_repo_relative_path(repo: &Repository, absolute_path: &Path) -> PathBuf {
+    if let Some(workdir) = repo.workdir() {
+        match absolute_path.strip_prefix(workdir) {
+            Ok(relative_path) => {
+                debug!("Converted absolute path {:?} to relative: {:?}", absolute_path, relative_path);
+                relative_path.to_path_buf()
+            }
+            Err(_) => {
+                debug!("Failed to convert absolute path to relative: {:?} (repo: {:?})", absolute_path, workdir);
+                absolute_path.to_path_buf()
+            }
+        }
+    } else {
+        debug!("Repository has no workdir, using original path: {:?}", absolute_path);
+        absolute_path.to_path_buf()
+    }
+}
+
+/// Convert relative path to absolute path using repository workdir
+pub fn from_repo_relative_path(repo: &Repository, relative_path: &Path) -> PathBuf {
+    if let Some(workdir) = repo.workdir() {
+        let absolute_path = workdir.join(relative_path);
+        debug!("Converted relative path {:?} to absolute: {:?}", relative_path, absolute_path);
+        absolute_path
+    } else {
+        debug!("Repository has no workdir, using original path: {:?}", relative_path);
+        relative_path.to_path_buf()
+    }
+}
 
 /// Generate diff for working tree changes
 /// Replaces: git diff --no-color <path>
@@ -25,7 +80,7 @@ pub fn get_working_tree_diff(repo: &Repository, path: &Path) -> Result<(Vec<Stri
 
     // Special handling for untracked files that result in empty diffs
     // git2's diff_index_to_workdir doesn't handle completely untracked files well
-    let absolute_path = repo.workdir().unwrap_or_else(|| Path::new(".")).join(path);
+    let absolute_path = from_repo_relative_path(repo, path);
     if lines.is_empty() && absolute_path.exists() {
         // Check if the file is actually untracked (not in git index)
         let is_untracked = is_file_untracked(repo, path)?;
@@ -502,6 +557,53 @@ mod tests {
         assert!(diff_content.contains("+Line 1"), "Diff should show first line as addition");
         assert!(diff_content.contains("+Line 2"), "Diff should show second line as addition");
         assert!(diff_content.contains("+Line 3"), "Diff should show third line as addition");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_discover_repository_workdir() -> Result<()> {
+        let (_temp_dir, _repo, repo_path) = create_test_repo()?;
+
+        // Change to the repo directory to test discovery
+        let original_dir = std::env::current_dir()?;
+        std::env::set_current_dir(&repo_path)?;
+
+        // Test repository discovery
+        let discovered_path = discover_repository_workdir()?;
+        assert_eq!(discovered_path, repo_path, "Should discover correct repository workdir");
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_to_repo_relative_path() -> Result<()> {
+        let (_temp_dir, repo, repo_path) = create_test_repo()?;
+
+        // Test absolute to relative conversion
+        let absolute_path = repo_path.join("src").join("main.rs");
+        let relative_path = to_repo_relative_path(&repo, &absolute_path);
+        assert_eq!(relative_path, Path::new("src/main.rs"));
+
+        // Test with a path outside the repo (should return original)
+        let outside_path = std::path::Path::new("/tmp").join("outside.txt");
+        let result = to_repo_relative_path(&repo, &outside_path);
+        assert_eq!(result, outside_path);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_repo_relative_path() -> Result<()> {
+        let (_temp_dir, repo, repo_path) = create_test_repo()?;
+
+        // Test relative to absolute conversion
+        let relative_path = Path::new("src").join("main.rs");
+        let absolute_path = from_repo_relative_path(&repo, &relative_path);
+        assert_eq!(absolute_path, repo_path.join("src/main.rs"));
 
         Ok(())
     }

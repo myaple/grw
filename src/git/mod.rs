@@ -282,16 +282,10 @@ impl SummaryPreloader {
             let diff_result = tokio::task::spawn_blocking({
                 let commit_sha = commit_sha.clone();
                 move || {
-                    // Find git repository path
-                    let repo_path = std::path::Path::new(".")
-                        .ancestors()
-                        .find(|p| p.join(".git").exists())
-                        .unwrap_or_else(|| std::path::Path::new("."));
-
-                    // Open repository and get diff using git2
-                    match git2::Repository::open(repo_path) {
-                        Ok(repo) => self::operations::get_full_commit_diff(&repo, &commit_sha),
-                        Err(e) => Err(color_eyre::eyre::eyre!("Could not open repository: {}", e)),
+                    // Use git2-based repository discovery
+                    match self::operations::discover_repository() {
+                        Ok((repo, _)) => self::operations::get_full_commit_diff(&repo, &commit_sha),
+                        Err(e) => Err(e),
                     }
                 }
             })

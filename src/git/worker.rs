@@ -146,14 +146,8 @@ impl GitWorker {
 
         for status in statuses.iter() {
             let path = status.path().unwrap_or("");
-            let file_path = self.path.join(path);
-
-            // Strip "./" prefix if present, as git2 doesn't handle it correctly
-            let file_path = if file_path.starts_with("./") {
-                file_path.strip_prefix("./").unwrap_or(&file_path).to_path_buf()
-            } else {
-                file_path
-            };
+            // Use git2-based path handling for consistent relative/absolute path conversion
+            let file_path = super::operations::from_repo_relative_path(&self.repo, Path::new(path));
 
             // Working tree changes (unstaged)
             if status.status().is_wt_new()
@@ -236,20 +230,14 @@ impl GitWorker {
         let mut additions = 0;
         let mut deletions = 0;
 
-        // Convert absolute path to relative path for git_operations
-        let relative_path = match path.strip_prefix(&self.path) {
-            Ok(rel_path) => rel_path,
-            Err(_) => {
-                debug!("Failed to convert absolute path to relative: {:?} (repo path: {:?})", path, self.path);
-                path
-            }
-        };
+        // Convert absolute path to relative path for git_operations using unified helper
+        let relative_path = super::operations::to_repo_relative_path(&self.repo, path);
 
         match diff_type {
             DiffType::WorkingTree => {
                 if status.is_wt_new() {
                     // For new files, use the same git_operations function
-                    match git_operations::get_working_tree_diff(&self.repo, relative_path) {
+                    match git_operations::get_working_tree_diff(&self.repo, &relative_path) {
                         Ok((lines, added, deleted)) => {
                             line_strings = lines;
                             additions = added;
@@ -261,7 +249,7 @@ impl GitWorker {
                         }
                     }
                 } else if status.is_wt_modified() || status.is_wt_deleted() {
-                    match git_operations::get_working_tree_diff(&self.repo, relative_path) {
+                    match git_operations::get_working_tree_diff(&self.repo, &relative_path) {
                         Ok((lines, added, deleted)) => {
                             line_strings = lines;
                             additions = added;
@@ -275,7 +263,7 @@ impl GitWorker {
                 }
             }
             DiffType::Staged => {
-                match git_operations::get_staged_diff(&self.repo, relative_path) {
+                match git_operations::get_staged_diff(&self.repo, &relative_path) {
                     Ok((lines, added, deleted)) => {
                         line_strings = lines;
                         additions = added;
@@ -288,7 +276,7 @@ impl GitWorker {
                 }
             }
             DiffType::DirtyDirectory => {
-                match git_operations::get_working_tree_diff(&self.repo, relative_path) {
+                match git_operations::get_working_tree_diff(&self.repo, &relative_path) {
                     Ok((lines, added, deleted)) => {
                         line_strings = lines;
                         additions = added;
@@ -396,14 +384,8 @@ impl GitWorker {
                     if let Some(old_file) = delta.old_file().path()
                         && let Some(new_file) = delta.new_file().path()
                     {
-                        let file_path = self.path.join(new_file);
-
-                        // Strip "./" prefix if present, as git2 doesn't handle it correctly
-                        let file_path = if file_path.starts_with("./") {
-                            file_path.strip_prefix("./").unwrap_or(&file_path).to_path_buf()
-                        } else {
-                            file_path
-                        };
+                        // Use git2-based path handling for consistent relative/absolute path conversion
+                        let file_path = super::operations::from_repo_relative_path(&self.repo, new_file);
                         let diff_content = self.get_commit_diff_content(old_file, new_file);
 
                         let mut additions = 0;

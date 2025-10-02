@@ -1,5 +1,4 @@
 use crate::git::{CommitInfo, FileDiff, GitRepo, PreloadConfig, SummaryPreloader, TreeNode};
-use crate::git::operations as git_operations;
 use crate::llm::LlmClient;
 use crate::pane::{PaneId, PaneRegistry};
 use crossterm::event::KeyEvent;
@@ -1154,11 +1153,19 @@ impl App {
 
         // Create a tree structure for the commit files
         if let Some(first_file) = self.files.first() {
-            let repo_path = first_file
-                .path
-                .ancestors()
-                .find(|p| p.join(".git").exists())
-                .unwrap_or_else(|| std::path::Path::new("."));
+            // Use git2-based repository discovery
+            let repo_path = match crate::git::operations::discover_repository_workdir() {
+                Ok(path) => path,
+                Err(_) => {
+                    // Fallback to custom logic if git2 discovery fails
+                    first_file
+                        .path
+                        .ancestors()
+                        .find(|p| p.join(".git").exists())
+                        .unwrap_or_else(|| std::path::Path::new("."))
+                        .to_path_buf()
+                }
+            };
 
             let mut root = crate::git::TreeNode {
                 name: ".".to_string(),
@@ -1169,7 +1176,7 @@ impl App {
             };
 
             for file_diff in &self.files {
-                self.add_file_to_commit_tree(&mut root, file_diff, repo_path);
+                self.add_file_to_commit_tree(&mut root, file_diff, &repo_path);
             }
 
             self.update_tree(&root);
@@ -1181,29 +1188,13 @@ impl App {
         commit_sha: &str,
         file_path: &std::path::Path,
     ) -> Vec<String> {
-        // Find git repository path (make it absolute for consistent path handling)
-        let repo_path = std::env::current_dir()
-            .ok()
-            .and_then(|cwd| {
-                cwd.ancestors()
-                    .find(|p| p.join(".git").exists())
-                    .map(|p| p.to_path_buf())
-            })
-            .unwrap_or_else(|| std::path::Path::new(".").to_path_buf());
+        // Use git2-based repository discovery and path handling
+        match crate::git::operations::discover_repository() {
+            Ok((repo, _repo_path)) => {
+                // Convert absolute path to relative path for git_operations
+                let relative_path = crate::git::operations::to_repo_relative_path(&repo, file_path);
 
-        // Convert absolute path to relative path for git_operations
-        let relative_path = match file_path.strip_prefix(&repo_path) {
-            Ok(rel_path) => rel_path,
-            Err(_) => {
-                log::debug!("Failed to convert absolute path to relative for commit diff: {:?} (repo path: {:?})", file_path, repo_path);
-                file_path
-            }
-        };
-
-        // Open repository and get diff using git2
-        match git2::Repository::open(&repo_path) {
-            Ok(repo) => {
-                match git_operations::get_commit_file_diff(&repo, commit_sha, relative_path) {
+                match crate::git::operations::get_commit_file_diff(&repo, commit_sha, &relative_path) {
                     Ok(lines) => lines,
                     Err(e) => {
                         vec![format!(
@@ -1214,10 +1205,10 @@ impl App {
                     }
                 }
             }
-            Err(_) => {
+            Err(e) => {
                 vec![format!(
-                    "Error: Could not open git repository for {}",
-                    relative_path.display()
+                    "Error: Could not open git repository: {}",
+                    e
                 )]
             }
         }
