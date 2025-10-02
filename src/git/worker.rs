@@ -765,34 +765,6 @@ impl GitWorker {
 
         git_operations::get_commit_file_stats(repo, commit_sha, relative_file_path)
     }
-
-    /// Static helper method to get addition/deletion counts for a specific file in a commit (legacy method for absolute paths)
-    fn get_commit_file_stats_static(
-        repo_path: &Path,
-        commit_sha: &str,
-        file_path: &Path,
-    ) -> Result<(usize, usize)> {
-        // Validate inputs
-        if commit_sha.is_empty() {
-            return Err(color_eyre::eyre::eyre!(
-                "Empty commit SHA provided to get_commit_file_stats"
-            ));
-        }
-
-        if file_path.as_os_str().is_empty() {
-            return Err(color_eyre::eyre::eyre!(
-                "Empty file path provided to get_commit_file_stats"
-            ));
-        }
-
-        // Open repository
-        let repo = Repository::open(repo_path)?;
-
-        // Convert absolute path to relative path for git operations
-        let relative_path = super::operations::to_repo_relative_path(&repo, file_path);
-
-        git_operations::get_commit_file_stats(&repo, commit_sha, &relative_path)
-    }
 }
 
 #[cfg(test)]

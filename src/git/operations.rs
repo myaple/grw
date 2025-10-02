@@ -119,7 +119,7 @@ pub fn get_working_tree_diff(
                     let file_path_str = path.to_string_lossy();
 
                     manual_lines.push(format!("+++ b/{}", file_path_str));
-                    manual_lines.push(format!("--- /dev/null"));
+                    manual_lines.push("--- /dev/null".to_string());
 
                     let content_lines: Vec<&str> = content.lines().collect();
                     manual_lines.push(format!("@@ -0,0 +1,{} @@", content_lines.len()));
@@ -163,10 +163,10 @@ fn is_file_untracked(repo: &Repository, path: &Path) -> Result<bool> {
     // If there are no status entries for this path, it's clean (tracked but unchanged)
     // If there's an entry with WT_NEW flag, it's untracked
     for status in statuses.iter() {
-        if let Some(status_path) = status.path() {
-            if status_path == path.to_str().unwrap_or("") {
-                return Ok(status.status().contains(git2::Status::WT_NEW));
-            }
+        if let Some(status_path) = status.path()
+            && status_path == path.to_str().unwrap_or("")
+        {
+            return Ok(status.status().contains(git2::Status::WT_NEW));
         }
     }
 
