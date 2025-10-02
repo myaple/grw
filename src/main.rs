@@ -14,7 +14,6 @@ use std::time::Duration;
 
 mod config;
 mod git;
-mod git_worker;
 mod llm;
 mod logging;
 mod monitor;
@@ -69,7 +68,7 @@ async fn main() -> Result<()> {
     info!("Shared state manager initialized successfully");
 
     // Create GitWorker with shared state and start it running continuously
-    let mut git_worker = crate::git_worker::GitWorker::new(
+    let mut git_worker = crate::git::GitWorker::new(
         repo_path.clone(),
         Arc::clone(shared_state_manager.git_state()),
     )?;
@@ -441,7 +440,7 @@ fn handle_key_event(
                 app.enter_commit_picker_mode();
                 app.set_commit_picker_loading();
                 // Create a temporary GitWorker to load commit history using shared state
-                match crate::git_worker::GitWorker::new(
+                match crate::git::GitWorker::new(
                     repo.path.clone(),
                     Arc::clone(shared_state_manager.git_state()),
                 ) {
