@@ -1,4 +1,5 @@
 use crate::git::{CommitInfo, FileDiff, GitRepo, PreloadConfig, SummaryPreloader, TreeNode};
+use crate::git_operations;
 use crate::llm::LlmClient;
 use crate::pane::{PaneId, PaneRegistry};
 use crossterm::event::KeyEvent;
@@ -1180,26 +1181,29 @@ impl App {
         commit_sha: &str,
         file_path: &std::path::Path,
     ) -> Vec<String> {
-        // Use git show to get the diff content for the specific file in the commit
-        let output = std::process::Command::new("git")
-            .args([
-                "show",
-                "--format=",
-                "--no-color",
-                commit_sha,
-                "--",
-                &file_path.to_string_lossy(),
-            ])
-            .output();
+        // Find git repository path
+        let repo_path = std::path::Path::new(".")
+            .ancestors()
+            .find(|p| p.join(".git").exists())
+            .unwrap_or_else(|| std::path::Path::new("."));
 
-        match output {
-            Ok(output) => {
-                let diff_text = String::from_utf8_lossy(&output.stdout);
-                diff_text.lines().map(|line| line.to_string()).collect()
+        // Open repository and get diff using git2
+        match git2::Repository::open(repo_path) {
+            Ok(repo) => {
+                match git_operations::get_commit_file_diff(&repo, commit_sha, file_path) {
+                    Ok(lines) => lines,
+                    Err(e) => {
+                        vec![format!(
+                            "Error: Could not get diff for {}: {}",
+                            file_path.display(),
+                            e
+                        )]
+                    }
+                }
             }
             Err(_) => {
                 vec![format!(
-                    "Error: Could not get diff for {}",
+                    "Error: Could not open git repository for {}",
                     file_path.display()
                 )]
             }

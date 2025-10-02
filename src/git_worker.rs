@@ -1,4 +1,5 @@
 use crate::git::{CommitFileChange, CommitInfo, FileChangeStatus, FileDiff, GitRepo, ViewMode};
+use crate::git_operations;
 use crate::shared_state::GitSharedState;
 use color_eyre::eyre::Result;
 use git2::{DiffOptions, Repository, Status, StatusOptions};
@@ -147,6 +148,13 @@ impl GitWorker {
             let path = status.path().unwrap_or("");
             let file_path = self.path.join(path);
 
+            // Strip "./" prefix if present, as git2 doesn't handle it correctly
+            let file_path = if file_path.starts_with("./") {
+                file_path.strip_prefix("./").unwrap_or(&file_path).to_path_buf()
+            } else {
+                file_path
+            };
+
             // Working tree changes (unstaged)
             if status.status().is_wt_new()
                 || status.status().is_wt_modified()
@@ -231,69 +239,56 @@ impl GitWorker {
         match diff_type {
             DiffType::WorkingTree => {
                 if status.is_wt_new() {
-                    if let Ok(content) = std::fs::read_to_string(path) {
-                        let line_count = content.lines().count();
-                        debug!("New file has {line_count} lines");
-                        for line in content.lines() {
-                            line_strings.push(format!("+ {line}"));
-                            additions += 1;
+                    // For new files, use the same git_operations function
+                    match git_operations::get_working_tree_diff(&self.repo, path) {
+                        Ok((lines, added, deleted)) => {
+                            line_strings = lines;
+                            additions = added;
+                            deletions = deleted;
+                            debug!("New working tree file: +{additions} -{deletions}");
+                        }
+                        Err(e) => {
+                            debug!("Failed to get working tree diff for new file {:?}: {}", path, e);
                         }
                     }
                 } else if status.is_wt_modified() || status.is_wt_deleted() {
-                    if let Ok(output) = std::process::Command::new("git")
-                        .args(["diff", "--no-color", path.to_str().unwrap_or("")])
-                        .output()
-                    {
-                        let diff_text = String::from_utf8_lossy(&output.stdout);
-                        for line in diff_text.lines() {
-                            if line.starts_with('+') && !line.starts_with("++") {
-                                additions += 1;
-                            } else if line.starts_with('-') && !line.starts_with("--") {
-                                deletions += 1;
-                            }
-                            line_strings.push(line.to_string());
+                    match git_operations::get_working_tree_diff(&self.repo, path) {
+                        Ok((lines, added, deleted)) => {
+                            line_strings = lines;
+                            additions = added;
+                            deletions = deleted;
+                            debug!("Working tree file: +{additions} -{deletions}");
                         }
-                        debug!("Working tree file: +{additions} -{deletions}");
+                        Err(e) => {
+                            debug!("Failed to get working tree diff for {:?}: {}", path, e);
+                        }
                     }
                 }
             }
             DiffType::Staged => {
-                if let Ok(output) = std::process::Command::new("git")
-                    .args([
-                        "diff",
-                        "--cached",
-                        "--no-color",
-                        path.to_str().unwrap_or(""),
-                    ])
-                    .output()
-                {
-                    let diff_text = String::from_utf8_lossy(&output.stdout);
-                    for line in diff_text.lines() {
-                        if line.starts_with('+') && !line.starts_with("++") {
-                            additions += 1;
-                        } else if line.starts_with('-') && !line.starts_with("--") {
-                            deletions += 1;
-                        }
-                        line_strings.push(line.to_string());
+                match git_operations::get_staged_diff(&self.repo, path) {
+                    Ok((lines, added, deleted)) => {
+                        line_strings = lines;
+                        additions = added;
+                        deletions = deleted;
+                        debug!("Staged file: +{additions} -{deletions}");
                     }
-                    debug!("Staged file: +{additions} -{deletions}");
+                    Err(e) => {
+                        debug!("Failed to get staged diff for {:?}: {}", path, e);
+                    }
                 }
             }
             DiffType::DirtyDirectory => {
-                if let Ok(output) = std::process::Command::new("git")
-                    .args(["diff", "--no-color", path.to_str().unwrap_or("")])
-                    .output()
-                {
-                    let diff_text = String::from_utf8_lossy(&output.stdout);
-                    for line in diff_text.lines() {
-                        if line.starts_with('+') && !line.starts_with("++") {
-                            additions += 1;
-                        } else if line.starts_with('-') && !line.starts_with("--") {
-                            deletions += 1;
-                        }
-                        line_strings.push(line.to_string());
+                match git_operations::get_working_tree_diff(&self.repo, path) {
+                    Ok((lines, added, deleted)) => {
+                        line_strings = lines;
+                        additions = added;
+                        deletions = deleted;
+                        debug!("Dirty directory file: +{additions} -{deletions}");
                     }
-                    debug!("Dirty directory file: +{additions} -{deletions}");
+                    Err(e) => {
+                        debug!("Failed to get dirty directory diff for {:?}: {}", path, e);
+                    }
                 }
             }
         }
@@ -324,14 +319,8 @@ impl GitWorker {
 
     fn is_file_in_dirty_directory(&self, path: &Path) -> bool {
         // Check if the file has unstaged changes that would be committed
-        if let Ok(output) = std::process::Command::new("git")
-            .args(["diff", "--name-only", path.to_str().unwrap_or("")])
-            .output()
-        {
-            !output.stdout.is_empty()
-        } else {
-            false
-        }
+        git_operations::is_file_in_dirty_directory(&self.repo, path)
+            .unwrap_or(false)
     }
 
     fn get_repo_name(&self) -> String {
@@ -399,6 +388,13 @@ impl GitWorker {
                         && let Some(new_file) = delta.new_file().path()
                     {
                         let file_path = self.path.join(new_file);
+
+                        // Strip "./" prefix if present, as git2 doesn't handle it correctly
+                        let file_path = if file_path.starts_with("./") {
+                            file_path.strip_prefix("./").unwrap_or(&file_path).to_path_buf()
+                        } else {
+                            file_path
+                        };
                         let diff_content = self.get_commit_diff_content(old_file, new_file);
 
                         let mut additions = 0;
@@ -427,28 +423,12 @@ impl GitWorker {
     }
 
     fn get_commit_diff_content(&self, _old_path: &Path, new_path: &Path) -> Vec<String> {
-        let mut content = Vec::new();
-
-        // Use git show to get the diff content for the commit
-        if let Some(commit_id) = &self.last_commit_id
-            && let Ok(output) = std::process::Command::new("git")
-                .args([
-                    "show",
-                    "--format=",
-                    "--no-color",
-                    commit_id,
-                    "--",
-                    new_path.to_str().unwrap_or(""),
-                ])
-                .output()
-        {
-            let diff_text = String::from_utf8_lossy(&output.stdout);
-            for line in diff_text.lines() {
-                content.push(line.to_string());
-            }
+        if let Some(commit_id) = &self.last_commit_id {
+            git_operations::get_commit_file_diff(&self.repo, commit_id, new_path)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
         }
-
-        content
     }
 
     fn create_git_repo_snapshot(&self) -> GitRepo {
@@ -762,12 +742,6 @@ impl GitWorker {
         commit_sha: &str,
         file_path: &Path,
     ) -> Result<(usize, usize)> {
-        // Use git diff-tree to get numstat for the specific file
-        let relative_path = file_path
-            .strip_prefix(repo_path)
-            .unwrap_or(file_path)
-            .to_string_lossy();
-
         // Validate inputs
         if commit_sha.is_empty() {
             return Err(color_eyre::eyre::eyre!(
@@ -775,77 +749,16 @@ impl GitWorker {
             ));
         }
 
-        if relative_path.is_empty() {
+        if file_path.as_os_str().is_empty() {
             return Err(color_eyre::eyre::eyre!(
                 "Empty file path provided to get_commit_file_stats"
             ));
         }
 
-        let output = match std::process::Command::new("git")
-            .args([
-                "diff-tree",
-                "--numstat",
-                "--no-merges",
-                commit_sha,
-                "--",
-                &relative_path,
-            ])
-            .current_dir(repo_path)
-            .output()
-        {
-            Ok(output) => output,
-            Err(e) => {
-                debug!("Failed to execute git diff-tree command: {}", e);
-                return Err(e.into());
-            }
-        };
+        // Open repository
+        let repo = Repository::open(repo_path)?;
 
-        // Check if git command was successful
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            debug!(
-                "git diff-tree command failed with status {}: {}",
-                output.status, stderr
-            );
-            return Err(color_eyre::eyre::eyre!("git diff-tree failed: {}", stderr));
-        }
-
-        let output_str = String::from_utf8_lossy(&output.stdout);
-
-        // Parse numstat output: "additions\tdeletions\tfilename"
-        for line in output_str.lines() {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 2 {
-                // Handle binary files (marked with "-" in numstat)
-                let additions = if parts[0] == "-" {
-                    0 // Binary files show as "-", treat as 0 additions
-                } else {
-                    parts[0].parse::<usize>().unwrap_or_else(|e| {
-                        debug!("Failed to parse additions '{}': {}", parts[0], e);
-                        0
-                    })
-                };
-
-                let deletions = if parts[1] == "-" {
-                    0 // Binary files show as "-", treat as 0 deletions
-                } else {
-                    parts[1].parse::<usize>().unwrap_or_else(|e| {
-                        debug!("Failed to parse deletions '{}': {}", parts[1], e);
-                        0
-                    })
-                };
-
-                return Ok((additions, deletions));
-            }
-        }
-
-        // If no numstat output found, the file might not exist in this commit
-        // or there might be no changes - return (0, 0)
-        debug!(
-            "No numstat output found for file {} in commit {}",
-            relative_path, commit_sha
-        );
-        Ok((0, 0))
+        git_operations::get_commit_file_stats(&repo, commit_sha, file_path)
     }
 }
 

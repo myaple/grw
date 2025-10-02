@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod git;
+pub mod git_operations;
 pub mod git_worker;
 pub mod llm;
 pub mod logging;

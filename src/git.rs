@@ -1,3 +1,4 @@
+use crate::git_operations;
 use crate::shared_state::LlmSharedState;
 
 use git2::Status;
@@ -272,46 +273,33 @@ impl SummaryPreloader {
         llm_state: Arc<LlmSharedState>,
     ) {
         if let Some(client) = llm_client {
-            // Get the full diff using git show command
+            // Get the full diff using git2 instead of subprocess
             let diff_result = tokio::task::spawn_blocking({
                 let commit_sha = commit_sha.clone();
                 move || {
-                    std::process::Command::new("git")
-                        .args([
-                            "show",
-                            "--format=", // Don't show commit message, just the diff
-                            "--no-color",
-                            &commit_sha,
-                        ])
-                        .output()
+                    // Find git repository path
+                    let repo_path = std::path::Path::new(".")
+                        .ancestors()
+                        .find(|p| p.join(".git").exists())
+                        .unwrap_or_else(|| std::path::Path::new("."));
+
+                    // Open repository and get diff using git2
+                    match git2::Repository::open(repo_path) {
+                        Ok(repo) => git_operations::get_full_commit_diff(&repo, &commit_sha),
+                        Err(e) => Err(color_eyre::eyre::eyre!("Could not open repository: {}", e)),
+                    }
                 }
             })
             .await;
 
             let full_diff = match diff_result {
-                Ok(Ok(output)) if output.status.success() => {
-                    String::from_utf8_lossy(&output.stdout).to_string()
-                }
-                Ok(Ok(output)) => {
-                    // Git command failed, log error but continue
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    debug!("Git show failed for commit {}: {}", commit_sha, stderr);
-                    llm_state.set_error(
-                        format!("summary_{}", commit_sha),
-                        format!("Git show failed: {}", stderr),
-                    );
-                    llm_state.complete_summary_task(&commit_sha);
-                    return;
-                }
+                Ok(Ok(diff_text)) => diff_text,
                 Ok(Err(e)) => {
-                    // Failed to execute git command
-                    debug!(
-                        "Failed to execute git show for commit {}: {}",
-                        commit_sha, e
-                    );
+                    // Git operation failed, log error but continue
+                    debug!("Git diff failed for commit {}: {}", commit_sha, e);
                     llm_state.set_error(
                         format!("summary_{}", commit_sha),
-                        format!("Failed to execute git show: {}", e),
+                        format!("Git diff failed: {}", e),
                     );
                     llm_state.complete_summary_task(&commit_sha);
                     return;

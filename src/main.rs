@@ -14,6 +14,7 @@ use std::time::Duration;
 
 mod config;
 mod git;
+mod git_operations;
 mod git_worker;
 mod llm;
 mod logging;
