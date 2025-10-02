@@ -1181,21 +1181,34 @@ impl App {
         commit_sha: &str,
         file_path: &std::path::Path,
     ) -> Vec<String> {
-        // Find git repository path
-        let repo_path = std::path::Path::new(".")
-            .ancestors()
-            .find(|p| p.join(".git").exists())
-            .unwrap_or_else(|| std::path::Path::new("."));
+        // Find git repository path (make it absolute for consistent path handling)
+        let repo_path = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| {
+                cwd.ancestors()
+                    .find(|p| p.join(".git").exists())
+                    .map(|p| p.to_path_buf())
+            })
+            .unwrap_or_else(|| std::path::Path::new(".").to_path_buf());
+
+        // Convert absolute path to relative path for git_operations
+        let relative_path = match file_path.strip_prefix(&repo_path) {
+            Ok(rel_path) => rel_path,
+            Err(_) => {
+                log::debug!("Failed to convert absolute path to relative for commit diff: {:?} (repo path: {:?})", file_path, repo_path);
+                file_path
+            }
+        };
 
         // Open repository and get diff using git2
-        match git2::Repository::open(repo_path) {
+        match git2::Repository::open(&repo_path) {
             Ok(repo) => {
-                match git_operations::get_commit_file_diff(&repo, commit_sha, file_path) {
+                match git_operations::get_commit_file_diff(&repo, commit_sha, relative_path) {
                     Ok(lines) => lines,
                     Err(e) => {
                         vec![format!(
                             "Error: Could not get diff for {}: {}",
-                            file_path.display(),
+                            relative_path.display(),
                             e
                         )]
                     }
@@ -1204,7 +1217,7 @@ impl App {
             Err(_) => {
                 vec![format!(
                     "Error: Could not open git repository for {}",
-                    file_path.display()
+                    relative_path.display()
                 )]
             }
         }
