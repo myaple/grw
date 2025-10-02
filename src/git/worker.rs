@@ -1,5 +1,5 @@
-use crate::git::{CommitFileChange, CommitInfo, FileChangeStatus, FileDiff, GitRepo, ViewMode};
-use crate::git_operations;
+use super::{CommitFileChange, CommitInfo, FileChangeStatus, FileDiff, GitRepo, ViewMode};
+use super::operations as git_operations;
 use crate::shared_state::GitSharedState;
 use color_eyre::eyre::Result;
 use git2::{DiffOptions, Repository, Status, StatusOptions};

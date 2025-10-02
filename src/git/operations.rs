@@ -25,15 +25,18 @@ pub fn get_working_tree_diff(repo: &Repository, path: &Path) -> Result<(Vec<Stri
 
     // Special handling for untracked files that result in empty diffs
     // git2's diff_index_to_workdir doesn't handle completely untracked files well
-    if lines.is_empty() && path.exists() {
+    let absolute_path = repo.workdir().unwrap_or_else(|| Path::new(".")).join(path);
+    if lines.is_empty() && absolute_path.exists() {
         // Check if the file is actually untracked (not in git index)
         let is_untracked = is_file_untracked(repo, path)?;
 
         if is_untracked {
             debug!("Untracked file detected, creating manual diff");
-            match std::fs::read_to_string(path) {
+
+            match std::fs::read_to_string(&absolute_path) {
                 Ok(content) => {
                     let mut manual_lines = Vec::new();
+                    // Use relative path for diff header display
                     let file_path_str = path.to_string_lossy();
 
                     manual_lines.push(format!("+++ b/{}", file_path_str));
@@ -52,7 +55,7 @@ pub fn get_working_tree_diff(repo: &Repository, path: &Path) -> Result<(Vec<Stri
                     return Ok((manual_lines, line_additions, 0));
                 }
                 Err(e) => {
-                    debug!("Failed to read untracked file content: {}", e);
+                    debug!("Failed to read untracked file content from {:?}: {}", absolute_path, e);
                 }
             }
         } else {
@@ -467,6 +470,38 @@ mod tests {
 
         assert!(!diff_text.is_empty());
         assert!(diff_text.contains("Hello World"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_working_tree_diff_untracked_file() -> Result<()> {
+        let (_temp_dir, repo, repo_path) = create_test_repo()?;
+
+        // Create initial commit to establish a baseline
+        create_commit(&repo, &repo_path, "existing.txt", "Existing content", "Initial commit")?;
+
+        // Create an untracked file
+        let new_file_path = repo_path.join("new_untracked.txt");
+        fs::write(&new_file_path, "Line 1\nLine 2\nLine 3")?;
+
+        // Test working tree diff for untracked file (using relative path)
+        let relative_path = Path::new("new_untracked.txt");
+        let (lines, additions, deletions) = get_working_tree_diff(&repo, relative_path)?;
+
+        // Verify the diff is generated correctly
+        assert!(!lines.is_empty(), "Diff lines should not be empty for untracked file");
+        assert_eq!(additions, 3, "Should have 3 additions for 3-line file");
+        assert_eq!(deletions, 0, "Should have 0 deletions for new file");
+
+        // Verify diff format for untracked files
+        let diff_content = lines.join("\n");
+        assert!(diff_content.contains("+++ b/new_untracked.txt"), "Diff should show relative path in header");
+        assert!(diff_content.contains("--- /dev/null"), "Diff should show /dev/null as source");
+        assert!(diff_content.contains("@@ -0,0 +1,3 @@"), "Diff should have correct hunk header");
+        assert!(diff_content.contains("+Line 1"), "Diff should show first line as addition");
+        assert!(diff_content.contains("+Line 2"), "Diff should show second line as addition");
+        assert!(diff_content.contains("+Line 3"), "Diff should show third line as addition");
 
         Ok(())
     }

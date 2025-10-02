@@ -1,5 +1,5 @@
 use crate::git::{CommitInfo, FileDiff, GitRepo, PreloadConfig, SummaryPreloader, TreeNode};
-use crate::git_operations;
+use crate::git::operations as git_operations;
 use crate::llm::LlmClient;
 use crate::pane::{PaneId, PaneRegistry};
 use crossterm::event::KeyEvent;

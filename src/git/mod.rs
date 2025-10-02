@@ -1,4 +1,9 @@
-use crate::git_operations;
+pub mod operations;
+pub mod worker;
+
+// Re-export worker to maintain the same public API
+pub use worker::GitWorker;
+
 use crate::shared_state::LlmSharedState;
 
 use git2::Status;
@@ -285,7 +290,7 @@ impl SummaryPreloader {
 
                     // Open repository and get diff using git2
                     match git2::Repository::open(repo_path) {
-                        Ok(repo) => git_operations::get_full_commit_diff(&repo, &commit_sha),
+                        Ok(repo) => self::operations::get_full_commit_diff(&repo, &commit_sha),
                         Err(e) => Err(color_eyre::eyre::eyre!("Could not open repository: {}", e)),
                     }
                 }

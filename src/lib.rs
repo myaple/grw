@@ -3,8 +3,6 @@
 
 pub mod config;
 pub mod git;
-pub mod git_operations;
-pub mod git_worker;
 pub mod llm;
 pub mod logging;
 pub mod monitor;
@@ -14,7 +12,7 @@ pub mod ui;
 
 // Re-export commonly used types for easier testing
 pub use git::{CommitFileChange, CommitInfo, FileChangeStatus};
-pub use git_worker::GitWorker;
+pub use git::worker::GitWorker;
 pub use shared_state::{
     GitSharedState, LlmSharedState, MonitorSharedState, MonitorTiming, SharedStateManager,
 };
