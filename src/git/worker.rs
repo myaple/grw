@@ -1,5 +1,5 @@
-use super::{CommitFileChange, CommitInfo, FileChangeStatus, FileDiff, GitRepo, ViewMode};
 use super::operations as git_operations;
+use super::{CommitFileChange, CommitInfo, FileChangeStatus, FileDiff, GitRepo, ViewMode};
 use crate::shared_state::GitSharedState;
 use color_eyre::eyre::Result;
 use git2::{DiffOptions, Repository, Status, StatusOptions};
@@ -245,7 +245,10 @@ impl GitWorker {
                             debug!("New working tree file: +{additions} -{deletions}");
                         }
                         Err(e) => {
-                            debug!("Failed to get working tree diff for new file {:?}: {}", relative_path, e);
+                            debug!(
+                                "Failed to get working tree diff for new file {:?}: {}",
+                                relative_path, e
+                            );
                         }
                     }
                 } else if status.is_wt_modified() || status.is_wt_deleted() {
@@ -257,24 +260,25 @@ impl GitWorker {
                             debug!("Working tree file: +{additions} -{deletions}");
                         }
                         Err(e) => {
-                            debug!("Failed to get working tree diff for {:?}: {}", relative_path, e);
+                            debug!(
+                                "Failed to get working tree diff for {:?}: {}",
+                                relative_path, e
+                            );
                         }
                     }
                 }
             }
-            DiffType::Staged => {
-                match git_operations::get_staged_diff(&self.repo, &relative_path) {
-                    Ok((lines, added, deleted)) => {
-                        line_strings = lines;
-                        additions = added;
-                        deletions = deleted;
-                        debug!("Staged file: +{additions} -{deletions}");
-                    }
-                    Err(e) => {
-                        debug!("Failed to get staged diff for {:?}: {}", relative_path, e);
-                    }
+            DiffType::Staged => match git_operations::get_staged_diff(&self.repo, &relative_path) {
+                Ok((lines, added, deleted)) => {
+                    line_strings = lines;
+                    additions = added;
+                    deletions = deleted;
+                    debug!("Staged file: +{additions} -{deletions}");
                 }
-            }
+                Err(e) => {
+                    debug!("Failed to get staged diff for {:?}: {}", relative_path, e);
+                }
+            },
             DiffType::DirtyDirectory => {
                 match git_operations::get_working_tree_diff(&self.repo, &relative_path) {
                     Ok((lines, added, deleted)) => {
@@ -284,7 +288,10 @@ impl GitWorker {
                         debug!("Dirty directory file: +{additions} -{deletions}");
                     }
                     Err(e) => {
-                        debug!("Failed to get dirty directory diff for {:?}: {}", relative_path, e);
+                        debug!(
+                            "Failed to get dirty directory diff for {:?}: {}",
+                            relative_path, e
+                        );
                     }
                 }
             }
@@ -311,13 +318,16 @@ impl GitWorker {
 
     /// Get file diff for dirty directory files (maintains backward compatibility)
     fn get_dirty_directory_diff(&self, path: &Path) -> FileDiff {
-        self.generate_diff(path, Status::from_bits_truncate(2), DiffType::DirtyDirectory)
+        self.generate_diff(
+            path,
+            Status::from_bits_truncate(2),
+            DiffType::DirtyDirectory,
+        )
     }
 
     fn is_file_in_dirty_directory(&self, path: &Path) -> bool {
         // Check if the file has unstaged changes that would be committed
-        git_operations::is_file_in_dirty_directory(&self.repo, path)
-            .unwrap_or(false)
+        git_operations::is_file_in_dirty_directory(&self.repo, path).unwrap_or(false)
     }
 
     fn get_repo_name(&self) -> String {
@@ -385,7 +395,8 @@ impl GitWorker {
                         && let Some(new_file) = delta.new_file().path()
                     {
                         // Use git2-based path handling for consistent relative/absolute path conversion
-                        let file_path = super::operations::from_repo_relative_path(&self.repo, new_file);
+                        let file_path =
+                            super::operations::from_repo_relative_path(&self.repo, new_file);
                         let diff_content = self.get_commit_diff_content(old_file, new_file);
 
                         let mut additions = 0;
@@ -684,25 +695,28 @@ impl GitWorker {
             let absolute_file_path = repo_path.join(&relative_file_path);
 
             // Get line count statistics using git diff-tree with error handling
-            let (additions, deletions) =
-                match Self::get_commit_file_stats_static_relative(repo, commit_sha, &relative_file_path) {
-                    Ok(stats) => stats,
-                    Err(e) => {
-                        debug!(
-                            "Failed to get file stats for {} in commit {}: {}",
-                            relative_file_path.display(),
-                            commit_sha,
-                            e
-                        );
-                        errors_encountered += 1;
-                        if errors_encountered >= MAX_FILE_ERRORS {
-                            debug!("Too many file processing errors, stopping");
-                            break;
-                        }
-                        // Continue with zero stats rather than failing completely
-                        (0, 0)
+            let (additions, deletions) = match Self::get_commit_file_stats_static_relative(
+                repo,
+                commit_sha,
+                &relative_file_path,
+            ) {
+                Ok(stats) => stats,
+                Err(e) => {
+                    debug!(
+                        "Failed to get file stats for {} in commit {}: {}",
+                        relative_file_path.display(),
+                        commit_sha,
+                        e
+                    );
+                    errors_encountered += 1;
+                    if errors_encountered >= MAX_FILE_ERRORS {
+                        debug!("Too many file processing errors, stopping");
+                        break;
                     }
-                };
+                    // Continue with zero stats rather than failing completely
+                    (0, 0)
+                }
+            };
 
             file_changes.push(CommitFileChange {
                 path: absolute_file_path,

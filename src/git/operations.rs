@@ -15,7 +15,8 @@ pub fn discover_repository() -> Result<(Repository, PathBuf)> {
         .or_else(|_| Repository::open("."))
         .map_err(|e| color_eyre::eyre::eyre!("Could not discover git repository: {}", e))?;
 
-    let workdir = repo.workdir()
+    let workdir = repo
+        .workdir()
         .ok_or_else(|| color_eyre::eyre::eyre!("Repository has no working directory"))?
         .to_path_buf();
 
@@ -35,16 +36,25 @@ pub fn to_repo_relative_path(repo: &Repository, absolute_path: &Path) -> PathBuf
     if let Some(workdir) = repo.workdir() {
         match absolute_path.strip_prefix(workdir) {
             Ok(relative_path) => {
-                debug!("Converted absolute path {:?} to relative: {:?}", absolute_path, relative_path);
+                debug!(
+                    "Converted absolute path {:?} to relative: {:?}",
+                    absolute_path, relative_path
+                );
                 relative_path.to_path_buf()
             }
             Err(_) => {
-                debug!("Failed to convert absolute path to relative: {:?} (repo: {:?})", absolute_path, workdir);
+                debug!(
+                    "Failed to convert absolute path to relative: {:?} (repo: {:?})",
+                    absolute_path, workdir
+                );
                 absolute_path.to_path_buf()
             }
         }
     } else {
-        debug!("Repository has no workdir, using original path: {:?}", absolute_path);
+        debug!(
+            "Repository has no workdir, using original path: {:?}",
+            absolute_path
+        );
         absolute_path.to_path_buf()
     }
 }
@@ -53,17 +63,26 @@ pub fn to_repo_relative_path(repo: &Repository, absolute_path: &Path) -> PathBuf
 pub fn from_repo_relative_path(repo: &Repository, relative_path: &Path) -> PathBuf {
     if let Some(workdir) = repo.workdir() {
         let absolute_path = workdir.join(relative_path);
-        debug!("Converted relative path {:?} to absolute: {:?}", relative_path, absolute_path);
+        debug!(
+            "Converted relative path {:?} to absolute: {:?}",
+            relative_path, absolute_path
+        );
         absolute_path
     } else {
-        debug!("Repository has no workdir, using original path: {:?}", relative_path);
+        debug!(
+            "Repository has no workdir, using original path: {:?}",
+            relative_path
+        );
         relative_path.to_path_buf()
     }
 }
 
 /// Generate diff for working tree changes
 /// Replaces: git diff --no-color <path>
-pub fn get_working_tree_diff(repo: &Repository, path: &Path) -> Result<(Vec<String>, usize, usize)> {
+pub fn get_working_tree_diff(
+    repo: &Repository,
+    path: &Path,
+) -> Result<(Vec<String>, usize, usize)> {
     debug!("Getting working tree diff for: {:?}", path);
 
     let mut diff_options = DiffOptions::new();
@@ -76,7 +95,12 @@ pub fn get_working_tree_diff(repo: &Repository, path: &Path) -> Result<(Vec<Stri
     debug!("Diff deltas found: {}", diff.deltas().count());
 
     let (lines, additions, deletions) = extract_diff_lines(&diff)?;
-    debug!("Diff lines generated: {}, additions: {}, deletions: {}", lines.len(), additions, deletions);
+    debug!(
+        "Diff lines generated: {}, additions: {}, deletions: {}",
+        lines.len(),
+        additions,
+        deletions
+    );
 
     // Special handling for untracked files that result in empty diffs
     // git2's diff_index_to_workdir doesn't handle completely untracked files well
@@ -106,11 +130,18 @@ pub fn get_working_tree_diff(repo: &Repository, path: &Path) -> Result<(Vec<Stri
                         line_additions += 1;
                     }
 
-                    debug!("Manual diff created for untracked file: {} lines, +{} -0", manual_lines.len(), line_additions);
+                    debug!(
+                        "Manual diff created for untracked file: {} lines, +{} -0",
+                        manual_lines.len(),
+                        line_additions
+                    );
                     return Ok((manual_lines, line_additions, 0));
                 }
                 Err(e) => {
-                    debug!("Failed to read untracked file content from {:?}: {}", absolute_path, e);
+                    debug!(
+                        "Failed to read untracked file content from {:?}: {}",
+                        absolute_path, e
+                    );
                 }
             }
         } else {
@@ -156,7 +187,12 @@ pub fn get_staged_diff(repo: &Repository, path: &Path) -> Result<(Vec<String>, u
     debug!("Staged diff deltas found: {}", diff.deltas().count());
 
     let (lines, additions, deletions) = extract_diff_lines(&diff)?;
-    debug!("Staged diff lines generated: {}, additions: {}, deletions: {}", lines.len(), additions, deletions);
+    debug!(
+        "Staged diff lines generated: {}, additions: {}, deletions: {}",
+        lines.len(),
+        additions,
+        deletions
+    );
 
     Ok((lines, additions, deletions))
 }
@@ -177,7 +213,11 @@ pub fn is_file_in_dirty_directory(repo: &Repository, path: &Path) -> Result<bool
 
 /// Get diff content for a specific file in a commit
 /// Replaces: git show --format= --no-color <commit> -- <path>
-pub fn get_commit_file_diff(repo: &Repository, commit_sha: &str, path: &Path) -> Result<Vec<String>> {
+pub fn get_commit_file_diff(
+    repo: &Repository,
+    commit_sha: &str,
+    path: &Path,
+) -> Result<Vec<String>> {
     debug!("Getting commit diff for: {} {:?}", commit_sha, path);
 
     let oid = git2::Oid::from_str(commit_sha)?;
@@ -195,19 +235,32 @@ pub fn get_commit_file_diff(repo: &Repository, commit_sha: &str, path: &Path) ->
     let mut diff_options = DiffOptions::new();
     diff_options.pathspec(path);
 
-    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), Some(&mut diff_options))?;
+    let diff = repo.diff_tree_to_tree(
+        parent_tree.as_ref(),
+        Some(&commit_tree),
+        Some(&mut diff_options),
+    )?;
 
     debug!("Commit diff deltas found: {}", diff.deltas().count());
 
     let (lines, additions, deletions) = extract_diff_lines(&diff)?;
-    debug!("Commit diff lines generated: {}, additions: {}, deletions: {}", lines.len(), additions, deletions);
+    debug!(
+        "Commit diff lines generated: {}, additions: {}, deletions: {}",
+        lines.len(),
+        additions,
+        deletions
+    );
 
     Ok(lines)
 }
 
 /// Get file addition/deletion statistics for a commit
 /// Replaces: git diff-tree --numstat --no-merges <commit> -- <path>
-pub fn get_commit_file_stats(repo: &Repository, commit_sha: &str, path: &Path) -> Result<(usize, usize)> {
+pub fn get_commit_file_stats(
+    repo: &Repository,
+    commit_sha: &str,
+    path: &Path,
+) -> Result<(usize, usize)> {
     debug!("Getting commit file stats for: {} {:?}", commit_sha, path);
 
     let oid = git2::Oid::from_str(commit_sha)?;
@@ -227,11 +280,20 @@ pub fn get_commit_file_stats(repo: &Repository, commit_sha: &str, path: &Path) -
     diff_options.pathspec(path);
 
     // Get diff only for our specific file
-    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), Some(&mut diff_options))?;
+    let diff = repo.diff_tree_to_tree(
+        parent_tree.as_ref(),
+        Some(&commit_tree),
+        Some(&mut diff_options),
+    )?;
 
     // Extract diff lines and count stats
     let (lines, additions, deletions) = extract_diff_lines(&diff)?;
-    debug!("File diff lines generated: {}, additions: {}, deletions: {}", lines.len(), additions, deletions);
+    debug!(
+        "File diff lines generated: {}, additions: {}, deletions: {}",
+        lines.len(),
+        additions,
+        deletions
+    );
 
     Ok((additions, deletions))
 }
@@ -284,9 +346,13 @@ fn extract_diff_lines(diff: &git2::Diff) -> Result<(Vec<String>, usize, usize)> 
             // Hunk header
             'H' => {
                 if let Some(hunk) = hunk {
-                    lines.push(format!("@@ -{},{} +{},{} @@",
-                        hunk.old_start(), hunk.old_lines(),
-                        hunk.new_start(), hunk.new_lines()));
+                    lines.push(format!(
+                        "@@ -{},{} +{},{} @@",
+                        hunk.old_start(),
+                        hunk.old_lines(),
+                        hunk.new_start(),
+                        hunk.new_lines()
+                    ));
                 }
             }
             // Context lines
@@ -314,7 +380,10 @@ fn extract_diff_lines(diff: &git2::Diff) -> Result<(Vec<String>, usize, usize)> 
 
     // If the diff was empty or failed, add some debugging
     if lines.is_empty() {
-        debug!("Empty diff generated, checking deltas count: {}", diff.deltas().count());
+        debug!(
+            "Empty diff generated, checking deltas count: {}",
+            diff.deltas().count()
+        );
     }
 
     Ok((lines, additions, deletions))
@@ -386,7 +455,13 @@ mod tests {
         let (_temp_dir, repo, repo_path) = create_test_repo()?;
 
         // Create initial commit
-        create_commit(&repo, &repo_path, "test.txt", "Hello World", "Initial commit")?;
+        create_commit(
+            &repo,
+            &repo_path,
+            "test.txt",
+            "Hello World",
+            "Initial commit",
+        )?;
 
         // Modify the file
         let file_path = repo_path.join("test.txt");
@@ -408,7 +483,13 @@ mod tests {
         let (_temp_dir, repo, repo_path) = create_test_repo()?;
 
         // Create initial commit
-        create_commit(&repo, &repo_path, "test.txt", "Hello World", "Initial commit")?;
+        create_commit(
+            &repo,
+            &repo_path,
+            "test.txt",
+            "Hello World",
+            "Initial commit",
+        )?;
 
         // Modify and stage the file
         let file_path = repo_path.join("test.txt");
@@ -434,7 +515,13 @@ mod tests {
         let (_temp_dir, repo, repo_path) = create_test_repo()?;
 
         // Create initial commit
-        create_commit(&repo, &repo_path, "test.txt", "Hello World", "Initial commit")?;
+        create_commit(
+            &repo,
+            &repo_path,
+            "test.txt",
+            "Hello World",
+            "Initial commit",
+        )?;
 
         // Modify the file
         let file_path = repo_path.join("test.txt");
@@ -453,12 +540,24 @@ mod tests {
         let (_temp_dir, repo, repo_path) = create_test_repo()?;
 
         // Create initial commit
-        create_commit(&repo, &repo_path, "test.txt", "Hello World", "Initial commit")?;
+        create_commit(
+            &repo,
+            &repo_path,
+            "test.txt",
+            "Hello World",
+            "Initial commit",
+        )?;
 
         // Create second commit with modification
         let file_path = repo_path.join("test.txt");
         fs::write(&file_path, "Hello World Modified")?;
-        let commit_id = create_commit(&repo, &repo_path, "test.txt", "Hello World Modified", "Modified file")?;
+        let commit_id = create_commit(
+            &repo,
+            &repo_path,
+            "test.txt",
+            "Hello World Modified",
+            "Modified file",
+        )?;
 
         // Test commit file diff
         let relative_path = Path::new("test.txt");
@@ -474,16 +573,29 @@ mod tests {
         let (_temp_dir, repo, repo_path) = create_test_repo()?;
 
         // Create initial commit
-        let _commit1_id = create_commit(&repo, &repo_path, "test.txt", "Hello World", "Initial commit")?;
+        let _commit1_id = create_commit(
+            &repo,
+            &repo_path,
+            "test.txt",
+            "Hello World",
+            "Initial commit",
+        )?;
 
         // Create second commit with modification
         let file_path = repo_path.join("test.txt");
         fs::write(&file_path, "Hello World Modified\nNew line")?;
-        let commit2_id = create_commit(&repo, &repo_path, "test.txt", "Hello World Modified\nNew line", "Modified file")?;
+        let commit2_id = create_commit(
+            &repo,
+            &repo_path,
+            "test.txt",
+            "Hello World Modified\nNew line",
+            "Modified file",
+        )?;
 
         // Test commit file stats for second commit
         let relative_path = repo_path.join("test.txt");
-        let (additions, deletions) = get_commit_file_stats(&repo, &commit2_id.to_string(), &relative_path)?;
+        let (additions, deletions) =
+            get_commit_file_stats(&repo, &commit2_id.to_string(), &relative_path)?;
 
         // Let's be more lenient - just verify the function works and returns some result
         // The diff detection might be more complex with git2
@@ -497,12 +609,24 @@ mod tests {
         let (_temp_dir, repo, repo_path) = create_test_repo()?;
 
         // Create initial commit
-        create_commit(&repo, &repo_path, "test.txt", "Hello World", "Initial commit")?;
+        create_commit(
+            &repo,
+            &repo_path,
+            "test.txt",
+            "Hello World",
+            "Initial commit",
+        )?;
 
         // Create second commit with modification
         let file_path = repo_path.join("test.txt");
         fs::write(&file_path, "Hello World Modified")?;
-        let commit_id = create_commit(&repo, &repo_path, "test.txt", "Hello World Modified", "Modified file")?;
+        let commit_id = create_commit(
+            &repo,
+            &repo_path,
+            "test.txt",
+            "Hello World Modified",
+            "Modified file",
+        )?;
 
         // Test full commit diff
         let diff_text = get_full_commit_diff(&repo, &commit_id.to_string())?;
@@ -518,7 +642,13 @@ mod tests {
         let (_temp_dir, repo, repo_path) = create_test_repo()?;
 
         // Create initial commit to establish a baseline
-        create_commit(&repo, &repo_path, "existing.txt", "Existing content", "Initial commit")?;
+        create_commit(
+            &repo,
+            &repo_path,
+            "existing.txt",
+            "Existing content",
+            "Initial commit",
+        )?;
 
         // Create an untracked file
         let new_file_path = repo_path.join("new_untracked.txt");
@@ -529,18 +659,39 @@ mod tests {
         let (lines, additions, deletions) = get_working_tree_diff(&repo, relative_path)?;
 
         // Verify the diff is generated correctly
-        assert!(!lines.is_empty(), "Diff lines should not be empty for untracked file");
+        assert!(
+            !lines.is_empty(),
+            "Diff lines should not be empty for untracked file"
+        );
         assert_eq!(additions, 3, "Should have 3 additions for 3-line file");
         assert_eq!(deletions, 0, "Should have 0 deletions for new file");
 
         // Verify diff format for untracked files
         let diff_content = lines.join("\n");
-        assert!(diff_content.contains("+++ b/new_untracked.txt"), "Diff should show relative path in header");
-        assert!(diff_content.contains("--- /dev/null"), "Diff should show /dev/null as source");
-        assert!(diff_content.contains("@@ -0,0 +1,3 @@"), "Diff should have correct hunk header");
-        assert!(diff_content.contains("+Line 1"), "Diff should show first line as addition");
-        assert!(diff_content.contains("+Line 2"), "Diff should show second line as addition");
-        assert!(diff_content.contains("+Line 3"), "Diff should show third line as addition");
+        assert!(
+            diff_content.contains("+++ b/new_untracked.txt"),
+            "Diff should show relative path in header"
+        );
+        assert!(
+            diff_content.contains("--- /dev/null"),
+            "Diff should show /dev/null as source"
+        );
+        assert!(
+            diff_content.contains("@@ -0,0 +1,3 @@"),
+            "Diff should have correct hunk header"
+        );
+        assert!(
+            diff_content.contains("+Line 1"),
+            "Diff should show first line as addition"
+        );
+        assert!(
+            diff_content.contains("+Line 2"),
+            "Diff should show second line as addition"
+        );
+        assert!(
+            diff_content.contains("+Line 3"),
+            "Diff should show third line as addition"
+        );
 
         Ok(())
     }
@@ -555,7 +706,10 @@ mod tests {
 
         // Test repository discovery
         let discovered_path = discover_repository_workdir()?;
-        assert_eq!(discovered_path, repo_path, "Should discover correct repository workdir");
+        assert_eq!(
+            discovered_path, repo_path,
+            "Should discover correct repository workdir"
+        );
 
         // Restore original directory
         std::env::set_current_dir(original_dir)?;

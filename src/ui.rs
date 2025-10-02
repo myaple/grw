@@ -1194,7 +1194,11 @@ impl App {
                 // Convert absolute path to relative path for git_operations
                 let relative_path = crate::git::operations::to_repo_relative_path(&repo, file_path);
 
-                match crate::git::operations::get_commit_file_diff(&repo, commit_sha, &relative_path) {
+                match crate::git::operations::get_commit_file_diff(
+                    &repo,
+                    commit_sha,
+                    &relative_path,
+                ) {
                     Ok(lines) => lines,
                     Err(e) => {
                         vec![format!(
@@ -1206,10 +1210,7 @@ impl App {
                 }
             }
             Err(e) => {
-                vec![format!(
-                    "Error: Could not open git repository: {}",
-                    e
-                )]
+                vec![format!("Error: Could not open git repository: {}", e)]
             }
         }
     }
