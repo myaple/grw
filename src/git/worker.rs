@@ -662,11 +662,11 @@ impl GitWorker {
                 }
             };
 
-            // Get the file path (prefer new file path for renames) with validation
-            let file_path = if let Some(new_file_path) = delta.new_file().path() {
-                repo_path.join(new_file_path)
+            // Get the relative file path (prefer new file path for renames) with validation
+            let relative_file_path = if let Some(new_file_path) = delta.new_file().path() {
+                new_file_path.to_path_buf()
             } else if let Some(old_file_path) = delta.old_file().path() {
-                repo_path.join(old_file_path)
+                old_file_path.to_path_buf()
             } else {
                 debug!(
                     "No valid file path found for delta in commit {}",
@@ -680,14 +680,17 @@ impl GitWorker {
                 continue; // Skip if no path available
             };
 
+            // Convert to absolute path for the CommitFileChange struct
+            let absolute_file_path = repo_path.join(&relative_file_path);
+
             // Get line count statistics using git diff-tree with error handling
             let (additions, deletions) =
-                match Self::get_commit_file_stats_static(repo_path, commit_sha, &file_path) {
+                match Self::get_commit_file_stats_static_relative(repo, commit_sha, &relative_file_path) {
                     Ok(stats) => stats,
                     Err(e) => {
                         debug!(
                             "Failed to get file stats for {} in commit {}: {}",
-                            file_path.display(),
+                            relative_file_path.display(),
                             commit_sha,
                             e
                         );
@@ -702,7 +705,7 @@ impl GitWorker {
                 };
 
             file_changes.push(CommitFileChange {
-                path: file_path,
+                path: absolute_file_path,
                 status,
                 additions,
                 deletions,
@@ -727,7 +730,29 @@ impl GitWorker {
         Ok(file_changes)
     }
 
-    /// Static helper method to get addition/deletion counts for a specific file in a commit
+    /// Static helper method to get addition/deletion counts for a specific file in a commit (using relative paths)
+    fn get_commit_file_stats_static_relative(
+        repo: &Repository,
+        commit_sha: &str,
+        relative_file_path: &Path,
+    ) -> Result<(usize, usize)> {
+        // Validate inputs
+        if commit_sha.is_empty() {
+            return Err(color_eyre::eyre::eyre!(
+                "Empty commit SHA provided to get_commit_file_stats"
+            ));
+        }
+
+        if relative_file_path.as_os_str().is_empty() {
+            return Err(color_eyre::eyre::eyre!(
+                "Empty file path provided to get_commit_file_stats"
+            ));
+        }
+
+        git_operations::get_commit_file_stats(repo, commit_sha, relative_file_path)
+    }
+
+    /// Static helper method to get addition/deletion counts for a specific file in a commit (legacy method for absolute paths)
     fn get_commit_file_stats_static(
         repo_path: &Path,
         commit_sha: &str,
@@ -749,7 +774,10 @@ impl GitWorker {
         // Open repository
         let repo = Repository::open(repo_path)?;
 
-        git_operations::get_commit_file_stats(&repo, commit_sha, file_path)
+        // Convert absolute path to relative path for git operations
+        let relative_path = super::operations::to_repo_relative_path(&repo, file_path);
+
+        git_operations::get_commit_file_stats(&repo, commit_sha, &relative_path)
     }
 }
 

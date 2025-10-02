@@ -222,34 +222,18 @@ pub fn get_commit_file_stats(repo: &Repository, commit_sha: &str, path: &Path) -
         None
     };
 
-    // Get full diff first and then filter for our specific file
-    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), None)?;
-    let (lines, _additions, _deletions) = extract_diff_lines(&diff)?;
+    // Create diff options to filter for specific file
+    let mut diff_options = DiffOptions::new();
+    diff_options.pathspec(path);
 
-    // Filter lines for our specific file if needed
-    let filtered_lines: Vec<String> = lines.iter()
-        .filter(|line| {
-            // Keep header lines and lines related to our target file
-            line.starts_with("diff") ||
-            line.starts_with("index") ||
-            line.starts_with("---") ||
-            line.starts_with("+++") ||
-            line.starts_with("@@") ||
-            (line.starts_with('+') || line.starts_with('-') || line.starts_with(' '))
-        })
-        .cloned()
-        .collect();
+    // Get diff only for our specific file
+    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), Some(&mut diff_options))?;
 
-    // Count additions and deletions again for the filtered lines
-    let filtered_additions = filtered_lines.iter()
-        .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
-        .count();
+    // Extract diff lines and count stats
+    let (lines, additions, deletions) = extract_diff_lines(&diff)?;
+    debug!("File diff lines generated: {}, additions: {}, deletions: {}", lines.len(), additions, deletions);
 
-    let filtered_deletions = filtered_lines.iter()
-        .filter(|line| line.starts_with('-') && !line.starts_with("---"))
-        .count();
-
-    Ok((filtered_additions, filtered_deletions))
+    Ok((additions, deletions))
 }
 
 /// Get full commit diff (for LLM summaries)
