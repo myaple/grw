@@ -323,16 +323,9 @@ impl SummaryPreloader {
             if full_diff.trim().is_empty() {
                 prompt.push_str("No diff content available (this might be a merge commit or have parsing issues).\n");
             } else {
-                // Limit diff size to prevent overly long prompts (keep first 8000 chars)
-                let truncated_diff = if full_diff.len() > 8000 {
-                    let truncated = full_diff.chars().take(8000).collect::<String>();
-                    format!("{}\n\n[... diff truncated for brevity ...]", truncated)
-                } else {
-                    full_diff.clone()
-                };
-
+                // Diff content will be truncated in LlmClient based on max_tokens config
                 prompt.push_str("Full diff:\n```diff\n");
-                prompt.push_str(&truncated_diff);
+                prompt.push_str(&full_diff);
                 prompt.push_str("\n```\n");
             }
 

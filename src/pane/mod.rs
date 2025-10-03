@@ -128,6 +128,11 @@ impl PaneRegistry {
         let _advice_config = crate::config::AdviceConfig::default();
         let mut advice_panel = AdvicePanel::new().expect("Failed to create AdvicePanel");
         advice_panel.set_shared_state(llm_shared_state.clone());
+
+        // Extract max_tokens from LlmClient config and set it
+        let max_tokens = llm_client.get_max_tokens();
+        advice_panel.set_max_tokens(max_tokens);
+
         advice_panel.set_llm_client(std::sync::Arc::new(tokio::sync::Mutex::new(
             llm_client.clone(),
         )));

@@ -55,6 +55,17 @@ impl LlmClient {
     ) -> Result<LlmAdviceResult, String> {
         let start_time = tokio::time::Instant::now();
 
+        // Truncate diff content if needed based on config
+        // Convert tokens to characters using 3 chars per token ratio
+        let max_tokens = self.config.get_max_tokens();
+        let max_chars = max_tokens * 3;
+        let truncated_diff = if diff_content.len() > max_chars {
+            let truncated = diff_content.chars().take(max_chars).collect::<String>();
+            format!("{}\n\n[... diff truncated for brevity ...]", truncated)
+        } else {
+            diff_content.clone()
+        };
+
         // Build the prompt for commit summary
         let messages = vec![
             ChatCompletionMessage {
@@ -71,7 +82,7 @@ impl LlmClient {
                 content: chat_completion::Content::Text(
                     format!(
                         "Commit message: {}\n\nPlease summarize these changes:\n\n{}",
-                        commit_message, diff_content
+                        commit_message, truncated_diff
                     ),
                 ),
                 name: None,
@@ -99,6 +110,11 @@ impl LlmClient {
                 has_error: true,
             }),
         }
+    }
+
+    /// Get the maximum number of tokens to send to LLM, with a sensible default
+    pub fn get_max_tokens(&self) -> usize {
+        self.config.get_max_tokens()
     }
 
     async fn make_llm_request(

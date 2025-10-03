@@ -67,6 +67,8 @@ pub struct LlmConfig {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub advice_model: Option<String>,
+    /// Maximum number of characters/tokens to send to LLM for both summary and advice generation
+    pub max_tokens: Option<usize>,
 }
 
 impl LlmConfig {
@@ -84,6 +86,11 @@ impl LlmConfig {
             .clone()
             .or_else(|| self.model.clone())
             .unwrap_or_else(|| "gpt-4o-mini".to_string())
+    }
+
+    /// Get the maximum number of tokens to send to LLM, with a sensible default
+    pub fn get_max_tokens(&self) -> usize {
+        self.max_tokens.unwrap_or(16000)
     }
 }
 
@@ -208,6 +215,7 @@ impl Config {
                 api_key: args.llm_api_key.clone().or(llm_config.api_key),
                 base_url: args.llm_base_url.clone().or(llm_config.base_url),
                 advice_model: args.llm_advice_model.clone().or(llm_config.advice_model),
+                max_tokens: args.llm_max_tokens.or(llm_config.max_tokens),
             }),
             advice: self.advice.clone(),
             commit_history_limit: args.commit_history_limit.or(self.commit_history_limit),
@@ -257,6 +265,12 @@ pub struct Args {
 
     #[arg(long, help = "LLM model to use specifically for advice generation")]
     pub llm_advice_model: Option<String>,
+
+    #[arg(
+        long,
+        help = "Maximum number of tokens to send to LLM for both summary and advice generation"
+    )]
+    pub llm_max_tokens: Option<usize>,
 
     #[arg(long, help = "API key for the LLM provider")]
     pub llm_api_key: Option<String>,

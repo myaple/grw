@@ -110,6 +110,7 @@ grw
 - `--llm-model <MODEL>` - Default LLM model for all AI features
 - `--llm-summary-model <MODEL>` - Specific model for commit summaries
 - `--llm-advice-model <MODEL>` - Specific model for generating advice
+- `--llm-max-tokens <NUMBER>` - Maximum number of tokens to send to LLM for both summary and advice generation (default: 16000)
 - `--llm-api-key <KEY>` - API key for the LLM provider
 - `--llm-base-url <URL>` - Base URL for the LLM provider
 - `--commit-history-limit <NUMBER>` - Maximum number of commits to load (default: 100)
@@ -184,6 +185,7 @@ Configuration options:
   - `model` (string): Default LLM model name
   - `summary_model` (string): Specific model for commit summaries (optional)
   - `advice_model` (string): Specific model for generating advice (optional)
+  - `max_tokens` (number): Maximum number of tokens to send to LLM for both summary and advice generation (optional, default: 16000)
   - `api_key` (string): API key for the LLM provider
   - `base_url` (string): Base URL for the LLM provider
 - `advice` (object): Configuration for the AI advice panel (optional)
@@ -212,6 +214,7 @@ A full configuration with LLM settings and shared state tuning might look like t
     "model": "gpt-4o-mini",
     "summary_model": "gpt-4o-mini",
     "advice_model": "gpt-4-turbo",
+    "max_tokens": 12000,
     "api_key": "your-api-key-here",
     "base_url": "https://api.openai.com/v1"
   },

@@ -102,6 +102,7 @@ pub struct AdvicePanel {
     pub pending_chat_task: Option<tokio::task::JoinHandle<()>>,
     pub pending_chat_message_id: Option<String>,
     pub current_diff_content: RefCell<Option<String>>,
+    pub max_tokens: usize, // Cache the max_tokens from config
     pub initial_message_sent: bool,
     pub first_visit: bool,
     pub chat_content_backup: Option<AdviceContent>,
@@ -125,6 +126,7 @@ impl AdvicePanel {
             pending_chat_task: None,
             pending_chat_message_id: None,
             current_diff_content: RefCell::new(None),
+            max_tokens: 16000, // Default value, will be updated when config is available
             initial_message_sent: false,
             first_visit: true,
             chat_content_backup: None,
@@ -141,6 +143,11 @@ impl AdvicePanel {
     pub fn set_llm_client(&mut self, llm_client: Arc<tokio::sync::Mutex<LlmClient>>) {
         debug!("🎯 ADVICE_PANEL: LLM client has been set");
         self.llm_client = Some(llm_client);
+    }
+
+    /// Set max_tokens directly (for testing or when config is available separately)
+    pub fn set_max_tokens(&mut self, max_tokens: usize) {
+        self.max_tokens = max_tokens;
     }
 
     pub fn send_chat_message(&mut self, message: &str) -> Result<(), String> {
@@ -364,9 +371,19 @@ impl AdvicePanel {
         self.mode = AdviceMode::Chatting;
         self.content = AdviceContent::Chat(Vec::new());
 
+        // Apply truncation to diff content using config max_tokens
+        // Convert tokens to characters using 3 chars per token ratio
+        let max_chars = self.max_tokens * 3;
+        let truncated_diff = if diff_content.len() > max_chars {
+            let truncated = diff_content.chars().take(max_chars).collect::<String>();
+            format!("{}\n\n[... diff truncated for brevity ...]", truncated)
+        } else {
+            diff_content.to_string()
+        };
+
         let initial_message = format!(
             "Please provide 3 actionable improvements for the following code changes:\n\n```diff\n{}\n```\n\nFocus on practical, specific suggestions that would improve code quality, performance, or maintainability.",
-            diff_content
+            truncated_diff
         );
 
         // Send the initial message automatically
