@@ -177,7 +177,6 @@ Configuration options:
 - `monitor_interval` (number): Interval in seconds for monitor command refresh (optional)
 - `theme` (string): Initial theme setting (light or dark) (optional)
 - `commit_history_limit` (number): Maximum number of commits to load in commit picker (optional, default: 100)
-- `commit_cache_size` (number): Maximum number of commits to cache in shared state (optional, default: 200)
 - `summary_preload_enabled` (boolean): Enable automatic summary preloading (optional, default: true)
 - `summary_preload_count` (number): Number of summaries to preload ahead (optional, default: 5)
 - `llm` (object): LLM provider configuration (optional)
@@ -188,12 +187,6 @@ Configuration options:
   - `max_tokens` (number): Maximum number of tokens to send to LLM for both summary and advice generation (optional, default: 16000)
   - `api_key` (string): API key for the LLM provider
   - `base_url` (string): Base URL for the LLM provider
-- `advice` (object): Configuration for the AI advice panel (optional)
-  - `enabled` (boolean): Enable the advice panel feature (optional, default: true)
-  - `max_improvements` (number): Number of improvement suggestions to request (optional, default: 3)
-  - `chat_history_limit` (number): Max number of messages in chat history (optional, default: 10)
-  - `timeout_seconds` (number): Timeout for AI requests in seconds (optional, default: 60)
-  - `context_lines` (number): Lines of context to include around changes (optional, default: 3)
 
 A full configuration with LLM settings and shared state tuning might look like this:
 
@@ -206,7 +199,6 @@ A full configuration with LLM settings and shared state tuning might look like t
   "monitor_interval": 5,
   "theme": "dark",
   "commit_history_limit": 150,
-  "commit_cache_size": 300,
   "summary_preload_enabled": true,
   "summary_preload_count": 8,
   "llm": {
@@ -217,13 +209,6 @@ A full configuration with LLM settings and shared state tuning might look like t
     "max_tokens": 12000,
     "api_key": "your-api-key-here",
     "base_url": "https://api.openai.com/v1"
-  },
-  "advice": {
-    "enabled": true,
-    "max_improvements": 5,
-    "chat_history_limit": 20,
-    "timeout_seconds": 90,
-    "context_lines": 5
   }
 }
 ```

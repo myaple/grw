@@ -95,18 +95,6 @@ impl LlmConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AdviceConfig {
-    pub enabled: Option<bool>,
-    pub advice_model: Option<String>,
-    pub max_improvements: Option<usize>,
-    pub chat_history_limit: Option<usize>,
-    pub timeout_seconds: Option<u64>,
-    pub context_lines: Option<usize>,
-}
-
-impl AdviceConfig {}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub debug: Option<bool>,
     pub no_diff: Option<bool>,
@@ -115,9 +103,7 @@ pub struct Config {
     pub monitor_interval: Option<u64>,
     pub theme: Option<Theme>,
     pub llm: Option<LlmConfig>,
-    pub advice: Option<AdviceConfig>,
     pub commit_history_limit: Option<usize>,
-    pub commit_cache_size: Option<usize>,
     pub summary_preload_enabled: Option<bool>,
     pub summary_preload_count: Option<usize>,
 }
@@ -140,11 +126,6 @@ impl Config {
         self.commit_history_limit.unwrap_or(100)
     }
 
-    /// Get the commit cache size with a sensible default
-    pub fn get_commit_cache_size(&self) -> usize {
-        self.commit_cache_size.unwrap_or(200)
-    }
-
     /// Get the summary preload configuration
     pub fn get_summary_preload_config(&self) -> crate::git::PreloadConfig {
         crate::git::PreloadConfig {
@@ -152,32 +133,6 @@ impl Config {
             count: self.summary_preload_count.unwrap_or(5),
         }
     }
-
-    /// Get shared state configuration settings
-    pub fn get_shared_state_config(&self) -> SharedStateConfig {
-        SharedStateConfig {
-            commit_cache_size: self.get_commit_cache_size(),
-            commit_history_limit: self.get_commit_history_limit(),
-            summary_preload_enabled: self.summary_preload_enabled.unwrap_or(true),
-            summary_preload_count: self.summary_preload_count.unwrap_or(5),
-            cache_cleanup_interval: 300, // 5 minutes
-            stale_task_threshold: 3600,  // 1 hour
-        }
-    }
-}
-
-/// Configuration for shared state components
-#[derive(Debug, Clone)]
-pub struct SharedStateConfig {
-    pub commit_cache_size: usize,
-    pub commit_history_limit: usize,
-    // TODO: These fields are reserved for future use
-    #[allow(dead_code)]
-    pub summary_preload_enabled: bool,
-    #[allow(dead_code)]
-    pub summary_preload_count: usize,
-    pub cache_cleanup_interval: u64,
-    pub stale_task_threshold: u64,
 }
 
 impl Config {
@@ -217,9 +172,7 @@ impl Config {
                 advice_model: args.llm_advice_model.clone().or(llm_config.advice_model),
                 max_tokens: args.llm_max_tokens.or(llm_config.max_tokens),
             }),
-            advice: self.advice.clone(),
             commit_history_limit: args.commit_history_limit.or(self.commit_history_limit),
-            commit_cache_size: args.commit_cache_size.or(self.commit_cache_size),
             summary_preload_enabled: args
                 .summary_preload_enabled
                 .or(self.summary_preload_enabled),
@@ -283,9 +236,6 @@ pub struct Args {
         help = "Maximum number of commits to load in commit picker (default: 100)"
     )]
     pub commit_history_limit: Option<usize>,
-
-    #[arg(long, help = "Maximum number of commits to cache (default: 200)")]
-    pub commit_cache_size: Option<usize>,
 
     #[arg(long, help = "Enable summary pre-loading (default: true)")]
     pub summary_preload_enabled: Option<bool>,
@@ -484,44 +434,23 @@ mod tests {
     }
 
     #[test]
-    fn test_commit_cache_size_config() {
-        let config = Config {
-            commit_cache_size: Some(300),
-            ..Default::default()
-        };
-        assert_eq!(config.get_commit_cache_size(), 300);
-
-        let config_default = Config::default();
-        assert_eq!(config_default.get_commit_cache_size(), 200); // Default value
-    }
-
-    #[test]
     fn test_merge_with_args_commit_settings() {
         let config = Config {
             commit_history_limit: Some(50),
-            commit_cache_size: Some(100),
             ..Default::default()
         };
 
-        let args = Args::parse_from([
-            "grw",
-            "--commit-history-limit",
-            "200",
-            "--commit-cache-size",
-            "400",
-        ]);
+        let args = Args::parse_from(["grw", "--commit-history-limit", "200"]);
 
         let merged = config.merge_with_args(&args);
 
         assert_eq!(merged.commit_history_limit, Some(200)); // From args
-        assert_eq!(merged.commit_cache_size, Some(400)); // From args
     }
 
     #[test]
     fn test_merge_with_args_commit_settings_from_config() {
         let config = Config {
             commit_history_limit: Some(75),
-            commit_cache_size: Some(150),
             ..Default::default()
         };
 
@@ -530,7 +459,6 @@ mod tests {
         let merged = config.merge_with_args(&args);
 
         assert_eq!(merged.commit_history_limit, Some(75)); // From config
-        assert_eq!(merged.commit_cache_size, Some(150)); // From config
     }
 
     #[test]

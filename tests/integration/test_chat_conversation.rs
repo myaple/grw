@@ -2,7 +2,7 @@
 mod tests {
     use super::*;
     use crate::pane::{AdvicePanel, Pane, PaneId};
-    use crate::config::{Config, AdviceConfig};
+    use crate::config::Config;
     use crate::shared_state::SharedState;
     use crate::pane::{ChatMessageData, MessageRole};
 

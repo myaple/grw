@@ -265,71 +265,10 @@ impl LlmSharedState {
     }
 }
 
-/// Timing information for monitor operations
-#[derive(Clone, Debug, PartialEq)]
-pub struct MonitorTiming {
-    pub last_run: u64,
-    pub elapsed: u64,
-    pub has_run: bool,
-}
-
-impl MonitorTiming {
-    /// Create a new MonitorTiming instance
-    pub fn new() -> Self {
-        Self {
-            last_run: 0,
-            elapsed: 0,
-            has_run: false,
-        }
-    }
-}
-
-impl Default for MonitorTiming {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Shared state for monitor operations using lock-free data structures
-#[derive(Debug)]
-pub struct MonitorSharedState {
-    /// Monitor command output
-    output: HashMap<String, String>,
-
-    /// Timing information
-    timing_info: HashMap<String, MonitorTiming>,
-
-    /// Configuration
-    config: HashMap<String, String>,
-}
-
-impl MonitorSharedState {
-    /// Create a new MonitorSharedState instance
-    pub fn new() -> Self {
-        Self {
-            output: HashMap::new(),
-            timing_info: HashMap::new(),
-            config: HashMap::new(),
-        }
-    }
-
-    /// Set configuration value
-    pub fn set_config(&self, key: String, value: String) {
-        self.config.upsert(key, value);
-    }
-}
-
-impl Default for MonitorSharedState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Central manager for all shared state components
 pub struct SharedStateManager {
     git_state: Arc<GitSharedState>,
     llm_state: Arc<LlmSharedState>,
-    monitor_state: Arc<MonitorSharedState>,
 }
 
 impl SharedStateManager {
@@ -338,7 +277,6 @@ impl SharedStateManager {
         Self {
             git_state: Arc::new(GitSharedState::new()),
             llm_state: Arc::new(LlmSharedState::new()),
-            monitor_state: Arc::new(MonitorSharedState::new()),
         }
     }
 
@@ -352,44 +290,8 @@ impl SharedStateManager {
         &self.llm_state
     }
 
-    /// Initialize all shared state components with configuration
-    pub fn initialize(
-        &self,
-        config: Option<&crate::config::SharedStateConfig>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let default_config = crate::config::SharedStateConfig {
-            commit_cache_size: 200,
-            commit_history_limit: 100,
-            summary_preload_enabled: true,
-            summary_preload_count: 5,
-            cache_cleanup_interval: 300,
-            stale_task_threshold: 3600,
-        };
-
-        let config = config.unwrap_or(&default_config);
-
-        // Initialize monitor state configuration
-        self.monitor_state
-            .set_config("update_interval".to_string(), "1000".to_string());
-        self.monitor_state
-            .set_config("max_output_size".to_string(), "10485760".to_string()); // 10MB
-        self.monitor_state.set_config(
-            "cleanup_interval".to_string(),
-            config.cache_cleanup_interval.to_string(),
-        );
-        self.monitor_state.set_config(
-            "commit_cache_size".to_string(),
-            config.commit_cache_size.to_string(),
-        );
-        self.monitor_state.set_config(
-            "commit_history_limit".to_string(),
-            config.commit_history_limit.to_string(),
-        );
-        self.monitor_state.set_config(
-            "stale_task_threshold".to_string(),
-            config.stale_task_threshold.to_string(),
-        );
-
+    /// Initialize all shared state components
+    pub fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
         // Initialize git state with default view mode
         self.git_state.set_view_mode(0); // Default to WorkingTree view
 
@@ -408,10 +310,6 @@ impl SharedStateManager {
         self.git_state.repo_data.clear();
 
         self.llm_state.summary_cache.clear();
-
-        self.monitor_state.output.clear();
-        self.monitor_state.timing_info.clear();
-        self.monitor_state.config.clear();
 
         Ok(())
     }
@@ -530,58 +428,5 @@ mod tests {
         llm_state.clear_all_errors();
         let all_errors_after_clear = llm_state.get_all_errors();
         assert!(all_errors_after_clear.is_empty());
-    }
-
-    #[test]
-    fn test_monitor_timing_basic() {
-        // Test MonitorTiming creation
-        let timing = MonitorTiming::new();
-        assert_eq!(timing.last_run, 0);
-        assert_eq!(timing.elapsed, 0);
-        assert!(!timing.has_run);
-
-        // Test default
-        let default_timing = MonitorTiming::default();
-        assert_eq!(default_timing.last_run, 0);
-        assert_eq!(default_timing.elapsed, 0);
-        assert!(!default_timing.has_run);
-    }
-
-    #[test]
-    fn test_monitor_shared_state_basic() {
-        let _monitor_state = MonitorSharedState::new();
-    }
-
-    #[test]
-    fn test_monitor_shared_state_concurrent_access() {
-        use std::sync::Arc;
-        use std::thread;
-
-        let monitor_state = Arc::new(MonitorSharedState::new());
-        let mut handles = vec![];
-
-        // Test concurrent config updates
-        for i in 0..10 {
-            let state = Arc::clone(&monitor_state);
-            let handle = thread::spawn(move || {
-                let config_key = format!("config_{}", i);
-                let value = format!("value_{}", i);
-                state.set_config(config_key, value);
-            });
-            handles.push(handle);
-        }
-
-        // Wait for all threads to complete
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        // Verify concurrent execution completed without panics
-        // Since get_config was removed, we just verify the test completes
-    }
-
-    #[test]
-    fn test_monitor_shared_state_default() {
-        let _monitor_state = MonitorSharedState::default();
     }
 }

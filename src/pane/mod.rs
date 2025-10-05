@@ -124,8 +124,7 @@ impl PaneRegistry {
         commit_summary_pane.set_shared_state(llm_shared_state.clone());
         self.register_pane(PaneId::CommitSummary, Box::new(commit_summary_pane));
 
-        // Create advice panel with configuration, LLM client, and shared state
-        let _advice_config = crate::config::AdviceConfig::default();
+        // Create advice panel with LLM client and shared state
         let mut advice_panel = AdvicePanel::new().expect("Failed to create AdvicePanel");
         advice_panel.set_shared_state(llm_shared_state.clone());
 

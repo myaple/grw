@@ -111,7 +111,6 @@ All shared state uses `scc::HashMap` for concurrent access:
 ```json
 {
   "commit_history_limit": 100,     // Max commits to load
-  "commit_cache_size": 200,        // Max cached commits
   "summary_preload_enabled": true, // Enable summary preloading
   "summary_preload_count": 5       // Number of summaries to preload
 }

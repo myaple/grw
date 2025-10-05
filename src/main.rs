@@ -54,12 +54,8 @@ async fn main() -> Result<()> {
 
     // Initialize shared state manager
     let shared_state_manager = SharedStateManager::new();
-    let shared_state_config = config.get_shared_state_config();
-    if let Err(e) = shared_state_manager.initialize(Some(&shared_state_config)) {
-        error!(
-            "Failed to initialize shared state with configuration: {}",
-            e
-        );
+    if let Err(e) = shared_state_manager.initialize() {
+        error!("Failed to initialize shared state: {}", e);
         return Err(color_eyre::eyre::eyre!(
             "Failed to initialize shared state: {}",
             e

@@ -2,7 +2,7 @@
 mod tests {
     use super::*;
     use crate::pane::{AdvicePanel, Pane, PaneId};
-    use crate::config::{AdviceConfig, Config};
+    use crate::config::Config;
 
     #[test]
     fn test_panel_initial_visibility() {

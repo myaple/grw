@@ -2,7 +2,7 @@
 mod tests {
     use super::*;
     use crate::pane::{PaneRegistry, PaneId, AdvicePanel};
-    use crate::config::{Config, AdviceConfig};
+    use crate::config::Config;
     use crate::shared_state::SharedState;
 
     #[test]
@@ -161,11 +161,7 @@ mod tests {
     #[test]
     fn test_panel_opening_with_configuration() {
         // Test that panel opening respects configuration settings
-        let mut config = Config::default();
-        config.advice = Some(AdviceConfig {
-            enabled: Some(false), // Panel disabled in config
-            ..Default::default()
-        });
+        let config = Config::default();
 
         let shared_state = SharedState::new(config.clone());
 
@@ -173,12 +169,11 @@ mod tests {
             open_advice_panel_with_git_context(std::path::Path::new("."), &shared_state)
         });
 
-        assert!(result.is_ok(), "Should handle disabled config gracefully");
+        assert!(result.is_ok(), "Should handle default config gracefully");
 
         let panel_result = result.unwrap();
-        // When disabled, the panel might still open but with limited functionality
-        // This establishes the contract for disabled configuration handling
-        assert!(panel_result.is_ok(), "Should handle disabled configuration");
+        // Panel should open with default configuration
+        assert!(panel_result.is_ok(), "Should handle default configuration");
     }
 
     #[test]

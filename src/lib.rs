@@ -13,7 +13,5 @@ pub mod ui;
 // Re-export commonly used types for easier testing
 pub use git::worker::GitWorker;
 pub use git::{CommitFileChange, CommitInfo, FileChangeStatus};
-pub use shared_state::{
-    GitSharedState, LlmSharedState, MonitorSharedState, MonitorTiming, SharedStateManager,
-};
+pub use shared_state::{GitSharedState, LlmSharedState, SharedStateManager};
 pub use ui::{App, Theme};
