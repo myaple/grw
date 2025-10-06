@@ -841,17 +841,35 @@ impl Pane for AdvicePanel {
             AdviceContent::Help(help_text) => help_text.lines().map(Line::from).collect(),
         };
 
-        // Adjust content area when chat input is active to make room for chat input
-        let content_area = if self.mode == AdviceMode::Chatting && self.chat_input_active {
-            Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: area.height.saturating_sub(3), // Reserve space for chat input
-            }
-        } else {
-            area
-        };
+        // Determine layout based on whether chat input is active
+        let (content_area, input_area) =
+            if self.mode == AdviceMode::Chatting && self.chat_input_active {
+                // Calculate dynamic height for the input box
+                let input_text = format!("> {}", self.chat_input);
+                let available_width = area.width.saturating_sub(4); // 2 for borders, 2 for padding
+                let wrapped_lines = textwrap::wrap(&input_text, available_width as usize).len();
+                let input_height = (wrapped_lines as u16 + 2).min(10).max(3); // Min 3, Max 10 lines
+
+                let content_height = area.height.saturating_sub(input_height);
+
+                let content_rect = Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: content_height,
+                };
+
+                let input_rect = Rect {
+                    x: area.x,
+                    y: area.y + content_height,
+                    width: area.width,
+                    height: input_height,
+                };
+
+                (content_rect, Some(input_rect))
+            } else {
+                (area, None)
+            };
 
         let paragraph = Paragraph::new(content)
             .block(block)
@@ -860,26 +878,50 @@ impl Pane for AdvicePanel {
 
         f.render_widget(paragraph, content_area);
 
-        // Show chat input only when activated
-        if self.mode == AdviceMode::Chatting && self.chat_input_active {
-            let input_area = Rect {
-                x: area.x,
-                y: area.bottom().saturating_sub(3),
-                width: area.width,
-                height: 3,
-            };
+        // Show chat input only when activated and if an area for it has been calculated
+        if let Some(input_area) = input_area {
+            if self.mode == AdviceMode::Chatting && self.chat_input_active {
+                let input_block = Block::default()
+                    .title("Chat Input")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_color()));
 
-            let input_block = Block::default()
-                .title("Chat Input")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.border_color()));
+                let input_text = format!("> {}", self.chat_input);
+                let input_paragraph = Paragraph::new(input_text.clone())
+                    .block(input_block.clone())
+                    .wrap(Wrap { trim: false });
 
-            let input_text = format!("> {}", self.chat_input);
-            let input_paragraph = Paragraph::new(input_text)
-                .block(input_block)
-                .wrap(Wrap { trim: false });
+                f.render_widget(input_paragraph, input_area);
 
-            f.render_widget(input_paragraph, input_area);
+                // Calculate cursor position for potentially wrapped text
+                let available_width = input_area.width.saturating_sub(2); // 2 for borders
+                if available_width > 0 {
+                    let wrapped_lines =
+                        textwrap::wrap(&input_text, available_width as usize);
+
+                    let cursor_char_index = input_text.chars().count();
+                    let mut chars_traversed = 0;
+                    let mut cursor_line_offset = 0;
+                    let mut cursor_col_offset = 0;
+
+                    for (i, line) in wrapped_lines.iter().enumerate() {
+                        let line_len = line.chars().count();
+                        if chars_traversed + line_len >= cursor_char_index {
+                            cursor_line_offset = i;
+                            cursor_col_offset = cursor_char_index - chars_traversed;
+                            break;
+                        }
+                        chars_traversed += line_len;
+                    }
+
+                    let cursor_y = (input_area.y + 1 + cursor_line_offset as u16)
+                        .min(input_area.bottom() - 1);
+                    let cursor_x = (input_area.x + 1 + cursor_col_offset as u16)
+                        .min(input_area.right() - 1);
+
+                    f.set_cursor(cursor_x, cursor_y);
+                }
+            }
         }
 
         Ok(())
