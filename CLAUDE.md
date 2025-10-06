@@ -57,3 +57,50 @@ git_operations::get_working_tree_diff(&repo, relative_path)?;
 - `src/ui.rs::get_commit_diff_content()` - ensures repo path is absolute for proper path stripping for commit diffs
 
 **Debugging tip**: If git operations return empty results when they shouldn't, check if you're passing absolute paths to git2 functions. Use debug logging to verify the exact paths being passed.
+
+### Theme Color Usage - IMPORTANT
+The application supports both light and dark themes through the `Theme` enum in `src/ui.rs`. **Always use theme colors instead of hardcoded colors** to ensure the UI works properly in both light and dark modes.
+
+**Problem**: Hardcoded colors like `Color::Green`, `Color::Cyan`, etc. will look good in only one theme mode and may be unreadable in the other.
+
+**Available theme methods**:
+```rust
+// Get theme from App instance
+let theme = app.get_theme();
+
+// Basic colors
+theme.background_color()   // Black (dark) / White (light)
+theme.foreground_color()   // White (dark) / Black (light)
+
+// Semantic colors
+theme.primary_color()      // Cyan (dark) / Blue (light)
+theme.secondary_color()    // Yellow (both modes)
+theme.error_color()        // Red (dark) / LightRed (light)
+theme.highlight_color()    // Blue (dark) / LightBlue (light)
+theme.border_color()       // Gray (dark) / DarkGray (light)
+
+// Specialized colors
+theme.directory_color()    // Cyan (dark) / Blue (light)
+theme.added_color()        // Green (both modes)
+theme.removed_color()      // Red (dark) / LightRed (light)
+theme.unchanged_color()    // Same as foreground_color()
+```
+
+**Solution**: Always access theme through `app.get_theme()` in render methods and use theme-appropriate colors:
+
+```rust
+// WRONG - hardcoded colors
+Line::from("Hello").fg(Color::Green)
+Style::default().fg(Color::Cyan)
+
+// CORRECT - use theme colors
+let theme = app.get_theme();
+Line::from("Hello").fg(theme.primary_color())
+Style::default().fg(theme.foreground_color())
+```
+
+**Theme Toggle**: Ctrl+T automatically toggles between light and dark themes via `app.toggle_theme()`. All UI components should respect this without additional changes.
+
+**Key implementations**:
+- `src/pane/advice_panel.rs` - Updated all chat colors to use theme colors
+- `src/ui.rs` - Contains the `Theme` enum with color definitions for both modes

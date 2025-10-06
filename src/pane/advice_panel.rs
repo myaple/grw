@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     prelude::Stylize,
-    style::{Color, Style},
+    style::Style,
     text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -441,8 +441,8 @@ impl AdvicePanel {
     }
 
     /// Format chat content to preserve markdown, code blocks, and spacing
-    fn format_chat_content(&self, content: &str) -> Vec<Line<'_>> {
-        use ratatui::style::{Color, Style};
+    fn format_chat_content(&self, content: &str, theme: &crate::ui::Theme) -> Vec<Line<'_>> {
+        use ratatui::style::Style;
         use ratatui::text::Span;
 
         let mut lines = Vec::new();
@@ -461,7 +461,7 @@ impl AdvicePanel {
                         for para_line in textwrap::wrap(&current_paragraph, 76) {
                             lines.push(Line::from(Span::styled(
                                 format!("  {}", para_line),
-                                Style::default().fg(Color::Gray),
+                                Style::default().fg(theme.foreground_color()),
                             )));
                         }
                         current_paragraph.clear();
@@ -469,7 +469,7 @@ impl AdvicePanel {
                     in_code_block = false;
                     lines.push(Line::from(Span::styled(
                         "  ```",
-                        Style::default().fg(Color::Yellow),
+                        Style::default().fg(theme.secondary_color()),
                     )));
                 } else {
                     // Start of code block - flush any current paragraph
@@ -477,7 +477,7 @@ impl AdvicePanel {
                         for para_line in textwrap::wrap(&current_paragraph, 76) {
                             lines.push(Line::from(Span::styled(
                                 format!("  {}", para_line),
-                                Style::default().fg(Color::Gray),
+                                Style::default().fg(theme.foreground_color()),
                             )));
                         }
                         current_paragraph.clear();
@@ -485,7 +485,7 @@ impl AdvicePanel {
                     in_code_block = true;
                     lines.push(Line::from(Span::styled(
                         "  ```",
-                        Style::default().fg(Color::Yellow),
+                        Style::default().fg(theme.secondary_color()),
                     )));
                 }
                 continue;
@@ -495,7 +495,7 @@ impl AdvicePanel {
                 // Inside code block - preserve exact formatting and use monospace-like color
                 lines.push(Line::from(Span::styled(
                     format!("  {}", line),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme.primary_color()),
                 )));
             } else if trimmed.is_empty() {
                 // Empty line - flush current paragraph and add empty line
@@ -503,7 +503,7 @@ impl AdvicePanel {
                     for para_line in textwrap::wrap(&current_paragraph, 76) {
                         lines.push(Line::from(Span::styled(
                             format!("  {}", para_line),
-                            Style::default().fg(Color::Gray),
+                            Style::default().fg(theme.foreground_color()),
                         )));
                     }
                     current_paragraph.clear();
@@ -516,7 +516,7 @@ impl AdvicePanel {
                     for para_line in textwrap::wrap(&current_paragraph, 76) {
                         lines.push(Line::from(Span::styled(
                             format!("  {}", para_line),
-                            Style::default().fg(Color::Gray),
+                            Style::default().fg(theme.foreground_color()),
                         )));
                     }
                     current_paragraph.clear();
@@ -524,7 +524,7 @@ impl AdvicePanel {
                 // Add indented line with code-like formatting
                 lines.push(Line::from(Span::styled(
                     format!("  {}", line),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme.primary_color()),
                 )));
             } else if line.starts_with("#") || line.starts_with("##") || line.starts_with("###") {
                 // Handle markdown headers
@@ -532,7 +532,7 @@ impl AdvicePanel {
                     for para_line in textwrap::wrap(&current_paragraph, 76) {
                         lines.push(Line::from(Span::styled(
                             format!("  {}", para_line),
-                            Style::default().fg(Color::Gray),
+                            Style::default().fg(theme.foreground_color()),
                         )));
                     }
                     current_paragraph.clear();
@@ -541,7 +541,7 @@ impl AdvicePanel {
                 lines.push(Line::from(Span::styled(
                     format!("  {}", line),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme.secondary_color())
                         .add_modifier(ratatui::style::Modifier::BOLD),
                 )));
             } else if line.starts_with("- ") || line.starts_with("* ") {
@@ -550,7 +550,7 @@ impl AdvicePanel {
                     for para_line in textwrap::wrap(&current_paragraph, 76) {
                         lines.push(Line::from(Span::styled(
                             format!("  {}", para_line),
-                            Style::default().fg(Color::Gray),
+                            Style::default().fg(theme.foreground_color()),
                         )));
                     }
                     current_paragraph.clear();
@@ -558,7 +558,7 @@ impl AdvicePanel {
                 // Add bullet point
                 lines.push(Line::from(Span::styled(
                     format!("  {}", line),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme.foreground_color()),
                 )));
             } else {
                 // Regular text - accumulate in paragraph
@@ -576,7 +576,7 @@ impl AdvicePanel {
             for para_line in textwrap::wrap(&current_paragraph, 76) {
                 lines.push(Line::from(Span::styled(
                     format!("  {}", para_line),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme.foreground_color()),
                 )));
             }
         }
@@ -762,7 +762,7 @@ impl Pane for AdvicePanel {
                 for imp in improvements {
                     // Use chat-style timestamp format
                     let time_str = "now"; // Improvements are always current
-                    lines.push(Line::from(format!("[{}] AI:", time_str)).fg(Color::Green));
+                    lines.push(Line::from(format!("[{}] AI:", time_str)).fg(theme.primary_color()));
 
                     // Add title as the main message
                     for title_line in imp.title.lines() {
@@ -802,9 +802,9 @@ impl Pane for AdvicePanel {
                         continue;
                     }
                     let (prefix, color) = match msg.role {
-                        MessageRole::User => ("You", Color::Cyan),
-                        MessageRole::Assistant => ("AI", Color::Green),
-                        MessageRole::System => ("System", Color::Yellow),
+                        MessageRole::User => ("You", theme.primary_color()),
+                        MessageRole::Assistant => ("AI", theme.secondary_color()),
+                        MessageRole::System => ("System", theme.highlight_color()),
                     };
 
                     // Add message header with timestamp
@@ -820,7 +820,7 @@ impl Pane for AdvicePanel {
                     lines.push(Line::from(format!("[{}] {}:", time_display, prefix)).fg(color));
 
                     // Add message content with better formatting preservation
-                    let formatted_lines = self.format_chat_content(&msg.content);
+                    let formatted_lines = self.format_chat_content(&msg.content, &theme);
                     for formatted_line in formatted_lines {
                         lines.push(formatted_line);
                     }
@@ -831,8 +831,10 @@ impl Pane for AdvicePanel {
                 if self.loading_state == LoadingState::SendingChat
                     && self.pending_chat_message_id.is_some()
                 {
-                    lines.push(Line::from("[now] AI:").fg(Color::Green));
-                    lines.push(Line::from("  🤔 Thinking...".to_string()).fg(Color::Yellow));
+                    lines.push(Line::from("[now] AI:").fg(theme.secondary_color()));
+                    lines.push(
+                        Line::from("  🤔 Thinking...".to_string()).fg(theme.highlight_color()),
+                    );
                     lines.push(Line::from(""));
                 }
 
@@ -896,8 +898,7 @@ impl Pane for AdvicePanel {
                 // Calculate cursor position for potentially wrapped text
                 let available_width = input_area.width.saturating_sub(2); // 2 for borders
                 if available_width > 0 {
-                    let wrapped_lines =
-                        textwrap::wrap(&input_text, available_width as usize);
+                    let wrapped_lines = textwrap::wrap(&input_text, available_width as usize);
 
                     let cursor_char_index = input_text.chars().count();
                     let mut chars_traversed = 0;
@@ -914,10 +915,10 @@ impl Pane for AdvicePanel {
                         chars_traversed += line_len;
                     }
 
-                    let cursor_y = (input_area.y + 1 + cursor_line_offset as u16)
-                        .min(input_area.bottom() - 1);
-                    let cursor_x = (input_area.x + 1 + cursor_col_offset as u16)
-                        .min(input_area.right() - 1);
+                    let cursor_y =
+                        (input_area.y + 1 + cursor_line_offset as u16).min(input_area.bottom() - 1);
+                    let cursor_x =
+                        (input_area.x + 1 + cursor_col_offset as u16).min(input_area.right() - 1);
 
                     f.set_cursor(cursor_x, cursor_y);
                 }
