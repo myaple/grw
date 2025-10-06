@@ -243,8 +243,8 @@ mod tests {
         }
         let llm_client = crate::llm::LlmClient::new(llm_config).ok();
         let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
-        let mut app =
-            App::new_with_config(true, true, crate::ui::Theme::Dark, llm_client, llm_state);
+        let themes = vec![crate::ui::Theme::Dark, crate::ui::Theme::Light];
+        let mut app = App::new_with_config(true, true, 0, themes, llm_client, llm_state);
 
         // Test that toggle_pane_visibility works for advice panel
         // This is the core integration contract - Ctrl+L should work
@@ -284,8 +284,8 @@ mod tests {
         }
         let llm_client = crate::llm::LlmClient::new(llm_config).ok();
         let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
-        let mut app =
-            App::new_with_config(true, true, crate::ui::Theme::Dark, llm_client, llm_state);
+        let themes = vec![crate::ui::Theme::Dark, crate::ui::Theme::Light];
+        let mut app = App::new_with_config(true, true, 0, themes, llm_client, llm_state);
 
         // Test multiple toggles to simulate repeated Ctrl+L presses
         for i in 0..5 {

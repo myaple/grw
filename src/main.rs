@@ -29,7 +29,7 @@ use llm::LlmClient;
 use log::{debug, error, info};
 use monitor::AsyncMonitorCommand;
 use shared_state::SharedStateManager;
-use ui::App;
+use ui::{App, ColorPalette};
 
 pub const GIT_SHA: &str = "unknown";
 
@@ -92,13 +92,68 @@ async fn main() -> Result<()> {
         None
     };
 
+    // Theme setup
+    let mut themes = vec![ui::Theme::Dark, ui::Theme::Light];
+    if let Some(custom_theme_config) = &final_config.custom_theme {
+        let mut custom_palette = ui::ColorPalette::dark(); // Base
+        let mut any_color_parsed = false;
+
+        macro_rules! apply_color {
+            ($field:ident) => {
+                if let Some(hex) = &custom_theme_config.$field {
+                    match ui::parse_hex_color(hex) {
+                        Ok(color) => {
+                            custom_palette.$field = color;
+                            any_color_parsed = true;
+                        }
+                        Err(e) => log::warn!(
+                            "Failed to parse custom theme color for '{}': {}",
+                            stringify!($field),
+                            e
+                        ),
+                    }
+                }
+            };
+        }
+
+        apply_color!(background);
+        apply_color!(foreground);
+        apply_color!(primary);
+        apply_color!(secondary);
+        apply_color!(error);
+        apply_color!(highlight);
+        apply_color!(border);
+        apply_color!(directory);
+        apply_color!(added);
+        apply_color!(removed);
+        apply_color!(unchanged);
+
+        if any_color_parsed {
+            themes.push(ui::Theme::Custom(Arc::new(custom_palette)));
+        } else {
+            log::warn!("Custom theme section found in config, but no valid colors were parsed. Custom theme will not be available.");
+        }
+    }
+
+    let initial_theme_config = final_config.theme.clone().unwrap_or(config::Theme::Dark);
+    let initial_theme_index = match initial_theme_config {
+        config::Theme::Dark => 0,
+        config::Theme::Light => 1,
+        config::Theme::Custom => {
+            if themes.iter().any(|t| matches!(t, ui::Theme::Custom(_))) {
+                themes.len() - 1 // The last one is custom
+            } else {
+                log::warn!("Configured theme is 'custom', but no valid custom theme was loaded. Falling back to dark theme.");
+                0 // Fallback to dark
+            }
+        }
+    };
+
     let mut app = App::new_with_config(
         !final_config.no_diff.unwrap_or(false),
         !final_config.hide_changed_files_pane.unwrap_or(false),
-        match final_config.theme.clone().unwrap_or(config::Theme::Dark) {
-            config::Theme::Dark => ui::Theme::Dark,
-            config::Theme::Light => ui::Theme::Light,
-        },
+        initial_theme_index,
+        themes,
         llm_client.clone(),
         Arc::clone(shared_state_manager.llm_state()),
     );

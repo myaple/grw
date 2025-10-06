@@ -34,7 +34,7 @@ GRW includes an AI-powered advice panel that provides actionable suggestions for
 - `Ctrl+b` - Toggle changed files pane visibility
 - `Ctrl+o` / `Ctrl+m` - Toggle monitor pane visibility
 - `Ctrl+l` - Toggle AI advice panel
-- `Ctrl+t` - Toggle light/dark theme
+- `Ctrl+t` - Cycle through available themes (light, dark, and custom if configured)
 - `Ctrl+P` - Enter commit picker mode
 - `Ctrl+W` - Return to working directory view
 - `q` / `Ctrl+c` - Quit application
@@ -175,7 +175,8 @@ Configuration options:
 - `hide_changed_files_pane` (boolean): Hide changed files pane, show only diff (optional, default: false)
 - `monitor_command` (string): Command to run in monitor pane (optional)
 - `monitor_interval` (number): Interval in seconds for monitor command refresh (optional)
-- `theme` (string): Initial theme setting (light or dark) (optional)
+- `theme` (string): Initial theme setting (light, dark, or custom) (optional)
+- `custom_theme` (object): Custom theme color definitions (optional, see below)
 - `commit_history_limit` (number): Maximum number of commits to load in commit picker (optional, default: 100)
 - `summary_preload_enabled` (boolean): Enable automatic summary preloading (optional, default: true)
 - `summary_preload_count` (number): Number of summaries to preload ahead (optional, default: 5)
@@ -188,7 +189,7 @@ Configuration options:
   - `api_key` (string): API key for the LLM provider
   - `base_url` (string): Base URL for the LLM provider
 
-A full configuration with LLM settings and shared state tuning might look like this:
+A full configuration with LLM settings and a custom theme might look like this:
 
 ```json
 {
@@ -197,7 +198,7 @@ A full configuration with LLM settings and shared state tuning might look like t
   "hide_changed_files_pane": false,
   "monitor_command": "git status --short",
   "monitor_interval": 5,
-  "theme": "dark",
+  "theme": "custom",
   "commit_history_limit": 150,
   "summary_preload_enabled": true,
   "summary_preload_count": 8,
@@ -209,6 +210,19 @@ A full configuration with LLM settings and shared state tuning might look like t
     "max_tokens": 12000,
     "api_key": "your-api-key-here",
     "base_url": "https://api.openai.com/v1"
+  },
+  "custom_theme": {
+    "background": "#1e1e2e",
+    "foreground": "#cdd6f4",
+    "primary": "#89b4fa",
+    "secondary": "#f9e2af",
+    "error": "#f38ba8",
+    "highlight": "#585b70",
+    "border": "#313244",
+    "directory": "#a6e3a1",
+    "added": "#a6e3a1",
+    "removed": "#f38ba8",
+    "unchanged": "#cdd6f4"
   }
 }
 ```
@@ -232,14 +246,40 @@ The application will:
 
 ### Theme System
 
-GRW includes a flexible theme system that supports light and dark modes:
+GRW includes a flexible theme system with built-in light and dark modes, plus support for a user-defined custom theme.
 
-- **Dark theme**: Default theme optimized for terminal use with dark backgrounds
-- **Light theme**: Bright theme suitable for light terminal backgrounds or better readability in bright environments
-- **Hotkey toggle**: Use `Ctrl+T` to quickly switch between light and dark themes during runtime
-- **Persistent setting**: Theme preference can be saved in the configuration file or set via command line
+- **Dark Theme**: The default theme, optimized for terminal use with dark backgrounds.
+- **Light Theme**: A bright theme suitable for light terminal backgrounds or for better readability in bright environments.
+- **Custom Theme**: Define your own color scheme in the configuration file for a personalized look.
+- **Hotkey Toggle**: Use `Ctrl+t` to cycle through the available themes (light, dark, and custom if configured).
+- **Persistent Setting**: Your theme preference can be saved in the configuration file or set via the command line.
 
-The theme system intelligently adapts colors for optimal readability in both light and dark modes, ensuring that git diff colors (green for additions, red for deletions) remain clearly visible regardless of the selected theme.
+The theme system intelligently adapts all UI components to the selected theme, ensuring that important information, like git diff colors (green for additions, red for deletions), remains clear and visible.
+
+#### Custom Themes
+
+You can create a custom theme by adding a `custom_theme` object to your `~/.config/grw/config.json` file. The application will load your custom colors and make the theme available in the theme cycle.
+
+- **Hex Colors**: All colors must be provided as hex strings in either `#RRGGBB` or shorthand `#RGB` format.
+- **Fallback**: If any color key is omitted from the `custom_theme` object, the application will use the color from the default dark theme as a fallback for that specific key.
+
+Here are all the available keys for the `custom_theme` object:
+
+| Key          | Description                                  |
+|--------------|----------------------------------------------|
+| `background` | The main background color of the application.|
+| `foreground` | The primary text color.                      |
+| `primary`    | The color for interactive elements and titles.|
+| `secondary`  | The color for secondary text and highlights. |
+| `error`      | The color for error messages and deletions.  |
+| `highlight`  | The background color for selected items.     |
+| `border`     | The color of pane borders.                   |
+| `directory`  | The color for directory names in the file tree.|
+| `added`      | The color for added lines in the diff view.  |
+| `removed`    | The color for removed lines in the diff view.|
+| `unchanged`  | The color for unchanged lines in the diff view.|
+
+To activate your custom theme, set `"theme": "custom"` in your `config.json`.
 
 ### Logging
 

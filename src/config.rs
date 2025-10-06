@@ -9,6 +9,7 @@ pub enum Theme {
     #[default]
     Dark,
     Light,
+    Custom,
 }
 
 impl<'de> Deserialize<'de> for Theme {
@@ -17,7 +18,14 @@ impl<'de> Deserialize<'de> for Theme {
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        Theme::from_str(&s).map_err(serde::de::Error::custom)
+        match s.to_lowercase().as_str() {
+            "dark" => Ok(Theme::Dark),
+            "light" => Ok(Theme::Light),
+            "custom" => Ok(Theme::Custom),
+            _ => Err(serde::de::Error::custom(format!(
+                "invalid theme: {s}, expected 'dark', 'light', or 'custom'"
+            ))),
+        }
     }
 }
 
@@ -28,7 +36,9 @@ impl FromStr for Theme {
         match s.to_lowercase().as_str() {
             "dark" => Ok(Theme::Dark),
             "light" => Ok(Theme::Light),
-            _ => Err(format!("Invalid theme: {s}. Must be 'dark' or 'light'")),
+            _ => Err(format!(
+                "invalid theme: {s}, expected 'dark' or 'light'. Use config file for custom theme."
+            )),
         }
     }
 }
@@ -38,8 +48,24 @@ impl std::fmt::Display for Theme {
         match self {
             Theme::Dark => write!(f, "dark"),
             Theme::Light => write!(f, "light"),
+            Theme::Custom => write!(f, "custom"),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CustomTheme {
+    pub background: Option<String>,
+    pub foreground: Option<String>,
+    pub primary: Option<String>,
+    pub secondary: Option<String>,
+    pub error: Option<String>,
+    pub highlight: Option<String>,
+    pub border: Option<String>,
+    pub directory: Option<String>,
+    pub added: Option<String>,
+    pub removed: Option<String>,
+    pub unchanged: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -102,6 +128,7 @@ pub struct Config {
     pub monitor_command: Option<String>,
     pub monitor_interval: Option<u64>,
     pub theme: Option<Theme>,
+    pub custom_theme: Option<CustomTheme>,
     pub llm: Option<LlmConfig>,
     pub commit_history_limit: Option<usize>,
     pub summary_preload_enabled: Option<bool>,
@@ -163,6 +190,7 @@ impl Config {
                 .or_else(|| self.monitor_command.clone()),
             monitor_interval: args.monitor_interval.or(self.monitor_interval),
             theme: args.theme.clone().or_else(|| self.theme.clone()),
+            custom_theme: self.custom_theme.clone(),
             llm: Some(LlmConfig {
                 provider: args.llm_provider.clone().or(llm_config.provider),
                 model: args.llm_model.clone().or(llm_config.model),

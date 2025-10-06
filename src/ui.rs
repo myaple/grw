@@ -18,87 +18,147 @@ pub enum AppMode {
     CommitPicker,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColorPalette {
+    pub background: Color,
+    pub foreground: Color,
+    pub primary: Color,
+    pub secondary: Color,
+    pub error: Color,
+    pub highlight: Color,
+    pub border: Color,
+    pub directory: Color,
+    pub added: Color,
+    pub removed: Color,
+    pub unchanged: Color,
+}
+
+impl ColorPalette {
+    pub fn dark() -> Self {
+        Self {
+            background: Color::Black,
+            foreground: Color::White,
+            primary: Color::Cyan,
+            secondary: Color::Yellow,
+            error: Color::Red,
+            highlight: Color::Blue,
+            border: Color::Gray,
+            directory: Color::Cyan,
+            added: Color::Green,
+            removed: Color::Red,
+            unchanged: Color::White,
+        }
+    }
+
+    pub fn light() -> Self {
+        Self {
+            background: Color::White,
+            foreground: Color::Black,
+            primary: Color::Blue,
+            secondary: Color::Yellow,
+            error: Color::LightRed,
+            highlight: Color::LightBlue,
+            border: Color::DarkGray,
+            directory: Color::Blue,
+            added: Color::Green,
+            removed: Color::LightRed,
+            unchanged: Color::Black,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Theme {
     Dark,
     Light,
+    Custom(Arc<ColorPalette>),
 }
 
 impl Theme {
-    pub fn toggle(&mut self) {
-        *self = match *self {
-            Theme::Dark => Theme::Light,
-            Theme::Light => Theme::Dark,
-        };
-    }
-
-    pub fn background_color(self) -> Color {
+    fn get_palette(&self) -> Arc<ColorPalette> {
         match self {
-            Theme::Dark => Color::Black,
-            Theme::Light => Color::White,
+            Theme::Dark => Arc::new(ColorPalette::dark()),
+            Theme::Light => Arc::new(ColorPalette::light()),
+            Theme::Custom(palette) => Arc::clone(palette),
         }
     }
 
-    pub fn foreground_color(self) -> Color {
-        match self {
-            Theme::Dark => Color::White,
-            Theme::Light => Color::Black,
-        }
+    pub fn background_color(&self) -> Color {
+        self.get_palette().background
+    }
+    pub fn foreground_color(&self) -> Color {
+        self.get_palette().foreground
+    }
+    pub fn primary_color(&self) -> Color {
+        self.get_palette().primary
+    }
+    pub fn secondary_color(&self) -> Color {
+        self.get_palette().secondary
+    }
+    pub fn error_color(&self) -> Color {
+        self.get_palette().error
+    }
+    pub fn highlight_color(&self) -> Color {
+        self.get_palette().highlight
+    }
+    pub fn border_color(&self) -> Color {
+        self.get_palette().border
+    }
+    pub fn directory_color(&self) -> Color {
+        self.get_palette().directory
+    }
+    pub fn added_color(&self) -> Color {
+        self.get_palette().added
+    }
+    pub fn removed_color(&self) -> Color {
+        self.get_palette().removed
+    }
+    pub fn unchanged_color(&self) -> Color {
+        self.get_palette().unchanged
+    }
+}
+
+pub fn parse_hex_color(hex_str: &str) -> Result<Color, String> {
+    if !hex_str.starts_with('#') || (hex_str.len() != 7 && hex_str.len() != 4) {
+        return Err(format!(
+            "Invalid hex color format: '{}'. Must be #RGB or #RRGGBB.",
+            hex_str
+        ));
     }
 
-    pub fn primary_color(self) -> Color {
-        match self {
-            Theme::Dark => Color::Cyan,
-            Theme::Light => Color::Blue,
-        }
-    }
+    let hex_part = &hex_str[1..];
+    let (r, g, b) = if hex_part.len() == 3 {
+        // Shorthand hex format (#RGB)
+        let r_char = &hex_part[0..1];
+        let g_char = &hex_part[1..2];
+        let b_char = &hex_part[2..3];
+        let r_str = format!("{r_char}{r_char}");
+        let g_str = format!("{g_char}{g_char}");
+        let b_str = format!("{b_char}{b_char}");
+        (
+            u8::from_str_radix(&r_str, 16).map_err(|e| {
+                format!("Invalid red component in hex color '{}': {}", hex_str, e)
+            })?,
+            u8::from_str_radix(&g_str, 16).map_err(|e| {
+                format!("Invalid green component in hex color '{}': {}", hex_str, e)
+            })?,
+            u8::from_str_radix(&b_str, 16).map_err(|e| {
+                format!("Invalid blue component in hex color '{}': {}", hex_str, e)
+            })?,
+        )
+    } else {
+        // Full hex format (#RRGGBB)
+        (
+            u8::from_str_radix(&hex_part[0..2], 16)
+                .map_err(|e| format!("Invalid red component in hex color '{}': {}", hex_str, e))?,
+            u8::from_str_radix(&hex_part[2..4], 16)
+                .map_err(|e| format!("Invalid green component in hex color '{}': {}", hex_str, e))?,
+            u8::from_str_radix(&hex_part[4..6], 16)
+                .map_err(|e| format!("Invalid blue component in hex color '{}': {}", hex_str, e))?,
+        )
+    };
 
-    pub fn secondary_color(self) -> Color {
-        match self {
-            Theme::Dark => Color::Yellow,
-            Theme::Light => Color::Yellow,
-        }
-    }
-
-    pub fn error_color(self) -> Color {
-        match self {
-            Theme::Dark => Color::Red,
-            Theme::Light => Color::LightRed,
-        }
-    }
-
-    pub fn highlight_color(self) -> Color {
-        match self {
-            Theme::Dark => Color::Blue,
-            Theme::Light => Color::LightBlue,
-        }
-    }
-
-    pub fn border_color(self) -> Color {
-        match self {
-            Theme::Dark => Color::Gray,
-            Theme::Light => Color::DarkGray,
-        }
-    }
-
-    pub fn directory_color(self) -> Color {
-        match self {
-            Theme::Dark => Color::Cyan,
-            Theme::Light => Color::Blue,
-        }
-    }
-
-    pub fn added_color(self) -> Color {
-        Color::Green
-    }
-
-    pub fn removed_color(self) -> Color {
-        self.error_color()
-    }
-
-    pub fn unchanged_color(self) -> Color {
-        self.foreground_color()
-    }
+    Ok(Color::Rgb(r, g, b))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -152,7 +212,8 @@ pub struct App {
     monitor_has_run: bool,
     current_file_browser_pane: FileBrowserPane,
     current_information_pane: InformationPane,
-    theme: Theme,
+    themes: Vec<Theme>,
+    current_theme_index: usize,
     pane_registry: PaneRegistry,
     last_active_pane: ActivePane,
     app_mode: AppMode,
@@ -164,12 +225,17 @@ impl App {
     pub fn new_with_config(
         show_diff_panel: bool,
         show_changed_files_pane: bool,
-        theme: Theme,
+        initial_theme_index: usize,
+        themes: Vec<Theme>,
         llm_client: Option<LlmClient>,
         llm_state: Arc<crate::shared_state::LlmSharedState>,
     ) -> Self {
+        let theme = themes
+            .get(initial_theme_index)
+            .cloned()
+            .unwrap_or(Theme::Dark);
         let pane_registry = if let Some(ref llm_client) = llm_client {
-            PaneRegistry::new(theme, llm_client.clone(), llm_state.clone())
+            PaneRegistry::new(theme.clone(), llm_client.clone(), llm_state.clone())
         } else {
             // Provide a dummy or default LlmClient for the registry when none is available.
             let mut dummy_llm_config = crate::config::LlmConfig::default();
@@ -177,7 +243,7 @@ impl App {
                 dummy_llm_config.api_key = Some("dummy_key".to_string());
             }
             let dummy_llm_client = LlmClient::new(dummy_llm_config).unwrap();
-            PaneRegistry::new(theme, dummy_llm_client, llm_state.clone())
+            PaneRegistry::new(theme.clone(), dummy_llm_client, llm_state.clone())
         };
 
         Self {
@@ -202,7 +268,8 @@ impl App {
             monitor_has_run: false,
             current_file_browser_pane: FileBrowserPane::FileTree,
             current_information_pane: InformationPane::Diff,
-            theme,
+            themes,
+            current_theme_index: initial_theme_index,
             pane_registry,
             last_active_pane: ActivePane::default(),
             app_mode: AppMode::Normal,
@@ -752,13 +819,16 @@ impl App {
         }
     }
 
-    pub fn get_theme(&self) -> Theme {
-        self.theme
+    pub fn get_theme(&self) -> &Theme {
+        &self.themes[self.current_theme_index]
     }
 
     pub fn toggle_theme(&mut self) {
-        self.theme.toggle();
-        self.pane_registry.set_theme(self.theme);
+        if self.themes.is_empty() {
+            return;
+        }
+        self.current_theme_index = (self.current_theme_index + 1) % self.themes.len();
+        self.pane_registry.set_theme(self.get_theme().clone());
     }
 
     // Public getters for private fields needed by panes
@@ -1612,7 +1682,12 @@ mod tests {
     use crate::config::LlmConfig;
     use std::env;
 
-    fn create_test_app(show_diff_panel: bool, show_changed_files_pane: bool, theme: Theme) -> App {
+    fn create_test_app(
+        show_diff_panel: bool,
+        show_changed_files_pane: bool,
+        initial_theme_index: usize,
+        themes: Vec<Theme>,
+    ) -> App {
         let mut llm_config = LlmConfig::default();
         if env::var("OPENAI_API_KEY").is_err() {
             llm_config.api_key = Some("dummy_key".to_string());
@@ -1622,7 +1697,8 @@ mod tests {
         App::new_with_config(
             show_diff_panel,
             show_changed_files_pane,
-            theme,
+            initial_theme_index,
+            themes,
             llm_client,
             llm_state,
         )
@@ -1630,7 +1706,8 @@ mod tests {
 
     #[test]
     fn test_app_creation() {
-        let app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let app = create_test_app(true, true, 0, themes);
         assert_eq!(app.files.len(), 0);
         assert_eq!(app.current_file_index, 0);
         assert_eq!(app.scroll_offset, 0);
@@ -1643,19 +1720,21 @@ mod tests {
         assert!(!app.monitor_command_configured);
         assert!(app.monitor_elapsed_time.is_none());
         assert!(!app.monitor_has_run);
-        assert_eq!(app.get_theme(), Theme::Dark);
+        assert_eq!(*app.get_theme(), Theme::Dark);
         assert_eq!(app.last_active_pane, ActivePane::default());
     }
 
     #[test]
     fn test_app_creation_no_diff() {
-        let app = create_test_app(false, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let app = create_test_app(false, true, 0, themes);
         assert!(!app.show_diff_panel);
     }
 
     #[test]
     fn test_scroll_up() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
         app.scroll_offset = 5;
         app.scroll_up();
         assert_eq!(app.scroll_offset, 4);
@@ -1663,7 +1742,8 @@ mod tests {
 
     #[test]
     fn test_scroll_up_at_zero() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
         app.scroll_offset = 0;
         app.scroll_up();
         assert_eq!(app.scroll_offset, 0);
@@ -1671,7 +1751,8 @@ mod tests {
 
     #[test]
     fn test_page_up() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
         app.scroll_offset = 25;
         app.page_up(10);
         assert_eq!(app.scroll_offset, 15);
@@ -1679,7 +1760,8 @@ mod tests {
 
     #[test]
     fn test_page_up_underflow() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
         app.scroll_offset = 5;
         app.page_up(10);
         assert_eq!(app.scroll_offset, 0);
@@ -1687,7 +1769,8 @@ mod tests {
 
     #[test]
     fn test_scroll_to_top() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
         app.scroll_offset = 100;
         app.scroll_to_top();
         assert_eq!(app.scroll_offset, 0);
@@ -1695,7 +1778,8 @@ mod tests {
 
     #[test]
     fn test_toggle_help() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
         assert!(!app.is_showing_help());
         assert_eq!(app.current_information_pane, InformationPane::Diff);
 
@@ -1712,7 +1796,8 @@ mod tests {
 
     #[test]
     fn test_toggle_diff_panel() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
         assert!(app.show_diff_panel);
         app.toggle_diff_panel();
         assert!(!app.show_diff_panel);
@@ -1722,7 +1807,8 @@ mod tests {
 
     #[test]
     fn test_toggle_changed_files_pane() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
         assert!(app.is_showing_changed_files_pane());
         app.toggle_changed_files_pane();
         assert!(!app.is_showing_changed_files_pane());
@@ -1732,7 +1818,8 @@ mod tests {
 
     #[test]
     fn test_monitor_output_update() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
         assert_eq!(app.monitor_output, "");
         assert_eq!(app.monitor_scroll_offset, 0);
 
@@ -1746,7 +1833,8 @@ mod tests {
 
     #[test]
     fn test_monitor_scroll() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
 
         // Set a reasonable visible height for testing
         app.monitor_visible_height = 3;
@@ -1780,7 +1868,8 @@ mod tests {
 
     #[test]
     fn test_toggle_monitor_pane() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
 
         // Initially monitor pane should be hidden
         assert!(!app.is_showing_monitor_pane());
@@ -1799,7 +1888,8 @@ mod tests {
 
     #[test]
     fn test_monitor_command_configured() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
 
         // Initially no command configured
         assert!(!app.monitor_command_configured);
@@ -1815,7 +1905,8 @@ mod tests {
 
     #[test]
     fn test_monitor_timing_update() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
 
         // Initially no timing info
         assert!(app.monitor_elapsed_time.is_none());
@@ -1831,7 +1922,8 @@ mod tests {
 
     #[test]
     fn test_format_elapsed_time() {
-        let app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let app = create_test_app(true, true, 0, themes);
 
         // Test seconds
         let secs = std::time::Duration::from_secs(45);
@@ -1848,7 +1940,8 @@ mod tests {
 
     #[test]
     fn test_diff_mode_switching() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
 
         // Initially in single-pane diff mode
         assert_eq!(app.current_information_pane, InformationPane::Diff);
@@ -1882,7 +1975,8 @@ mod tests {
 
     #[test]
     fn test_help_preserves_diff_mode() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
 
         // Set to side-by-side mode
         app.set_side_by_side_diff();
@@ -1917,7 +2011,8 @@ mod tests {
 
     #[test]
     fn test_help_movement_when_diff_panel_hidden() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
 
         // Initially showing diff panel
         assert!(app.is_showing_diff_panel());
@@ -1941,7 +2036,8 @@ mod tests {
     // Test that help works when both file tree and diff panes are visible
     #[test]
     fn test_help_with_both_panes_visible() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
 
         // Initially both file tree and diff panels should be showing
         assert!(app.is_showing_diff_panel());
@@ -1975,18 +2071,19 @@ mod tests {
 
     #[test]
     fn test_theme_toggle() {
-        let mut app = create_test_app(true, true, Theme::Dark);
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
 
         // Initially dark theme
-        assert_eq!(app.get_theme(), Theme::Dark);
+        assert_eq!(*app.get_theme(), Theme::Dark);
 
         // Toggle to light theme
         app.toggle_theme();
-        assert_eq!(app.get_theme(), Theme::Light);
+        assert_eq!(*app.get_theme(), Theme::Light);
 
         // Toggle back to dark theme
         app.toggle_theme();
-        assert_eq!(app.get_theme(), Theme::Dark);
+        assert_eq!(*app.get_theme(), Theme::Dark);
     }
 
     #[test]
