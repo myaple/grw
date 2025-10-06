@@ -898,27 +898,47 @@ impl Pane for AdvicePanel {
                 // Calculate cursor position for potentially wrapped text
                 let available_width = input_area.width.saturating_sub(2); // 2 for borders
                 if available_width > 0 {
+                    // The paragraph widget uses textwrap internally with the same width
                     let wrapped_lines = textwrap::wrap(&input_text, available_width as usize);
 
-                    let cursor_char_index = input_text.chars().count();
-                    let mut chars_traversed = 0;
-                    let mut cursor_line_offset = 0;
-                    let mut cursor_col_offset = 0;
+                    // Cursor should be at the end of the complete input text
+                    let total_chars = input_text.chars().count();
 
-                    for (i, line) in wrapped_lines.iter().enumerate() {
-                        let line_len = line.chars().count();
-                        if chars_traversed + line_len >= cursor_char_index {
-                            cursor_line_offset = i;
-                            cursor_col_offset = cursor_char_index - chars_traversed;
-                            break;
-                        }
-                        chars_traversed += line_len;
+                    if total_chars == 0 {
+                        // Empty input, cursor at start
+                        f.set_cursor(input_area.x + 1, input_area.y + 1);
+                        return Ok(());
                     }
 
+                    // Find which line contains the cursor position
+                    let mut chars_before_current_line = 0;
+                    let mut cursor_line = 0;
+                    let mut cursor_col = 0;
+
+                    for (line_idx, line) in wrapped_lines.iter().enumerate() {
+                        let line_chars = line.chars().count();
+
+                        if chars_before_current_line + line_chars >= total_chars {
+                            // Cursor is on this line
+                            cursor_line = line_idx;
+                            cursor_col = total_chars - chars_before_current_line;
+                            break;
+                        }
+
+                        chars_before_current_line += line_chars;
+
+                        // If we've processed all lines and still haven't found cursor, it's at the end
+                        if line_idx == wrapped_lines.len() - 1 {
+                            cursor_line = line_idx;
+                            cursor_col = line_chars;
+                        }
+                    }
+
+                    // Convert to screen coordinates, accounting for line wrapping
                     let cursor_y =
-                        (input_area.y + 1 + cursor_line_offset as u16).min(input_area.bottom() - 1);
+                        (input_area.y + 1 + cursor_line as u16).min(input_area.bottom() - 1);
                     let cursor_x =
-                        (input_area.x + 1 + cursor_col_offset as u16).min(input_area.right() - 1);
+                        (input_area.x + 1 + cursor_col as u16).min(input_area.right() - 1);
 
                     f.set_cursor(cursor_x, cursor_y);
                 }
