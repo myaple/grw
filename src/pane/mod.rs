@@ -55,6 +55,9 @@ pub trait Pane {
     fn as_commit_summary_pane_mut(&mut self) -> Option<&mut CommitSummaryPane> {
         None
     }
+    fn as_advice_pane(&self) -> Option<&AdvicePanel> {
+        None
+    }
     fn as_advice_pane_mut(&mut self) -> Option<&mut AdvicePanel> {
         None
     }

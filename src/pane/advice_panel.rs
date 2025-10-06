@@ -963,6 +963,10 @@ impl Pane for AdvicePanel {
         }
     }
 
+    fn as_advice_pane(&self) -> Option<&AdvicePanel> {
+        Some(self)
+    }
+
     fn as_advice_pane_mut(&mut self) -> Option<&mut AdvicePanel> {
         Some(self)
     }

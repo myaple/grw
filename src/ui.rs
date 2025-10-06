@@ -1098,6 +1098,15 @@ impl App {
             .unwrap_or(false)
     }
 
+    /// Check if advice panel chat input is currently active
+    pub fn is_advice_panel_chat_input_active(&self) -> bool {
+        self.pane_registry
+            .get_pane(&PaneId::Advice)
+            .and_then(|pane| pane.as_advice_pane())
+            .map(|advice_panel| advice_panel.chat_input_active)
+            .unwrap_or(false)
+    }
+
     /// Check if diff panel is currently visible
     pub fn is_diff_panel_visible(&self) -> bool {
         self.pane_registry

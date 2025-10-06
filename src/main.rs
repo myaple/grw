@@ -498,7 +498,11 @@ fn handle_key_event(
     }
 
     // Handle Ctrl+W returning to working directory view separately
-    if key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    // Only handle if advice panel chat input is NOT active
+    if key.code == KeyCode::Char('w')
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && !app.is_advice_panel_chat_input_active()
+    {
         debug!("User pressed Ctrl+W - returning to working directory view");
         app.clear_selected_commit();
         return false;

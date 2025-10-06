@@ -333,12 +333,32 @@ impl AdvicePanelKeyHandler {
                     advice_panel.chat_input.clear();
                     true
                 }
-                KeyCode::Char(c) => {
-                    advice_panel.chat_input.push(c);
-                    true
-                }
                 KeyCode::Backspace => {
                     advice_panel.chat_input.pop();
+                    true
+                }
+                KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Ctrl+W: Delete last word
+                    let chars: Vec<char> = advice_panel.chat_input.chars().collect();
+                    let mut delete_pos = chars.len();
+                    // Find the start of the last word by looking backwards
+                    while delete_pos > 0 && chars[delete_pos - 1].is_whitespace() {
+                        delete_pos -= 1;
+                    }
+                    while delete_pos > 0 && !chars[delete_pos - 1].is_whitespace() {
+                        delete_pos -= 1;
+                    }
+                    // Rebuild the string up to delete_pos
+                    advice_panel.chat_input = chars[..delete_pos].iter().collect();
+                    true
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Ctrl+U: Delete entire line
+                    advice_panel.chat_input.clear();
+                    true
+                }
+                KeyCode::Char(c) => {
+                    advice_panel.chat_input.push(c);
                     true
                 }
                 _ => false,
