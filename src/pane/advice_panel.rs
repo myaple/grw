@@ -11,6 +11,7 @@ use ratatui::{
     text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::{AppEvent, Pane};
 use crate::git::GitRepo;
@@ -896,51 +897,30 @@ impl Pane for AdvicePanel {
                 f.render_widget(input_paragraph, input_area);
 
                 // Calculate cursor position for potentially wrapped text
-                let available_width = input_area.width.saturating_sub(2); // 2 for borders
+                let available_width = input_area.width.saturating_sub(4); // 2 for borders, 2 for padding
                 if available_width > 0 {
-                    // The paragraph widget uses textwrap internally with the same width
                     let wrapped_lines = textwrap::wrap(&input_text, available_width as usize);
+                    let mut cursor_x = input_area.x + 1;
+                    let mut cursor_y = input_area.y + 1;
 
-                    // Cursor should be at the end of the complete input text
-                    let total_chars = input_text.chars().count();
-
-                    if total_chars == 0 {
-                        // Empty input, cursor at start
-                        f.set_cursor(input_area.x + 1, input_area.y + 1);
-                        return Ok(());
-                    }
-
-                    // Find which line contains the cursor position
-                    let mut chars_before_current_line = 0;
-                    let mut cursor_line = 0;
-                    let mut cursor_col = 0;
-
-                    for (line_idx, line) in wrapped_lines.iter().enumerate() {
-                        let line_chars = line.chars().count();
-
-                        if chars_before_current_line + line_chars >= total_chars {
-                            // Cursor is on this line
-                            cursor_line = line_idx;
-                            cursor_col = total_chars - chars_before_current_line;
-                            break;
-                        }
-
-                        chars_before_current_line += line_chars;
-
-                        // If we've processed all lines and still haven't found cursor, it's at the end
-                        if line_idx == wrapped_lines.len() - 1 {
-                            cursor_line = line_idx;
-                            cursor_col = line_chars;
+                    if let Some(last_line) = wrapped_lines.last() {
+                        let last_line_graphemes = last_line.graphemes(true).count();
+                        if last_line_graphemes < available_width as usize {
+                            cursor_x += last_line_graphemes as u16;
+                            cursor_y += (wrapped_lines.len() - 1) as u16;
+                        } else {
+                            // The last line is full, so the cursor should be at the start of the next line
+                            cursor_y += wrapped_lines.len() as u16;
                         }
                     }
 
-                    // Convert to screen coordinates, accounting for line wrapping
-                    let cursor_y =
-                        (input_area.y + 1 + cursor_line as u16).min(input_area.bottom() - 1);
-                    let cursor_x =
-                        (input_area.x + 1 + cursor_col as u16).min(input_area.right() - 1);
-
-                    f.set_cursor(cursor_x, cursor_y);
+                    // Ensure cursor stays within the input area bounds
+                    if cursor_y < input_area.bottom() - 1 {
+                        f.set_cursor(cursor_x, cursor_y);
+                    } else {
+                        // If the cursor would be outside, place it at the last possible position
+                        f.set_cursor(input_area.right() - 2, input_area.bottom() - 2);
+                    }
                 }
             }
         }
