@@ -136,6 +136,7 @@ async fn main() -> Result<()> {
     }
 
     let initial_theme_config = final_config.theme.clone().unwrap_or(config::Theme::Dark);
+
     let initial_theme_index = match initial_theme_config {
         config::Theme::Dark => 0,
         config::Theme::Light => 1,

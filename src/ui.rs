@@ -119,14 +119,20 @@ impl Theme {
 }
 
 pub fn parse_hex_color(hex_str: &str) -> Result<Color, String> {
-    if !hex_str.starts_with('#') || (hex_str.len() != 7 && hex_str.len() != 4) {
+    // Accept both with and without # prefix for flexibility
+    let hex_part = if hex_str.starts_with('#') {
+        &hex_str[1..]
+    } else {
+        hex_str
+    };
+
+    if hex_part.len() != 6 && hex_part.len() != 3 {
         return Err(format!(
             "Invalid hex color format: '{}'. Must be #RGB or #RRGGBB.",
             hex_str
         ));
     }
 
-    let hex_part = &hex_str[1..];
     let (r, g, b) = if hex_part.len() == 3 {
         // Shorthand hex format (#RGB)
         let r_char = &hex_part[0..1];
