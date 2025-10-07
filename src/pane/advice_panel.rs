@@ -899,12 +899,22 @@ impl Pane for AdvicePanel {
                 // Calculate cursor position for potentially wrapped text
                 let available_width = input_area.width.saturating_sub(4); // 2 for borders, 2 for padding
                 if available_width > 0 {
-                    let wrapped_lines = textwrap::wrap(&input_text, available_width as usize);
+                    // To prevent `textwrap` from trimming trailing whitespace, we append a
+                    // sentinel character (zero-width space) and then remove it from the
+                    // grapheme count of the last line.
+                    let sentinel = "\u{200B}";
+                    let text_with_sentinel = format!("{}{}", input_text, sentinel);
+                    let wrapped_lines =
+                        textwrap::wrap(&text_with_sentinel, available_width as usize);
+
                     let mut cursor_x = input_area.x + 1;
                     let mut cursor_y = input_area.y + 1;
 
                     if let Some(last_line) = wrapped_lines.last() {
-                        let last_line_graphemes = last_line.graphemes(true).count();
+                        // Subtract the sentinel from the last line's grapheme count for an
+                        // accurate cursor position.
+                        let last_line_graphemes = last_line.graphemes(true).count() - 1;
+
                         if last_line_graphemes < available_width as usize {
                             cursor_x += last_line_graphemes as u16;
                             cursor_y += (wrapped_lines.len() - 1) as u16;
