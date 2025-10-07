@@ -188,7 +188,7 @@ impl Pane for HelpPane {
 }
 #[cfg(test)]
 mod tests {
-
+    use super::*;
     use crate::ui::{App, Theme};
     use std::sync::Arc;
 
@@ -196,9 +196,14 @@ mod tests {
         Arc::new(crate::shared_state::LlmSharedState::new())
     }
 
+    fn create_test_app() -> App {
+        let themes = vec![Theme::Dark, Theme::Light];
+        App::new_with_config(true, true, 0, themes, None, create_test_llm_state())
+    }
+
     #[test]
     fn test_help_detects_commit_picker_mode() {
-        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
+        let mut app = create_test_app();
 
         // Test normal mode
         assert!(!app.is_in_commit_picker_mode());
@@ -214,7 +219,7 @@ mod tests {
 
     #[test]
     fn test_help_detects_selected_commit() {
-        let mut app = App::new_with_config(true, true, Theme::Dark, None, create_test_llm_state());
+        let mut app = create_test_app();
 
         // Initially no commit selected
         assert!(app.get_selected_commit().is_none());
