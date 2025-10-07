@@ -131,7 +131,9 @@ async fn main() -> Result<()> {
         if any_color_parsed {
             themes.push(ui::Theme::Custom(Arc::new(custom_palette)));
         } else {
-            log::warn!("Custom theme section found in config, but no valid colors were parsed. Custom theme will not be available.");
+            log::warn!(
+                "Custom theme section found in config, but no valid colors were parsed. Custom theme will not be available."
+            );
         }
     }
 
@@ -144,7 +146,9 @@ async fn main() -> Result<()> {
             if themes.iter().any(|t| matches!(t, ui::Theme::Custom(_))) {
                 themes.len() - 1 // The last one is custom
             } else {
-                log::warn!("Configured theme is 'custom', but no valid custom theme was loaded. Falling back to dark theme.");
+                log::warn!(
+                    "Configured theme is 'custom', but no valid custom theme was loaded. Falling back to dark theme."
+                );
                 0 // Fallback to dark
             }
         }

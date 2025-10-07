@@ -142,23 +142,22 @@ pub fn parse_hex_color(hex_str: &str) -> Result<Color, String> {
         let g_str = format!("{g_char}{g_char}");
         let b_str = format!("{b_char}{b_char}");
         (
-            u8::from_str_radix(&r_str, 16).map_err(|e| {
-                format!("Invalid red component in hex color '{}': {}", hex_str, e)
-            })?,
+            u8::from_str_radix(&r_str, 16)
+                .map_err(|e| format!("Invalid red component in hex color '{}': {}", hex_str, e))?,
             u8::from_str_radix(&g_str, 16).map_err(|e| {
                 format!("Invalid green component in hex color '{}': {}", hex_str, e)
             })?,
-            u8::from_str_radix(&b_str, 16).map_err(|e| {
-                format!("Invalid blue component in hex color '{}': {}", hex_str, e)
-            })?,
+            u8::from_str_radix(&b_str, 16)
+                .map_err(|e| format!("Invalid blue component in hex color '{}': {}", hex_str, e))?,
         )
     } else {
         // Full hex format (#RRGGBB)
         (
             u8::from_str_radix(&hex_part[0..2], 16)
                 .map_err(|e| format!("Invalid red component in hex color '{}': {}", hex_str, e))?,
-            u8::from_str_radix(&hex_part[2..4], 16)
-                .map_err(|e| format!("Invalid green component in hex color '{}': {}", hex_str, e))?,
+            u8::from_str_radix(&hex_part[2..4], 16).map_err(|e| {
+                format!("Invalid green component in hex color '{}': {}", hex_str, e)
+            })?,
             u8::from_str_radix(&hex_part[4..6], 16)
                 .map_err(|e| format!("Invalid blue component in hex color '{}': {}", hex_str, e))?,
         )
