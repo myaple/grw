@@ -29,7 +29,7 @@ use llm::LlmClient;
 use log::{debug, error, info};
 use monitor::AsyncMonitorCommand;
 use shared_state::SharedStateManager;
-use ui::{App, ColorPalette};
+use ui::App;
 
 pub const GIT_SHA: &str = "unknown";
 

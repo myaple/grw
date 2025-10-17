@@ -285,6 +285,12 @@ impl App {
 
     pub fn update_files(&mut self, files: Vec<FileDiff>) {
         let old_files = std::mem::take(&mut self.files);
+
+        // Store the path of the currently selected file to preserve selection
+        let current_file_path = old_files
+            .get(self.current_file_index)
+            .map(|f| f.path.clone());
+
         self.files = files;
 
         // Create a mapping of old file paths to their timestamps
@@ -328,7 +334,19 @@ impl App {
 
         self.file_change_timestamps = new_timestamps;
 
-        if self.current_file_index >= self.files.len() {
+        // Try to preserve the current file selection by finding the same file path
+        if let Some(ref path) = current_file_path {
+            if let Some(new_index) = self.files.iter().position(|f| f.path == *path) {
+                // Found the same file in the new list, update the index
+                self.current_file_index = new_index;
+                // Don't reset scroll_offset since we're staying on the same file
+            } else if self.current_file_index >= self.files.len() {
+                // Current file no longer exists, reset to first file
+                self.current_file_index = 0;
+                self.scroll_offset = 0;
+            }
+        } else if self.current_file_index >= self.files.len() {
+            // No current file was selected or index is out of bounds
             self.current_file_index = 0;
             self.scroll_offset = 0;
         }
@@ -2106,5 +2124,89 @@ mod tests {
         assert_eq!(light_theme.foreground_color(), Color::Black);
         assert_eq!(light_theme.added_color(), Color::Green);
         assert_eq!(light_theme.removed_color(), Color::LightRed);
+    }
+
+    #[test]
+    fn test_update_files_preserves_selection() {
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
+
+        // Create initial files
+        let file1 = FileDiff {
+            path: std::path::PathBuf::from("zebra.txt"),
+            status: git2::Status::INDEX_MODIFIED,
+            line_strings: vec!["line 1".to_string()],
+            additions: 1,
+            deletions: 0,
+        };
+        let file2 = FileDiff {
+            path: std::path::PathBuf::from("apple.txt"),
+            status: git2::Status::INDEX_MODIFIED,
+            line_strings: vec!["line 1".to_string()],
+            additions: 1,
+            deletions: 0,
+        };
+
+        // Initial files - zebra.txt comes before apple.txt alphabetically
+        let initial_files = vec![file1.clone(), file2.clone()];
+        app.update_files(initial_files);
+
+        // Select the second file (apple.txt)
+        app.current_file_index = 1;
+        assert_eq!(app.current_file_index, 1);
+        assert_eq!(
+            app.get_current_file().unwrap().path,
+            std::path::PathBuf::from("apple.txt")
+        );
+
+        // Now add a new file that comes first alphabetically
+        let file3 = FileDiff {
+            path: std::path::PathBuf::from("aardvark.txt"),
+            status: git2::Status::INDEX_NEW,
+            line_strings: vec!["new line".to_string()],
+            additions: 1,
+            deletions: 0,
+        };
+
+        // Update files with new file at the beginning
+        let updated_files = vec![file3.clone(), file1.clone(), file2.clone()];
+        app.update_files(updated_files);
+
+        // The current file should still be apple.txt, but now at index 2
+        assert_eq!(app.current_file_index, 2);
+        assert_eq!(
+            app.get_current_file().unwrap().path,
+            std::path::PathBuf::from("apple.txt")
+        );
+
+        // Test with file removal
+        // Remove apple.txt from the list
+        let final_files = vec![file3.clone(), file1.clone()];
+        app.update_files(final_files);
+
+        // Since apple.txt was removed, it should reset to first file (aardvark.txt)
+        assert_eq!(app.current_file_index, 0);
+        assert_eq!(
+            app.get_current_file().unwrap().path,
+            std::path::PathBuf::from("aardvark.txt")
+        );
+
+        // Test preserving same file when file content changes
+        let modified_file1 = FileDiff {
+            path: std::path::PathBuf::from("aardvark.txt"),
+            status: git2::Status::INDEX_MODIFIED,
+            line_strings: vec!["modified line".to_string()],
+            additions: 2,
+            deletions: 1,
+        };
+        let modified_files = vec![modified_file1, file1.clone()];
+        app.update_files(modified_files);
+
+        // Should still be on aardvark.txt
+        assert_eq!(app.current_file_index, 0);
+        assert_eq!(
+            app.get_current_file().unwrap().path,
+            std::path::PathBuf::from("aardvark.txt")
+        );
     }
 }

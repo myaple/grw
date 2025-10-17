@@ -821,7 +821,7 @@ impl Pane for AdvicePanel {
                     lines.push(Line::from(format!("[{}] {}:", time_display, prefix)).fg(color));
 
                     // Add message content with better formatting preservation
-                    let formatted_lines = self.format_chat_content(&msg.content, &theme);
+                    let formatted_lines = self.format_chat_content(&msg.content, theme);
                     for formatted_line in formatted_lines {
                         lines.push(formatted_line);
                     }
@@ -882,55 +882,55 @@ impl Pane for AdvicePanel {
         f.render_widget(paragraph, content_area);
 
         // Show chat input only when activated and if an area for it has been calculated
-        if let Some(input_area) = input_area {
-            if self.mode == AdviceMode::Chatting && self.chat_input_active {
-                let input_block = Block::default()
-                    .title("Chat Input")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border_color()));
+        if let Some(input_area) = input_area
+            && self.mode == AdviceMode::Chatting
+            && self.chat_input_active
+        {
+            let input_block = Block::default()
+                .title("Chat Input")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_color()));
 
-                let input_text = format!("> {}", self.chat_input);
-                let input_paragraph = Paragraph::new(input_text.clone())
-                    .block(input_block.clone())
-                    .wrap(Wrap { trim: false });
+            let input_text = format!("> {}", self.chat_input);
+            let input_paragraph = Paragraph::new(input_text.clone())
+                .block(input_block.clone())
+                .wrap(Wrap { trim: false });
 
-                f.render_widget(input_paragraph, input_area);
+            f.render_widget(input_paragraph, input_area);
 
-                // Calculate cursor position for potentially wrapped text
-                let available_width = input_area.width.saturating_sub(4); // 2 for borders, 2 for padding
-                if available_width > 0 {
-                    // To prevent `textwrap` from trimming trailing whitespace, we append a
-                    // sentinel character (zero-width space) and then remove it from the
-                    // grapheme count of the last line.
-                    let sentinel = "\u{200B}";
-                    let text_with_sentinel = format!("{}{}", input_text, sentinel);
-                    let wrapped_lines =
-                        textwrap::wrap(&text_with_sentinel, available_width as usize);
+            // Calculate cursor position for potentially wrapped text
+            let available_width = input_area.width.saturating_sub(4); // 2 for borders, 2 for padding
+            if available_width > 0 {
+                // To prevent `textwrap` from trimming trailing whitespace, we append a
+                // sentinel character (zero-width space) and then remove it from the
+                // grapheme count of the last line.
+                let sentinel = "\u{200B}";
+                let text_with_sentinel = format!("{}{}", input_text, sentinel);
+                let wrapped_lines = textwrap::wrap(&text_with_sentinel, available_width as usize);
 
-                    let mut cursor_x = input_area.x + 1;
-                    let mut cursor_y = input_area.y + 1;
+                let mut cursor_x = input_area.x + 1;
+                let mut cursor_y = input_area.y + 1;
 
-                    if let Some(last_line) = wrapped_lines.last() {
-                        // Subtract the sentinel from the last line's grapheme count for an
-                        // accurate cursor position.
-                        let last_line_graphemes = last_line.graphemes(true).count() - 1;
+                if let Some(last_line) = wrapped_lines.last() {
+                    // Subtract the sentinel from the last line's grapheme count for an
+                    // accurate cursor position.
+                    let last_line_graphemes = last_line.graphemes(true).count() - 1;
 
-                        if last_line_graphemes < available_width as usize {
-                            cursor_x += last_line_graphemes as u16;
-                            cursor_y += (wrapped_lines.len() - 1) as u16;
-                        } else {
-                            // The last line is full, so the cursor should be at the start of the next line
-                            cursor_y += wrapped_lines.len() as u16;
-                        }
-                    }
-
-                    // Ensure cursor stays within the input area bounds
-                    if cursor_y < input_area.bottom() - 1 {
-                        f.set_cursor(cursor_x, cursor_y);
+                    if last_line_graphemes < available_width as usize {
+                        cursor_x += last_line_graphemes as u16;
+                        cursor_y += (wrapped_lines.len() - 1) as u16;
                     } else {
-                        // If the cursor would be outside, place it at the last possible position
-                        f.set_cursor(input_area.right() - 2, input_area.bottom() - 2);
+                        // The last line is full, so the cursor should be at the start of the next line
+                        cursor_y += wrapped_lines.len() as u16;
                     }
+                }
+
+                // Ensure cursor stays within the input area bounds
+                if cursor_y < input_area.bottom() - 1 {
+                    f.set_cursor(cursor_x, cursor_y);
+                } else {
+                    // If the cursor would be outside, place it at the last possible position
+                    f.set_cursor(input_area.right() - 2, input_area.bottom() - 2);
                 }
             }
         }
