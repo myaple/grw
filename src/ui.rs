@@ -224,6 +224,7 @@ pub struct App {
     app_mode: AppMode,
     selected_commit: Option<CommitInfo>,
     summary_preloader: SummaryPreloader,
+    last_branch_name: Option<String>,
 }
 
 impl App {
@@ -280,6 +281,7 @@ impl App {
             app_mode: AppMode::Normal,
             selected_commit: None,
             summary_preloader: SummaryPreloader::new(llm_client.clone(), Arc::clone(&llm_state)),
+            last_branch_name: None,
         }
     }
 
@@ -993,6 +995,35 @@ impl App {
 
     pub fn clear_selected_commit(&mut self) {
         self.selected_commit = None;
+    }
+
+    /// Detect branch changes and clear selected commit when branch changes
+    pub fn detect_branch_change(&mut self, current_branch: &str) -> bool {
+        let branch_changed = match &self.last_branch_name {
+            Some(last_branch) => last_branch != current_branch,
+            None => {
+                // First time seeing a branch - don't consider this a "change" that should clear commits
+                self.last_branch_name = Some(current_branch.to_string());
+                false
+            }
+        };
+
+        if branch_changed {
+            log::debug!(
+                "Branch change detected: {} -> {}",
+                self.last_branch_name.as_deref().unwrap_or("<unknown>"),
+                current_branch
+            );
+            self.last_branch_name = Some(current_branch.to_string());
+
+            // Clear selected commit when branch changes to ensure diff pane updates
+            if self.selected_commit.is_some() {
+                log::debug!("Clearing selected commit due to branch change");
+                self.clear_selected_commit();
+            }
+        }
+
+        branch_changed
     }
 
     // Getter methods for commit picker state access
@@ -2208,5 +2239,50 @@ mod tests {
             app.get_current_file().unwrap().path,
             std::path::PathBuf::from("aardvark.txt")
         );
+    }
+
+    #[test]
+    fn test_branch_change_detection() {
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
+
+        // Initially, no branch name should be set
+        assert!(app.last_branch_name.is_none());
+
+        // First branch detection should register as change and not clear commit
+        let commit = crate::git::CommitInfo {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            message: "Test commit".to_string(),
+            files_changed: vec![],
+        };
+        app.select_commit(commit.clone());
+        assert!(app.get_selected_commit().is_some());
+
+        // First detection should NOT register as branch change because we had no previous branch
+        let branch_changed = app.detect_branch_change("main");
+        assert!(!branch_changed); // Should not be considered a change
+        assert_eq!(app.last_branch_name, Some("main".to_string()));
+        assert!(app.get_selected_commit().is_some()); // Should still have selected commit
+
+        // Same branch should not register as change
+        let branch_changed = app.detect_branch_change("main");
+        assert!(!branch_changed);
+        assert!(app.get_selected_commit().is_some()); // Should still have selected commit
+
+        // Different branch should register as change and clear selected commit
+        let branch_changed = app.detect_branch_change("feature-branch");
+        assert!(branch_changed);
+        assert_eq!(app.last_branch_name, Some("feature-branch".to_string()));
+        assert!(app.get_selected_commit().is_none()); // Should be cleared
+
+        // Switch back to main should also clear commit (if any)
+        app.select_commit(commit.clone()); // Select a commit again
+        assert!(app.get_selected_commit().is_some());
+
+        let branch_changed = app.detect_branch_change("main");
+        assert!(branch_changed);
+        assert_eq!(app.last_branch_name, Some("main".to_string()));
+        assert!(app.get_selected_commit().is_none()); // Should be cleared again
     }
 }

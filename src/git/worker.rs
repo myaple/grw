@@ -25,6 +25,7 @@ pub struct GitWorker {
     last_commit_id: Option<String>,
     current_view_mode: ViewMode,
     shared_state: Arc<GitSharedState>,
+    last_head_commit_id: Option<String>, // Track HEAD commit to detect branch changes
 }
 
 impl GitWorker {
@@ -38,6 +39,8 @@ impl GitWorker {
             .and_then(|head| head.peel_to_commit().ok())
             .map(|commit| commit.id().to_string());
 
+        let last_head_commit_id = last_commit_id.clone();
+
         Ok(Self {
             repo,
             path,
@@ -48,6 +51,7 @@ impl GitWorker {
             last_commit_id,
             current_view_mode: ViewMode::WorkingTree,
             shared_state,
+            last_head_commit_id,
         })
     }
 
@@ -131,6 +135,9 @@ impl GitWorker {
 
     /// Internal update logic that handles git status directly
     fn update_internal_direct(&mut self) -> Result<()> {
+        // Check for HEAD/branch changes first
+        self.detect_head_change();
+
         // Get all statuses including staged files
         let statuses = self.repo.statuses(Some(
             StatusOptions::new()
@@ -328,6 +335,51 @@ impl GitWorker {
     fn is_file_in_dirty_directory(&self, path: &Path) -> bool {
         // Check if the file has unstaged changes that would be committed
         git_operations::is_file_in_dirty_directory(&self.repo, path).unwrap_or(false)
+    }
+
+    /// Detect HEAD/branch changes and force refresh of git state
+    pub fn detect_head_change(&mut self) {
+        let current_head_commit_id = self
+            .repo
+            .head()
+            .ok()
+            .and_then(|head| head.peel_to_commit().ok())
+            .map(|commit| commit.id().to_string());
+
+        if let Some(ref current_id) = current_head_commit_id {
+            if let Some(ref last_id) = self.last_head_commit_id {
+                if current_id != last_id {
+                    debug!(
+                        "HEAD/branch change detected: {} -> {}",
+                        &last_id[..7.min(last_id.len())],
+                        &current_id[..7.min(current_id.len())]
+                    );
+
+                    // Force refresh of all git state
+                    self.last_head_commit_id = current_head_commit_id.clone();
+                    self.last_commit_id = current_head_commit_id.clone();
+
+                    // Clear cached last commit files to force refresh
+                    self.last_commit_files.clear();
+
+                    // If we're currently in LastCommit mode, the view mode logic will
+                    // automatically refresh the last_commit_files on this iteration
+                    debug!("Forced refresh of git state due to HEAD/branch change");
+                }
+            } else {
+                // First time seeing a HEAD commit
+                self.last_head_commit_id = current_head_commit_id.clone();
+                self.last_commit_id = current_head_commit_id.clone();
+            }
+        } else {
+            // No HEAD (e.g., empty repository)
+            if self.last_head_commit_id.is_some() {
+                debug!("HEAD disappeared (branch deleted?)");
+                self.last_head_commit_id = None;
+                self.last_commit_id = None;
+                self.last_commit_files.clear();
+            }
+        }
     }
 
     fn get_repo_name(&self) -> String {
@@ -1376,6 +1428,61 @@ mod tests {
 
         // Verify file changes were retrieved successfully
         assert!(!file_changes.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_git_worker_detects_head_changes() -> Result<()> {
+        let (_temp_dir, repo, repo_path) = create_test_repo()?;
+
+        // Create initial commit
+        let commit1_id = create_commit(
+            &repo,
+            &repo_path,
+            "file1.txt",
+            "Initial content",
+            "Initial commit",
+        )?;
+
+        // Create GitWorker and verify it detects the initial HEAD
+        let shared_state = Arc::new(GitSharedState::new());
+        let mut git_worker = GitWorker::new(repo_path.clone(), shared_state)?;
+
+        assert!(git_worker.last_head_commit_id.is_some());
+        assert_eq!(
+            git_worker.last_head_commit_id.clone().unwrap(),
+            commit1_id.to_string()
+        );
+        assert_eq!(
+            git_worker.last_commit_id.clone().unwrap(),
+            commit1_id.to_string()
+        );
+
+        // Create another commit (simulating a branch change)
+        let commit2_id = create_commit(
+            &repo,
+            &repo_path,
+            "file2.txt",
+            "Second content",
+            "Second commit",
+        )?;
+
+        // Update git worker state to simulate HEAD change detection
+        git_worker.detect_head_change();
+
+        // Verify the GitWorker detected the HEAD change
+        assert_eq!(
+            git_worker.last_head_commit_id.clone().unwrap(),
+            commit2_id.to_string()
+        );
+        assert_eq!(
+            git_worker.last_commit_id.clone().unwrap(),
+            commit2_id.to_string()
+        );
+
+        // Verify last_commit_files was cleared to force refresh
+        assert!(git_worker.last_commit_files.is_empty());
 
         Ok(())
     }

@@ -195,12 +195,16 @@ async fn main() -> Result<()> {
         if let Some(repo) = shared_state_manager.git_state().get_repo() {
             use crate::git::ViewMode;
 
+            // Detect branch changes and clear selected commit if needed
+            app.detect_branch_change(&repo.branch_name);
+
             // Always update files and tree based on current view mode
             let changed_files = repo.get_display_files();
             let tree = repo.get_file_tree();
 
             log::trace!(
-                "Main loop: view_mode={:?}, selected_commit={}, files={}",
+                "Main loop: branch={}, view_mode={:?}, selected_commit={}, files={}",
+                repo.branch_name,
                 repo.current_view_mode,
                 app.get_selected_commit().is_some(),
                 changed_files.len()
