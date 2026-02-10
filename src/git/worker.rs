@@ -66,7 +66,8 @@ impl GitWorker {
 
         loop {
             // Perform git status update
-            if let Err(e) = self.update_shared_state() {
+            // Use block_in_place to prevent blocking the async runtime
+            if let Err(e) = tokio::task::block_in_place(|| self.update_shared_state()) {
                 debug!("Error during git status update: {}", e);
                 // Error is already stored in shared state by update_shared_state()
                 // Continue running despite errors
@@ -1321,7 +1322,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_git_worker_continuous_run() -> Result<()> {
         let (_temp_dir, _repo, repo_path) = create_test_repo()?;
 
@@ -1489,6 +1490,75 @@ mod tests {
 
         // Verify last_commit_files was cleared to force refresh
         assert!(git_worker.last_commit_files.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_non_blocking_behavior() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let repo_path = temp_dir.path().to_path_buf();
+        let _repo = Repository::init(&repo_path)?;
+
+        // Create 200 files to make status slow enough to measure but fast enough for tests
+        for i in 0..200 {
+            let p = repo_path.join(format!("file_{}.txt", i));
+            std::fs::File::create(&p)?;
+        }
+
+        let shared_state = Arc::new(GitSharedState::new());
+        let mut git_worker = GitWorker::new(repo_path.clone(), shared_state)?;
+
+        // Measure scheduling latency
+        let monitor_handle = tokio::spawn(async move {
+            let mut max_delay = std::time::Duration::ZERO;
+            let mut last_tick = std::time::Instant::now();
+            let interval = std::time::Duration::from_millis(10);
+
+            // Monitor for 500ms
+            let end_time = std::time::Instant::now() + std::time::Duration::from_millis(500);
+
+            while std::time::Instant::now() < end_time {
+                tokio::time::sleep(interval).await;
+                let now = std::time::Instant::now();
+                let actual_interval = now.duration_since(last_tick);
+                // The first tick might be long due to setup, so ignore if it's the very first
+                // But here last_tick is set before sleep.
+                // The sleep(10ms) should return after 10ms.
+                // If it returns after 100ms, delay is 90ms.
+                let delay = actual_interval.saturating_sub(interval);
+
+                // Ignore small scheduling jitter < 5ms
+                if delay > std::time::Duration::from_millis(5) {
+                    if delay > max_delay {
+                        max_delay = delay;
+                    }
+                }
+                last_tick = now;
+            }
+            max_delay
+        });
+
+        // Run git status update using the optimized run_continuous method
+        let worker_handle = tokio::spawn(async move {
+            // Run for a short duration
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                git_worker.run_continuous(100),
+            )
+            .await;
+        });
+
+        let (max_delay, _) = tokio::join!(monitor_handle, worker_handle);
+        let max_delay = max_delay?;
+
+        // With block_in_place, the monitor task should not be blocked significantly.
+        // We expect delays to be minimal (jitter)
+        assert!(
+            max_delay < std::time::Duration::from_millis(100),
+            "Blocking delay too high: {:?}. Optimization might not be working.",
+            max_delay
+        );
 
         Ok(())
     }

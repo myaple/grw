@@ -190,7 +190,6 @@ impl Pane for HelpPane {
 }
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::ui::{App, Theme};
     use std::sync::Arc;
 

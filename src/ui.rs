@@ -121,8 +121,8 @@ impl Theme {
 
 pub fn parse_hex_color(hex_str: &str) -> Result<Color, String> {
     // Accept both with and without # prefix for flexibility
-    let hex_part = if hex_str.starts_with('#') {
-        &hex_str[1..]
+    let hex_part = if let Some(stripped) = hex_str.strip_prefix('#') {
+        stripped
     } else {
         hex_str
     };
