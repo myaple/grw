@@ -152,7 +152,7 @@ impl LlmClient {
         conversation_history: Vec<crate::pane::ChatMessageData>,
     ) -> Result<crate::pane::ChatMessageData, String> {
         let start_time = tokio::time::Instant::now();
-        debug!("🤖 LLM_CLIENT: Processing chat follow-up: {}", question);
+        debug!("🤖 LLM_CLIENT: Processing chat follow-up");
 
         // Build conversation context
         let mut context_messages = vec![ChatCompletionMessage {

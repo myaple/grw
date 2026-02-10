@@ -85,7 +85,7 @@ impl FromStr for LlmProvider {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct LlmConfig {
     pub provider: Option<LlmProvider>,
     pub model: Option<String>,
@@ -95,6 +95,20 @@ pub struct LlmConfig {
     pub advice_model: Option<String>,
     /// Maximum number of characters/tokens to send to LLM for both summary and advice generation
     pub max_tokens: Option<usize>,
+}
+
+impl std::fmt::Debug for LlmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmConfig")
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("summary_model", &self.summary_model)
+            .field("api_key", &self.api_key.as_ref().map(|_| "REDACTED"))
+            .field("base_url", &self.base_url)
+            .field("advice_model", &self.advice_model)
+            .field("max_tokens", &self.max_tokens)
+            .finish()
+    }
 }
 
 impl LlmConfig {
@@ -552,5 +566,19 @@ mod tests {
         let llm_config = merged.llm.unwrap();
 
         assert_eq!(llm_config.summary_model, Some("gpt-4o-mini".to_string())); // From config
+    }
+
+    #[test]
+    fn test_llm_config_debug_redaction() {
+        let config = LlmConfig {
+            api_key: Some("secret-api-key".to_string()),
+            model: Some("gpt-4".to_string()),
+            ..Default::default()
+        };
+
+        let debug_output = format!("{:?}", config);
+        assert!(!debug_output.contains("secret-api-key"));
+        assert!(debug_output.contains("REDACTED"));
+        assert!(debug_output.contains("gpt-4"));
     }
 }
