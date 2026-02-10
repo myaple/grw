@@ -152,7 +152,7 @@ impl AdvicePanel {
     }
 
     pub fn send_chat_message(&mut self, message: &str) -> Result<(), String> {
-        debug!("🎯 ADVICE_PANEL: Sending chat message: {}", message);
+        debug!("🎯 ADVICE_PANEL: Sending chat message");
 
         // Add user message to chat history immediately (preserves content)
         let user_message_id = uuid::Uuid::new_v4().to_string();
@@ -191,10 +191,7 @@ impl AdvicePanel {
 
         // Spawn async task for chat response generation
         let task = tokio::spawn(async move {
-            debug!(
-                "🎯 ADVICE_PANEL: Async chat task started for message: {}",
-                message_content
-            );
+            debug!("🎯 ADVICE_PANEL: Async chat task started");
 
             let result = async {
                 // Try to use LLM client if available
