@@ -1488,7 +1488,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_non_blocking_behavior() -> Result<()> {
         let temp_dir = TempDir::new()?;
         let repo_path = temp_dir.path().to_path_buf();
