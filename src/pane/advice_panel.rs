@@ -851,7 +851,7 @@ impl Pane for AdvicePanel {
                 let input_text = format!("> {}", self.chat_input);
                 let available_width = area.width.saturating_sub(4); // 2 for borders, 2 for padding
                 let wrapped_lines = textwrap::wrap(&input_text, available_width as usize).len();
-                let input_height = (wrapped_lines as u16 + 2).min(10).max(3); // Min 3, Max 10 lines
+                let input_height = (wrapped_lines as u16 + 2).clamp(3, 10); // Min 3, Max 10 lines
 
                 let content_height = area.height.saturating_sub(input_height);
 
@@ -927,10 +927,10 @@ impl Pane for AdvicePanel {
 
                 // Ensure cursor stays within the input area bounds
                 if cursor_y < input_area.bottom() - 1 {
-                    f.set_cursor(cursor_x, cursor_y);
+                    f.set_cursor_position((cursor_x, cursor_y));
                 } else {
                     // If the cursor would be outside, place it at the last possible position
-                    f.set_cursor(input_area.right() - 2, input_area.bottom() - 2);
+                    f.set_cursor_position((input_area.right() - 2, input_area.bottom() - 2));
                 }
             }
         }
