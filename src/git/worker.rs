@@ -705,7 +705,7 @@ impl GitWorker {
         let mut errors_encountered = 0;
         const MAX_FILE_ERRORS: usize = 10; // Allow some file processing errors
 
-        for delta in diff.deltas() {
+        for (i, delta) in diff.deltas().enumerate() {
             let status = match delta.status() {
                 git2::Delta::Added => FileChangeStatus::Added,
                 git2::Delta::Deleted => FileChangeStatus::Deleted,
@@ -747,26 +747,32 @@ impl GitWorker {
             let absolute_file_path = repo_path.join(&relative_file_path);
 
             // Get line count statistics using git diff-tree with error handling
-            let (additions, deletions) = match Self::get_commit_file_stats_static_relative(
-                repo,
-                commit_sha,
-                &relative_file_path,
-            ) {
-                Ok(stats) => stats,
-                Err(e) => {
-                    debug!(
-                        "Failed to get file stats for {} in commit {}: {}",
-                        relative_file_path.display(),
-                        commit_sha,
-                        e
-                    );
-                    errors_encountered += 1;
-                    if errors_encountered >= MAX_FILE_ERRORS {
-                        debug!("Too many file processing errors, stopping");
-                        break;
+            // OPTIMIZATION: Use the patch from the existing diff instead of recomputing it
+            let (additions, deletions) = if let Ok(Some(patch)) = git2::Patch::from_diff(&diff, i) {
+                let stats = patch.line_stats().unwrap_or((0, 0, 0));
+                (stats.1, stats.2)
+            } else {
+                match Self::get_commit_file_stats_static_relative(
+                    repo,
+                    commit_sha,
+                    &relative_file_path,
+                ) {
+                    Ok(stats) => stats,
+                    Err(e) => {
+                        debug!(
+                            "Failed to get file stats for {} in commit {}: {}",
+                            relative_file_path.display(),
+                            commit_sha,
+                            e
+                        );
+                        errors_encountered += 1;
+                        if errors_encountered >= MAX_FILE_ERRORS {
+                            debug!("Too many file processing errors, stopping");
+                            break;
+                        }
+                        // Continue with zero stats rather than failing completely
+                        (0, 0)
                     }
-                    // Continue with zero stats rather than failing completely
-                    (0, 0)
                 }
             };
 
