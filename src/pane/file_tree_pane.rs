@@ -67,12 +67,12 @@ impl Pane for FileTreePane {
                         spans.push(Span::raw("   "));
                     }
 
-                    let status_char = if let Some(ref diff) = node.file_diff {
-                        if diff.status.is_wt_new() {
+                    let status_char = if let Some(status) = node.status {
+                        if status.is_wt_new() {
                             "📄 "
-                        } else if diff.status.is_wt_modified() {
+                        } else if status.is_wt_modified() {
                             "📝 "
-                        } else if diff.status.is_wt_deleted() {
+                        } else if status.is_wt_deleted() {
                             "🗑️  "
                         } else {
                             "📄 "
@@ -84,31 +84,29 @@ impl Pane for FileTreePane {
                     spans.push(Span::raw(format!("{indent}{status_char}")));
                     spans.push(Span::raw(node.name.clone()));
 
-                    if let Some(ref diff) = node.file_diff {
-                        if diff.additions > 0 {
-                            spans.push(Span::styled(
-                                format!(" (+{})", diff.additions),
-                                Style::default()
-                                    .fg(theme.added_color())
-                                    .add_modifier(Modifier::BOLD),
-                            ));
-                        }
-                        if diff.deletions > 0 {
-                            spans.push(Span::styled(
-                                format!(" (-{})", diff.deletions),
-                                Style::default()
-                                    .fg(theme.removed_color())
-                                    .add_modifier(Modifier::BOLD),
-                            ));
-                        }
+                    if node.additions > 0 {
+                        spans.push(Span::styled(
+                            format!(" (+{})", node.additions),
+                            Style::default()
+                                .fg(theme.added_color())
+                                .add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                    if node.deletions > 0 {
+                        spans.push(Span::styled(
+                            format!(" (-{})", node.deletions),
+                            Style::default()
+                                .fg(theme.removed_color())
+                                .add_modifier(Modifier::BOLD),
+                        ));
                     }
 
                     spans
                 };
 
-                let line_style = if let Some(ref diff) = node.file_diff {
+                let line_style = if !node.is_dir {
                     // Check if this file is recently changed by finding its index
-                    if let Some(file_idx) = app.get_files().iter().position(|f| f.path == diff.path)
+                    if let Some(file_idx) = app.get_files().iter().position(|f| f.path == node.path)
                     {
                         if file_idx < app.get_file_change_timestamps().len()
                             && app.is_file_recently_changed(file_idx)
