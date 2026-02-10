@@ -32,6 +32,7 @@ use shared_state::SharedStateManager;
 use ui::App;
 
 pub const GIT_SHA: &str = "unknown";
+const ERROR_CLEANUP_INTERVAL_SECS: u64 = 30;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -280,7 +281,7 @@ async fn main() -> Result<()> {
             app.handle_cached_summary_result(Some(cached_summary), &current_commit.sha);
         }
 
-        // Periodic error recovery check - clear stale errors every 30 seconds
+        // Periodic error recovery check - clear stale errors periodically
         static LAST_ERROR_CLEANUP: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(0);
         let current_time = std::time::SystemTime::now()
@@ -289,7 +290,7 @@ async fn main() -> Result<()> {
             .as_secs();
         let last_cleanup = LAST_ERROR_CLEANUP.load(std::sync::atomic::Ordering::Relaxed);
 
-        if current_time.saturating_sub(last_cleanup) > 30 {
+        if current_time.saturating_sub(last_cleanup) > ERROR_CLEANUP_INTERVAL_SECS {
             // Clear any stale errors that might have accumulated
             if shared_state_manager.git_state().has_errors()
                 || shared_state_manager.llm_state().has_errors()
