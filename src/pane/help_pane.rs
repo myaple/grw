@@ -71,8 +71,8 @@ impl Pane for HelpPane {
                 ActivePane::FileTree => (
                     "File Tree",
                     vec![
-                        "  Tab / g t     - Next file",
-                        "  Shift+Tab / g T - Previous file",
+                        "  Tab / g t / Right - Next file",
+                        "  Shift+Tab / g T / Left - Previous file",
                     ],
                 ),
                 ActivePane::Monitor => (
@@ -87,6 +87,8 @@ impl Pane for HelpPane {
                     vec![
                         "  j / Down / Ctrl+e - Scroll down",
                         "  k / Up / Ctrl+y   - Scroll up",
+                        "  Right             - Next file",
+                        "  Left              - Previous file",
                         "  PageDown          - Page down",
                         "  PageUp            - Page up",
                         "  g g               - Go to top",

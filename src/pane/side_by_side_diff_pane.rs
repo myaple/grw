@@ -132,7 +132,13 @@ impl Pane for SideBySideDiffPane {
 
     fn handle_event(&mut self, event: &AppEvent) -> bool {
         match event {
-            AppEvent::Key(key) => matches!(key.code, KeyCode::Char('j') | KeyCode::Char('k')),
+            AppEvent::Key(key) => matches!(
+                key.code,
+                KeyCode::Char('j')
+                    | KeyCode::Char('k')
+                    | KeyCode::Left
+                    | KeyCode::Right
+            ),
             _ => false,
         }
     }
