@@ -1,5 +1,6 @@
 use crate::git::{CommitInfo, FileDiff, GitRepo, PreloadConfig, SummaryPreloader, TreeNode};
 use crate::llm::LlmClient;
+use git2::Status;
 use crate::pane::{PaneId, PaneRegistry};
 use crossterm::event::KeyEvent;
 use ratatui::{
@@ -194,12 +195,22 @@ pub enum ActivePane {
     SideBySideDiff,
 }
 
+#[derive(Debug, Clone)]
+pub struct TreeDisplayNode {
+    pub name: String,
+    pub path: std::path::PathBuf,
+    pub is_dir: bool,
+    pub status: Option<Status>,
+    pub additions: usize,
+    pub deletions: usize,
+}
+
 #[derive(Debug)]
 pub struct App {
     files: Vec<FileDiff>,
     current_file_index: usize,
     scroll_offset: usize,
-    tree_nodes: Vec<(TreeNode, usize)>,
+    tree_nodes: Vec<(TreeDisplayNode, usize)>,
     current_tree_index: usize,
     file_indices_in_tree: Vec<usize>,
     pub last_g_press: Option<std::time::Instant>,
@@ -371,7 +382,15 @@ impl App {
         path.push(node.name.clone());
 
         if node.file_diff.is_some() || !node.children.is_empty() {
-            self.tree_nodes.push((node.clone(), depth));
+            let display_node = TreeDisplayNode {
+                name: node.name.clone(),
+                path: node.path.clone(),
+                is_dir: node.is_dir,
+                status: node.file_diff.as_ref().map(|d| d.status),
+                additions: node.file_diff.as_ref().map(|d| d.additions).unwrap_or(0),
+                deletions: node.file_diff.as_ref().map(|d| d.deletions).unwrap_or(0),
+            };
+            self.tree_nodes.push((display_node, depth));
 
             if node.file_diff.is_some() {
                 if let Some(file_index) = self.files.iter().position(|f| f.path == node.path) {
@@ -857,7 +876,7 @@ impl App {
     }
 
     // Public getters for private fields needed by panes
-    pub fn get_tree_nodes(&self) -> &Vec<(TreeNode, usize)> {
+    pub fn get_tree_nodes(&self) -> &Vec<(TreeDisplayNode, usize)> {
         &self.tree_nodes
     }
 
@@ -1643,12 +1662,12 @@ fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect, _git_repo: &Gi
                     spans.push(Span::raw("   "));
                 }
 
-                let status_char = if let Some(ref diff) = node.file_diff {
-                    if diff.status.is_wt_new() {
+                let status_char = if let Some(status) = node.status {
+                    if status.is_wt_new() {
                         "📄 "
-                    } else if diff.status.is_wt_modified() {
+                    } else if status.is_wt_modified() {
                         "📝 "
-                    } else if diff.status.is_wt_deleted() {
+                    } else if status.is_wt_deleted() {
                         "🗑️  "
                     } else {
                         "📄 "
@@ -1660,31 +1679,29 @@ fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect, _git_repo: &Gi
                 spans.push(Span::raw(format!("{indent}{status_char}")));
                 spans.push(Span::raw(node.name.clone()));
 
-                if let Some(ref diff) = node.file_diff {
-                    if diff.additions > 0 {
-                        spans.push(Span::styled(
-                            format!(" (+{})", diff.additions),
-                            Style::default()
-                                .fg(theme.added_color())
-                                .add_modifier(Modifier::BOLD),
-                        ));
-                    }
-                    if diff.deletions > 0 {
-                        spans.push(Span::styled(
-                            format!(" (-{})", diff.deletions),
-                            Style::default()
-                                .fg(theme.removed_color())
-                                .add_modifier(Modifier::BOLD),
-                        ));
-                    }
+                if node.additions > 0 {
+                    spans.push(Span::styled(
+                        format!(" (+{})", node.additions),
+                        Style::default()
+                            .fg(theme.added_color())
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                if node.deletions > 0 {
+                    spans.push(Span::styled(
+                        format!(" (-{})", node.deletions),
+                        Style::default()
+                            .fg(theme.removed_color())
+                            .add_modifier(Modifier::BOLD),
+                    ));
                 }
 
                 spans
             };
 
-            let line_style = if let Some(ref diff) = node.file_diff {
+            let line_style = if !node.is_dir {
                 // Check if this file is recently changed by finding its index
-                if let Some(file_idx) = app.files.iter().position(|f| f.path == diff.path) {
+                if let Some(file_idx) = app.files.iter().position(|f| f.path == node.path) {
                     if file_idx < app.file_change_timestamps.len()
                         && app.is_file_recently_changed(file_idx)
                     {
@@ -2284,5 +2301,50 @@ mod tests {
         assert!(branch_changed);
         assert_eq!(app.last_branch_name, Some("main".to_string()));
         assert!(app.get_selected_commit().is_none()); // Should be cleared again
+    }
+
+    #[test]
+    fn test_performance_add_tree_node_recursive() {
+        let themes = vec![Theme::Dark, Theme::Light];
+        let mut app = create_test_app(true, true, 0, themes);
+
+        // Create a large tree
+        let mut children = Vec::new();
+        for i in 0..1000 {
+            // Each node has a large FileDiff (simulated with many diff lines)
+            let large_line_strings = vec!["some diff line".to_string(); 1000];
+            let node = TreeNode {
+                name: format!("file_{}.txt", i),
+                path: std::path::PathBuf::from(format!("file_{}.txt", i)),
+                is_dir: false,
+                children: Vec::new(),
+                file_diff: Some(FileDiff {
+                    path: std::path::PathBuf::from(format!("file_{}.txt", i)),
+                    status: git2::Status::INDEX_MODIFIED,
+                    line_strings: large_line_strings,
+                    additions: 10,
+                    deletions: 5,
+                }),
+            };
+            children.push(node);
+        }
+
+        let root = TreeNode {
+            name: ".".to_string(),
+            path: std::path::PathBuf::from("."),
+            is_dir: true,
+            children,
+            file_diff: None,
+        };
+
+        let start = std::time::Instant::now();
+        app.update_tree(&root);
+        let duration = start.elapsed();
+
+        // This test documents the optimization.
+        // By using TreeDisplayNode, we avoid cloning the large line_strings vector
+        // for each node when flattening the tree.
+        debug!("Time taken to flatten tree with 1000 nodes: {:?}", duration);
+        assert_eq!(app.tree_nodes.len(), 1000);
     }
 }
