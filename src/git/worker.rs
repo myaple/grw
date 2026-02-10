@@ -136,7 +136,7 @@ impl GitWorker {
     /// Internal update logic that handles git status directly
     fn update_internal_direct(&mut self) -> Result<()> {
         // Check for HEAD/branch changes first
-        self.detect_head_change();
+        let head_changed = self.detect_head_change();
 
         // Get all statuses including staged files
         let statuses = self.repo.statuses(Some(
@@ -204,6 +204,12 @@ impl GitWorker {
             self.current_view_mode = ViewMode::Staged;
         } else {
             self.current_view_mode = ViewMode::LastCommit;
+        }
+
+        // Always update last_commit_files if it is empty (invalidated) and we have a commit
+        // or if HEAD changed, to ensure we have fresh data for the UI
+        if (head_changed || self.last_commit_files.is_empty()) && self.last_commit_id.is_some() {
+            debug!("Refreshing last commit files due to HEAD change or empty cache");
             self.last_commit_files = self.get_last_commit_files();
         }
 
@@ -338,7 +344,8 @@ impl GitWorker {
     }
 
     /// Detect HEAD/branch changes and force refresh of git state
-    pub fn detect_head_change(&mut self) {
+    /// Returns true if a change was detected
+    pub fn detect_head_change(&mut self) -> bool {
         let current_head_commit_id = self
             .repo
             .head()
@@ -365,11 +372,13 @@ impl GitWorker {
                     // If we're currently in LastCommit mode, the view mode logic will
                     // automatically refresh the last_commit_files on this iteration
                     debug!("Forced refresh of git state due to HEAD/branch change");
+                    return true;
                 }
             } else {
                 // First time seeing a HEAD commit
                 self.last_head_commit_id = current_head_commit_id.clone();
                 self.last_commit_id = current_head_commit_id.clone();
+                return true;
             }
         } else {
             // No HEAD (e.g., empty repository)
@@ -378,8 +387,10 @@ impl GitWorker {
                 self.last_head_commit_id = None;
                 self.last_commit_id = None;
                 self.last_commit_files.clear();
+                return true;
             }
         }
+        false
     }
 
     fn get_repo_name(&self) -> String {
