@@ -2332,7 +2332,7 @@ mod tests {
         // This test documents the optimization.
         // By using TreeDisplayNode, we avoid cloning the large line_strings vector
         // for each node when flattening the tree.
-        debug!("Time taken to flatten tree with 1000 nodes: {:?}", duration);
+        log::debug!("Time taken to flatten tree with 1000 nodes: {:?}", duration);
         assert_eq!(app.tree_nodes.len(), 1000);
     }
 }

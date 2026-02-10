@@ -2,7 +2,7 @@
 //! This module replaces subprocess git commands with git2 equivalents
 
 use color_eyre::eyre::Result;
-use git2::{DiffOptions, Repository, StatusOptions};
+use git2::{DiffOptions, Repository};
 use log::debug;
 use std::path::{Path, PathBuf};
 
@@ -89,6 +89,7 @@ pub fn get_working_tree_diff(
     diff_options.pathspec(path);
     diff_options.include_untracked(true);
     diff_options.recurse_untracked_dirs(true);
+    diff_options.show_untracked_content(true);
 
     let diff = repo.diff_index_to_workdir(None, Some(&mut diff_options))?;
 
@@ -102,77 +103,10 @@ pub fn get_working_tree_diff(
         deletions
     );
 
-    // Special handling for untracked files that result in empty diffs
-    // git2's diff_index_to_workdir doesn't handle completely untracked files well
-    let absolute_path = from_repo_relative_path(repo, path);
-    if lines.is_empty() && absolute_path.exists() {
-        // Check if the file is actually untracked (not in git index)
-        let is_untracked = is_file_untracked(repo, path)?;
-
-        if is_untracked {
-            debug!("Untracked file detected, creating manual diff");
-
-            match std::fs::read_to_string(&absolute_path) {
-                Ok(content) => {
-                    let mut manual_lines = Vec::new();
-                    // Use relative path for diff header display
-                    let file_path_str = path.to_string_lossy();
-
-                    manual_lines.push(format!("+++ b/{}", file_path_str));
-                    manual_lines.push("--- /dev/null".to_string());
-
-                    let content_lines: Vec<&str> = content.lines().collect();
-                    manual_lines.push(format!("@@ -0,0 +1,{} @@", content_lines.len()));
-
-                    let mut line_additions = 0;
-                    for line in content_lines {
-                        manual_lines.push(format!("+{}", line));
-                        line_additions += 1;
-                    }
-
-                    debug!(
-                        "Manual diff created for untracked file: {} lines, +{} -0",
-                        manual_lines.len(),
-                        line_additions
-                    );
-                    return Ok((manual_lines, line_additions, 0));
-                }
-                Err(e) => {
-                    debug!(
-                        "Failed to read untracked file content from {:?}: {}",
-                        absolute_path, e
-                    );
-                }
-            }
-        } else {
-            debug!("File is clean (tracked but no changes), returning empty diff");
-        }
-    }
 
     Ok((lines, additions, deletions))
 }
 
-/// Check if a file is untracked (not in git index)
-fn is_file_untracked(repo: &Repository, path: &Path) -> Result<bool> {
-    let mut status_options = StatusOptions::new();
-    status_options.pathspec(path);
-    status_options.include_untracked(true);
-
-    let statuses = repo.statuses(Some(&mut status_options))?;
-
-    // If there are no status entries for this path, it's clean (tracked but unchanged)
-    // If there's an entry with WT_NEW flag, it's untracked
-    for status in statuses.iter() {
-        if let Some(status_path) = status.path()
-            && status_path == path.to_str().unwrap_or("")
-        {
-            return Ok(status.status().contains(git2::Status::WT_NEW));
-        }
-    }
-
-    // No status entry means file is clean (tracked but no changes)
-    Ok(false)
-}
 
 /// Generate diff for staged changes
 /// Replaces: git diff --cached --no-color <path>
@@ -328,33 +262,12 @@ fn extract_diff_lines(diff: &git2::Diff) -> Result<(Vec<String>, usize, usize)> 
     let mut deletions = 0;
 
     // Generate diff text using proper patch format
-    diff.print(git2::DiffFormat::Patch, |delta, hunk, line| {
+    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
         let origin = line.origin();
         let content = std::str::from_utf8(line.content()).unwrap_or("");
         let trimmed_content = content.trim_end_matches('\n');
 
         match origin {
-            // File header lines
-            'F' => {
-                if let Some(new_path) = delta.new_file().path() {
-                    lines.push(format!("+++ b/{}", new_path.display()));
-                }
-                if let Some(old_path) = delta.old_file().path() {
-                    lines.push(format!("--- a/{}", old_path.display()));
-                }
-            }
-            // Hunk header
-            'H' => {
-                if let Some(hunk) = hunk {
-                    lines.push(format!(
-                        "@@ -{},{} +{},{} @@",
-                        hunk.old_start(),
-                        hunk.old_lines(),
-                        hunk.new_start(),
-                        hunk.new_lines()
-                    ));
-                }
-            }
             // Context lines
             ' ' => {
                 lines.push(format!(" {}", trimmed_content));
@@ -369,9 +282,12 @@ fn extract_diff_lines(diff: &git2::Diff) -> Result<(Vec<String>, usize, usize)> 
                 deletions += 1;
                 lines.push(format!("-{}", trimmed_content));
             }
-            // Handle other cases
+            // Handle other cases (headers, hunks, etc.)
             _ => {
-                lines.push(format!("{}{}", origin, trimmed_content));
+                // Split multi-line content (like 'F' origin) into individual lines
+                for l in content.lines() {
+                    lines.push(l.to_string());
+                }
             }
         }
 
@@ -716,6 +632,7 @@ mod tests {
 
         Ok(())
     }
+
 
     #[test]
     fn test_to_repo_relative_path() -> Result<()> {
