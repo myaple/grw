@@ -586,15 +586,6 @@ impl App {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn is_side_by_side_diff(&self) -> bool {
-        if let Some(diff_pane) = self.pane_registry.get_pane(&PaneId::SideBySideDiff) {
-            diff_pane.visible()
-        } else {
-            false
-        }
-    }
-
     pub fn toggle_diff_panel(&mut self) {
         self.show_diff_panel = !self.show_diff_panel;
     }
@@ -1999,7 +1990,6 @@ mod tests {
 
         // Initially in single-pane diff mode
         assert_eq!(app.current_information_pane, InformationPane::Diff);
-        assert!(!app.is_side_by_side_diff());
 
         // Switch to side-by-side mode
         app.set_side_by_side_diff();
@@ -2011,7 +2001,6 @@ mod tests {
                 .visible()
         );
         assert!(!&app.pane_registry.get_pane(&PaneId::Diff).unwrap().visible());
-        assert!(app.is_side_by_side_diff());
 
         // Switch back to single-pane mode
         app.set_single_pane_diff();
@@ -2024,7 +2013,6 @@ mod tests {
                 .visible()
         );
         assert!(&app.pane_registry.get_pane(&PaneId::Diff).unwrap().visible());
-        assert!(!app.is_side_by_side_diff());
     }
 
     #[test]
