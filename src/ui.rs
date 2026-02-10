@@ -1742,6 +1742,7 @@ fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect, _git_repo: &Gi
 mod tests {
     use super::*;
     use crate::config::LlmConfig;
+    use log::debug;
     use std::env;
 
     fn create_test_app(

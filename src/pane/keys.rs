@@ -165,6 +165,16 @@ impl GlobalKeyHandler {
                 app.page_up(app.current_diff_height);
                 KeyResult::Handled
             }
+            KeyCode::Left => {
+                debug!("User pressed Left - previous file");
+                app.prev_file();
+                KeyResult::Handled
+            }
+            KeyCode::Right => {
+                debug!("User pressed Right - next file");
+                app.next_file();
+                KeyResult::Handled
+            }
             KeyCode::Tab => {
                 debug!("User pressed Tab - next file");
                 app.next_file();
