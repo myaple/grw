@@ -23,9 +23,16 @@ pub struct LlmClient {
 
 impl LlmClient {
     pub fn new(config: LlmConfig) -> Result<Self, String> {
+        // Create a redacted clone for logging to ensure secrets are never leaked
+        // even if the Debug implementation of LlmConfig changes.
+        let mut log_config = config.clone();
+        if log_config.api_key.is_some() {
+            log_config.api_key = Some("REDACTED".to_string());
+        }
+
         debug!(
             "🤖 LLM_CLIENT: Creating new client with config: {:?}",
-            config
+            log_config
         );
 
         let api_key = config
