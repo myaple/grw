@@ -68,72 +68,6 @@ pub struct CustomTheme {
     pub unchanged: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub enum LlmProvider {
-    #[default]
-    OpenAI,
-}
-
-impl FromStr for LlmProvider {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "openai" => Ok(LlmProvider::OpenAI),
-            _ => Err(format!("Invalid LLM provider: {s}")),
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct LlmConfig {
-    pub provider: Option<LlmProvider>,
-    pub model: Option<String>,
-    pub summary_model: Option<String>,
-    pub api_key: Option<String>,
-    pub base_url: Option<String>,
-    pub advice_model: Option<String>,
-    /// Maximum number of characters/tokens to send to LLM for both summary and advice generation
-    pub max_tokens: Option<usize>,
-}
-
-impl std::fmt::Debug for LlmConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LlmConfig")
-            .field("provider", &self.provider)
-            .field("model", &self.model)
-            .field("summary_model", &self.summary_model)
-            .field("api_key", &self.api_key.as_ref().map(|_| "REDACTED"))
-            .field("base_url", &self.base_url)
-            .field("advice_model", &self.advice_model)
-            .field("max_tokens", &self.max_tokens)
-            .finish()
-    }
-}
-
-impl LlmConfig {
-    /// Get the model to use for summary generation, falling back to default model
-    pub fn get_summary_model(&self) -> String {
-        self.summary_model
-            .clone()
-            .or_else(|| self.model.clone())
-            .unwrap_or_else(|| "gpt-4o-mini".to_string())
-    }
-
-    /// Get the model to use for advice generation, falling back to default model
-    pub fn get_advice_model(&self) -> String {
-        self.advice_model
-            .clone()
-            .or_else(|| self.model.clone())
-            .unwrap_or_else(|| "gpt-4o-mini".to_string())
-    }
-
-    /// Get the maximum number of tokens to send to LLM, with a sensible default
-    pub fn get_max_tokens(&self) -> usize {
-        self.max_tokens.unwrap_or(16000)
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub debug: Option<bool>,
@@ -143,10 +77,7 @@ pub struct Config {
     pub monitor_interval: Option<u64>,
     pub theme: Option<Theme>,
     pub custom_theme: Option<CustomTheme>,
-    pub llm: Option<LlmConfig>,
     pub commit_history_limit: Option<usize>,
-    pub summary_preload_enabled: Option<bool>,
-    pub summary_preload_count: Option<usize>,
 }
 
 impl Config {
@@ -162,17 +93,8 @@ impl Config {
         Ok(config)
     }
 
-    /// Get the commit history limit with a sensible default
     pub fn get_commit_history_limit(&self) -> usize {
         self.commit_history_limit.unwrap_or(100)
-    }
-
-    /// Get the summary preload configuration
-    pub fn get_summary_preload_config(&self) -> crate::git::PreloadConfig {
-        crate::git::PreloadConfig {
-            enabled: self.summary_preload_enabled.unwrap_or(true),
-            count: self.summary_preload_count.unwrap_or(5),
-        }
     }
 }
 
@@ -185,7 +107,6 @@ impl Config {
     }
 
     pub fn merge_with_args(&self, args: &Args) -> Self {
-        let llm_config = self.llm.clone().unwrap_or_default();
         Self {
             debug: if args.debug { Some(true) } else { self.debug },
             no_diff: if args.no_diff {
@@ -205,20 +126,7 @@ impl Config {
             monitor_interval: args.monitor_interval.or(self.monitor_interval),
             theme: args.theme.clone().or_else(|| self.theme.clone()),
             custom_theme: self.custom_theme.clone(),
-            llm: Some(LlmConfig {
-                provider: args.llm_provider.clone().or(llm_config.provider),
-                model: args.llm_model.clone().or(llm_config.model),
-                summary_model: args.llm_summary_model.clone().or(llm_config.summary_model),
-                api_key: args.llm_api_key.clone().or(llm_config.api_key),
-                base_url: args.llm_base_url.clone().or(llm_config.base_url),
-                advice_model: args.llm_advice_model.clone().or(llm_config.advice_model),
-                max_tokens: args.llm_max_tokens.or(llm_config.max_tokens),
-            }),
             commit_history_limit: args.commit_history_limit.or(self.commit_history_limit),
-            summary_preload_enabled: args
-                .summary_preload_enabled
-                .or(self.summary_preload_enabled),
-            summary_preload_count: args.summary_preload_count.or(self.summary_preload_count),
         }
     }
 }
@@ -246,44 +154,11 @@ pub struct Args {
     #[arg(long, help = "Theme to use (dark or light)")]
     pub theme: Option<Theme>,
 
-    #[arg(long, help = "LLM provider to use for advice (e.g., openai)")]
-    pub llm_provider: Option<LlmProvider>,
-
-    #[arg(long, help = "LLM model to use for advice")]
-    pub llm_model: Option<String>,
-
-    #[arg(
-        long,
-        help = "LLM model to use specifically for commit summary generation"
-    )]
-    pub llm_summary_model: Option<String>,
-
-    #[arg(long, help = "LLM model to use specifically for advice generation")]
-    pub llm_advice_model: Option<String>,
-
-    #[arg(
-        long,
-        help = "Maximum number of tokens to send to LLM for both summary and advice generation"
-    )]
-    pub llm_max_tokens: Option<usize>,
-
-    #[arg(long, help = "API key for the LLM provider")]
-    pub llm_api_key: Option<String>,
-
-    #[arg(long, help = "Base URL for the LLM provider")]
-    pub llm_base_url: Option<String>,
-
     #[arg(
         long,
         help = "Maximum number of commits to load in commit picker (default: 100)"
     )]
     pub commit_history_limit: Option<usize>,
-
-    #[arg(long, help = "Enable summary pre-loading (default: true)")]
-    pub summary_preload_enabled: Option<bool>,
-
-    #[arg(long, help = "Number of summaries to pre-load (default: 5)")]
-    pub summary_preload_count: Option<usize>,
 }
 
 #[cfg(test)]
@@ -501,84 +376,5 @@ mod tests {
         let merged = config.merge_with_args(&args);
 
         assert_eq!(merged.commit_history_limit, Some(75)); // From config
-    }
-
-    #[test]
-    fn test_llm_config_model_fallback() {
-        // Test summary model fallback to general model
-        let config = LlmConfig {
-            model: Some("gpt-3.5-turbo".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(config.get_summary_model(), "gpt-3.5-turbo");
-
-        // Test fallback to default when nothing is configured
-        let config = LlmConfig::default();
-        assert_eq!(config.get_summary_model(), "gpt-4o-mini");
-
-        // Test specific model overrides general model
-        let config = LlmConfig {
-            model: Some("gpt-3.5-turbo".to_string()),
-            summary_model: Some("gpt-4o-mini".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(config.get_summary_model(), "gpt-4o-mini");
-    }
-
-    #[test]
-    fn test_merge_with_args_llm_models() {
-        let config = Config {
-            llm: Some(LlmConfig {
-                model: Some("gpt-3.5-turbo".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        let args = Args::parse_from([
-            "grw",
-            "--llm-model",
-            "gpt-4-turbo",
-            "--llm-summary-model",
-            "gpt-4o-mini",
-        ]);
-
-        let merged = config.merge_with_args(&args);
-        let llm_config = merged.llm.unwrap();
-
-        assert_eq!(llm_config.model, Some("gpt-4-turbo".to_string())); // From args (CLI takes precedence)
-        assert_eq!(llm_config.summary_model, Some("gpt-4o-mini".to_string())); // From args
-    }
-
-    #[test]
-    fn test_merge_with_args_llm_models_from_config() {
-        let config = Config {
-            llm: Some(LlmConfig {
-                summary_model: Some("gpt-4o-mini".to_string()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        let args = Args::parse_from(["grw"]); // No LLM model args specified
-
-        let merged = config.merge_with_args(&args);
-        let llm_config = merged.llm.unwrap();
-
-        assert_eq!(llm_config.summary_model, Some("gpt-4o-mini".to_string())); // From config
-    }
-
-    #[test]
-    fn test_llm_config_debug_redaction() {
-        let config = LlmConfig {
-            api_key: Some("secret-api-key".to_string()),
-            model: Some("gpt-4".to_string()),
-            ..Default::default()
-        };
-
-        let debug_output = format!("{:?}", config);
-        assert!(!debug_output.contains("secret-api-key"));
-        assert!(debug_output.contains("REDACTED"));
-        assert!(debug_output.contains("gpt-4"));
     }
 }

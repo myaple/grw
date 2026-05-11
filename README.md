@@ -15,32 +15,22 @@ A terminal-based user interface (TUI) for monitoring git repositories in real-ti
 - **Logging**: Comprehensive logging with debug mode for troubleshooting
 - **Responsive UI**: Adapts to terminal size with intelligent header wrapping
 - **Light/Dark themes**: Toggle between light and dark themes
-- **AI-Powered Advice**: Get actionable suggestions for improving your code changes from an integrated AI assistant.
-
-## AI-Powered Advice Panel
-
-GRW includes an AI-powered advice panel that provides actionable suggestions for improving your code changes. It analyzes your diff and offers feedback to enhance code quality, performance, and readability.
-
-- **Activation**: Press `Ctrl+l` to open the advice panel.
-- **Interaction**: Use the chat interface to ask questions or request further clarification.
-- **Configuration**: Requires an LLM API key and can be configured via command-line arguments or the `config.json` file.
 
 ## Keybindings
 
 ### General
 - `?` - Show/hide help
-- `Esc` - Exit help page or active panel (like Advice Panel)
+- `Esc` - Exit help page
 - `Ctrl+h` - Toggle diff panel visibility
 - `Ctrl+b` - Toggle changed files pane visibility
 - `Ctrl+o` / `Ctrl+m` - Toggle monitor pane visibility
-- `Ctrl+l` - Toggle AI advice panel
 - `Ctrl+t` - Cycle through available themes (light, dark, and custom if configured)
 - `Ctrl+P` - Enter commit picker mode
 - `Ctrl+W` - Return to working directory view
 - `q` / `Ctrl+c` - Quit application
 
 ### Pane Modes
-- `Ctrl+d` - Switch to inline diff view (or exit Advice Panel)
+- `Ctrl+d` - Switch to inline diff view
 - `Ctrl+s` - Switch to side-by-side diff view
 
 ### File Tree

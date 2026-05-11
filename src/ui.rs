@@ -1,5 +1,4 @@
-use crate::git::{CommitInfo, FileDiff, GitRepo, PreloadConfig, SummaryPreloader, TreeNode};
-use crate::llm::LlmClient;
+use crate::git::{CommitInfo, FileDiff, GitRepo, TreeNode};
 use git2::Status;
 use crate::pane::{PaneId, PaneRegistry};
 use crossterm::event::KeyEvent;
@@ -178,12 +177,6 @@ pub enum InformationPane {
     Diff,
     SideBySideDiff,
     Help,
-    // Add new pane types here in the future
-    // Examples:
-    // Stats,
-    // Blame,
-    // History,
-    // Search,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -234,7 +227,6 @@ pub struct App {
     last_active_pane: ActivePane,
     app_mode: AppMode,
     selected_commit: Option<CommitInfo>,
-    summary_preloader: SummaryPreloader,
     last_branch_name: Option<String>,
 }
 
@@ -244,24 +236,12 @@ impl App {
         show_changed_files_pane: bool,
         initial_theme_index: usize,
         themes: Vec<Theme>,
-        llm_client: Option<LlmClient>,
-        llm_state: Arc<crate::shared_state::LlmSharedState>,
     ) -> Self {
         let theme = themes
             .get(initial_theme_index)
             .cloned()
             .unwrap_or(Theme::Dark);
-        let pane_registry = if let Some(ref llm_client) = llm_client {
-            PaneRegistry::new(theme.clone(), llm_client.clone(), llm_state.clone())
-        } else {
-            // Provide a dummy or default LlmClient for the registry when none is available.
-            let mut dummy_llm_config = crate::config::LlmConfig::default();
-            if std::env::var("OPENAI_API_KEY").is_err() {
-                dummy_llm_config.api_key = Some("dummy_key".to_string());
-            }
-            let dummy_llm_client = LlmClient::new(dummy_llm_config).unwrap();
-            PaneRegistry::new(theme.clone(), dummy_llm_client, llm_state.clone())
-        };
+        let pane_registry = PaneRegistry::new(theme.clone());
 
         Self {
             files: Vec::new(),
@@ -291,7 +271,6 @@ impl App {
             last_active_pane: ActivePane::default(),
             app_mode: AppMode::Normal,
             selected_commit: None,
-            summary_preloader: SummaryPreloader::new(llm_client.clone(), Arc::clone(&llm_state)),
             last_branch_name: None,
         }
     }
@@ -746,58 +725,11 @@ impl App {
             pane.set_visible(!is_visible);
         });
 
-        // Special handling for advice panel to ensure it takes over the entire screen
-        if *pane_id == PaneId::Advice {
-            if !is_visible {
-                // Advice panel is being shown - hide other panes
-                self.hide_all_panes_except(PaneId::Advice);
-            } else {
-                // Advice panel is being hidden - restore normal view
-                self.restore_normal_pane_visibility();
-            }
-        }
-
         Ok(())
-    }
-
-    fn hide_all_panes_except(&mut self, except_pane: PaneId) {
-        // Hide all information panes except the specified one
-        let panes_to_check = &[PaneId::Diff, PaneId::SideBySideDiff, PaneId::Help];
-
-        for &pane_id in panes_to_check {
-            if pane_id != except_pane {
-                self.pane_registry.with_pane_mut(&pane_id, |pane| {
-                    pane.set_visible(false);
-                });
-            }
-        }
-    }
-
-    fn restore_normal_pane_visibility(&mut self) {
-        // Restore the normal visibility based on current app state
-        if self.show_diff_panel {
-            match self.current_information_pane {
-                InformationPane::Diff => self.set_single_pane_diff(),
-                InformationPane::SideBySideDiff => self.set_side_by_side_diff(),
-                _ => self.set_single_pane_diff(),
-            }
-        }
     }
 
     pub fn forward_key_to_panes(&mut self, key: KeyEvent) -> bool {
         let mut handled = false;
-
-        // Forward to advice panel if it's visible and has priority
-        if let Some(advice_pane) = self.pane_registry.get_pane(&PaneId::Advice)
-            && advice_pane.visible()
-        {
-            if let Some(pane_handled) = self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
-                pane.handle_event(&crate::pane::AppEvent::Key(key))
-            }) {
-                handled |= pane_handled;
-            }
-            return handled; // Advice panel gets priority when visible
-        }
 
         // Forward to commit picker panes if in commit picker mode
         if self.is_in_commit_picker_mode() {
@@ -1091,10 +1023,13 @@ impl App {
     }
 
     pub fn get_current_selected_commit_from_picker(&self) -> Option<CommitInfo> {
-        if let Some(pane) = self.pane_registry.get_pane(&PaneId::CommitPicker)
+        if let Some(pane) = self
+            .pane_registry
+            .get_pane(&crate::pane::PaneId::CommitPicker)
             && let Some(commit_picker) = pane.as_commit_picker_pane()
         {
-            return commit_picker.get_current_commit().cloned();
+            let commits = commit_picker.get_current_commit().cloned();
+            return commits;
         }
         None
     }
@@ -1115,130 +1050,16 @@ impl App {
             .unwrap_or(false)
     }
 
-    pub fn update_commit_summary_with_current_selection(
-        &mut self,
-        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>,
-    ) {
+    pub fn update_commit_summary_with_current_selection(&mut self) {
         if let Some(current_commit) = self.get_current_selected_commit_from_picker() {
-            let commit_sha = current_commit.sha.clone();
-
-            // First update the commit in the pane
+            // Update the commit in the pane
             self.pane_registry
                 .with_pane_mut(&PaneId::CommitSummary, |pane| {
                     if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
                         commit_summary.update_commit(Some(current_commit));
                     }
                 });
-
-            // Then check if we have a cached summary and set it if available
-            self.check_and_set_cached_summary(&commit_sha, llm_state);
         }
-    }
-
-    /// Check shared state cache for summary and set it in CommitSummaryPane if available
-    pub fn check_and_set_cached_summary(
-        &mut self,
-        commit_sha: &str,
-        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>,
-    ) {
-        // Check shared state cache directly
-        if let Some(summary) = llm_state.get_cached_summary(commit_sha) {
-            self.pane_registry
-                .with_pane_mut(&PaneId::CommitSummary, |pane| {
-                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
-                        commit_summary.set_cached_summary(commit_sha, summary);
-                    }
-                });
-        }
-    }
-
-    /// Handle cached summary result from GitWorker
-    pub fn handle_cached_summary_result(
-        &mut self,
-        cached_summary: Option<String>,
-        commit_sha: &str,
-    ) {
-        if let Some(summary) = cached_summary {
-            // Set the cached summary in the CommitSummaryPane
-            self.pane_registry
-                .with_pane_mut(&PaneId::CommitSummary, |pane| {
-                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut() {
-                        commit_summary.set_cached_summary(commit_sha, summary);
-                    }
-                });
-        } else {
-            // No cached summary available, trigger generation if needed
-            self.pane_registry
-                .with_pane_mut(&PaneId::CommitSummary, |pane| {
-                    if let Some(commit_summary) = pane.as_commit_summary_pane_mut()
-                        && commit_summary.needs_summary()
-                    {
-                        commit_summary.force_generate_summary();
-                    }
-                });
-        }
-    }
-
-    /// Cache a newly generated summary in shared state
-    pub fn cache_generated_summary(
-        &mut self,
-        commit_sha: String,
-        summary: String,
-        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>,
-    ) {
-        // Cache directly in shared state
-        llm_state.cache_summary(commit_sha, summary);
-    }
-
-    /// Handle cache callbacks from CommitSummaryPane
-    pub fn handle_commit_summary_cache_callbacks(
-        &mut self,
-        llm_state: &std::sync::Arc<crate::shared_state::LlmSharedState>,
-    ) {
-        if let Some(cache_callback) = self
-            .pane_registry
-            .with_pane_mut(&PaneId::CommitSummary, |pane| {
-                pane.as_commit_summary_pane_mut()
-                    .and_then(|commit_summary| commit_summary.take_cache_callback())
-            })
-            .flatten()
-        {
-            let (commit_sha, summary) = cache_callback;
-            self.cache_generated_summary(commit_sha, summary, llm_state);
-        }
-    }
-
-    /// Poll for LLM summary updates from CommitSummaryPane
-    /// Check for async advice panel task completion and update content
-    pub fn check_advice_panel_tasks(&mut self) {
-        // Get files for initialization
-        let files = self.get_files().clone();
-
-        self.pane_registry.with_pane_mut(&PaneId::Advice, |pane| {
-            if let Some(advice_panel) = pane.as_advice_pane_mut() {
-                // Initialize with current diff if needed
-                advice_panel.initialize_with_current_diff(&files);
-                // Check for pending async tasks
-                advice_panel.check_pending_tasks();
-            }
-        });
-    }
-
-    /// Check if advice panel is currently visible
-    pub fn is_advice_panel_visible(&self) -> bool {
-        self.pane_registry
-            .get_pane(&PaneId::Advice)
-            .map(|pane| pane.visible())
-            .unwrap_or(false)
-    }
-
-    /// Check if advice panel chat input is currently active
-    pub fn is_advice_panel_chat_input_active(&self) -> bool {
-        self.pane_registry
-            .get_pane(&PaneId::Advice)
-            .and_then(|pane| pane.as_advice_pane())
-            .map(|advice_panel| advice_panel.chat_input_active)
-            .unwrap_or(false)
     }
 
     /// Check if diff panel is currently visible
@@ -1410,21 +1231,6 @@ impl App {
         }
     }
 
-    // Summary preloader methods - no longer needed with shared state
-
-    pub fn preload_summaries(&mut self, commits: &[CommitInfo]) {
-        self.summary_preloader.preload_summaries(commits);
-    }
-
-    pub fn preload_summaries_around_index(&mut self, commits: &[CommitInfo], current_index: usize) {
-        self.summary_preloader
-            .preload_around_index(commits, current_index);
-    }
-
-    pub fn set_preload_config(&mut self, config: PreloadConfig) {
-        self.summary_preloader.set_config(config);
-    }
-
     pub fn get_commit_picker_state(&self) -> Option<(Vec<CommitInfo>, usize)> {
         if let Some(pane) = self
             .pane_registry
@@ -1460,16 +1266,6 @@ pub fn render<B: Backend>(f: &mut Frame, app: &App, git_repo: &GitRepo) {
     // Render status bar using new pane system
     app.pane_registry
         .render(f, app, chunks[0], PaneId::StatusBar, git_repo);
-
-    // Check if advice panel is visible - it takes over the entire screen
-    if let Some(advice_pane) = app.pane_registry.get_pane(&PaneId::Advice)
-        && advice_pane.visible()
-    {
-        // Render advice pane as full-screen overlay
-        app.pane_registry
-            .render(f, app, chunks[1], PaneId::Advice, git_repo);
-        return;
-    }
 
     // Check if we're in commit picker mode
     if app.is_in_commit_picker_mode() {
@@ -1741,9 +1537,6 @@ fn render_file_tree_content(f: &mut Frame, app: &App, area: Rect, _git_repo: &Gi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LlmConfig;
-    use log::debug;
-    use std::env;
 
     fn create_test_app(
         show_diff_panel: bool,
@@ -1751,19 +1544,11 @@ mod tests {
         initial_theme_index: usize,
         themes: Vec<Theme>,
     ) -> App {
-        let mut llm_config = LlmConfig::default();
-        if env::var("OPENAI_API_KEY").is_err() {
-            llm_config.api_key = Some("dummy_key".to_string());
-        }
-        let llm_client = LlmClient::new(llm_config).ok();
-        let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
         App::new_with_config(
             show_diff_panel,
             show_changed_files_pane,
             initial_theme_index,
             themes,
-            llm_client,
-            llm_state,
         )
     }
 

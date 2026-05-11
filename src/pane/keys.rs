@@ -1,7 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use log::debug;
 
-use super::advice_panel::AdviceMode;
 use crate::ui::App;
 
 /// Key handling result type
@@ -192,17 +191,6 @@ impl GlobalKeyHandler {
             KeyCode::Esc => {
                 if app.is_showing_help() {
                     app.toggle_help();
-                } else if app.is_advice_panel_visible() {
-                    debug!("User pressed Escape - hiding advice panel and showing diff pane");
-                    // Hide advice panel and show diff pane (same behavior as Ctrl+D)
-                    if let Err(e) = app.toggle_pane_visibility(&super::PaneId::Advice) {
-                        log::warn!("Failed to hide advice panel: {}", e);
-                    }
-                    if !app.is_diff_panel_visible()
-                        && let Err(e) = app.toggle_pane_visibility(&super::PaneId::Diff)
-                    {
-                        log::warn!("Failed to show diff pane: {}", e);
-                    }
                 }
                 KeyResult::Handled
             }
@@ -229,33 +217,6 @@ impl GlobalKeyHandler {
             KeyCode::Char('m') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.toggle_monitor_pane();
                 KeyResult::Handled
-            }
-            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                debug!("User pressed Ctrl+L - toggling advice panel");
-                if let Err(e) = app.toggle_pane_visibility(&super::PaneId::Advice) {
-                    log::warn!("Failed to toggle advice panel: {}", e);
-                }
-                KeyResult::Handled
-            }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                debug!("User pressed Ctrl+D - switching to diff pane");
-                // Only handle Ctrl+D for advice panel navigation when advice panel is visible
-                if app.is_advice_panel_visible() {
-                    // Hide advice panel and show diff pane
-                    if let Err(e) = app.toggle_pane_visibility(&super::PaneId::Advice) {
-                        log::warn!("Failed to hide advice panel: {}", e);
-                    }
-                    if !app.is_diff_panel_visible()
-                        && let Err(e) = app.toggle_pane_visibility(&super::PaneId::Diff)
-                    {
-                        log::warn!("Failed to show diff pane: {}", e);
-                    }
-                    KeyResult::Handled
-                } else {
-                    // Fall through to default Ctrl+D behavior (single pane diff)
-                    app.set_single_pane_diff();
-                    KeyResult::Handled
-                }
             }
             _ => KeyResult::NotHandled,
         }
@@ -299,209 +260,6 @@ impl PaneKeyUtils {
                 true
             }
             _ => false,
-        }
-    }
-}
-
-/// Advice panel specific key handling
-pub struct AdvicePanelKeyHandler;
-
-impl AdvicePanelKeyHandler {
-    /// Handle key events specific to the advice panel
-    pub fn handle_advice_panel_keys(
-        advice_panel: &mut super::advice_panel::AdvicePanel,
-        key: &KeyEvent,
-    ) -> bool {
-        use super::advice_panel::AdviceMode;
-
-        match advice_panel.mode {
-            AdviceMode::Chatting => Self::handle_chatting_mode_keys(advice_panel, key),
-            AdviceMode::Help => Self::handle_help_mode_keys(advice_panel, key),
-        }
-    }
-
-    /// Handle keys when in chat mode
-    fn handle_chatting_mode_keys(
-        advice_panel: &mut super::advice_panel::AdvicePanel,
-        key: &KeyEvent,
-    ) -> bool {
-        if advice_panel.chat_input_active {
-            // Chat input is active, handle input keys
-            match key.code {
-                KeyCode::Enter => {
-                    if !advice_panel.chat_input.is_empty() {
-                        let message = advice_panel.chat_input.clone();
-                        advice_panel.chat_input.clear();
-                        advice_panel.chat_input_active = false;
-                        // Send the message
-                        let _ = advice_panel.send_chat_message(&message);
-                    }
-                    true
-                }
-                KeyCode::Esc => {
-                    advice_panel.chat_input_active = false;
-                    advice_panel.chat_input.clear();
-                    true
-                }
-                KeyCode::Backspace => {
-                    advice_panel.chat_input.pop();
-                    true
-                }
-                KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    // Ctrl+W: Delete last word
-                    let chars: Vec<char> = advice_panel.chat_input.chars().collect();
-                    let mut delete_pos = chars.len();
-                    // Find the start of the last word by looking backwards
-                    while delete_pos > 0 && chars[delete_pos - 1].is_whitespace() {
-                        delete_pos -= 1;
-                    }
-                    while delete_pos > 0 && !chars[delete_pos - 1].is_whitespace() {
-                        delete_pos -= 1;
-                    }
-                    // Rebuild the string up to delete_pos
-                    advice_panel.chat_input = chars[..delete_pos].iter().collect();
-                    true
-                }
-                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    // Ctrl+U: Delete entire line
-                    advice_panel.chat_input.clear();
-                    true
-                }
-                KeyCode::Char(c) => {
-                    advice_panel.chat_input.push(c);
-                    true
-                }
-                _ => false,
-            }
-        } else {
-            // Chat input is not active, handle navigation and activation keys
-            match key.code {
-                KeyCode::Char('/') => {
-                    advice_panel.chat_input_active = true;
-                    true
-                }
-                KeyCode::Char('?') => {
-                    advice_panel.mode = AdviceMode::Help;
-                    // Reset scroll offset when entering help mode
-                    advice_panel.scroll_offset = 0;
-                    // Backup current chat content before switching to help
-                    advice_panel.chat_content_backup = Some(advice_panel.content.clone());
-                    // Set help content when entering help mode
-                    let help_text = vec![
-                        "Git Repository Watcher - Chat Interface Help",
-                        "",
-                        "Navigation:",
-                        "  j / k / ↑ / ↓     - Scroll up/down",
-                        "  PageUp / PageDown  - Scroll faster",
-                        "  g                  - Go to top",
-                        "  Shift+G            - Go to bottom",
-                        "",
-                        "Chat Interface:",
-                        "  /                  - Activate chat input",
-                        "  Enter              - Send message (when input active)",
-                        "  Esc                - Deactivate chat input",
-                        "",
-                        "Panel Controls:",
-                        "  Ctrl+L             - Toggle advice panel",
-                        "  Ctrl+D             - Return to diff pane",
-                        "  Ctrl+R             - Refresh diff and clear chat",
-                        "  Esc                - Return to diff pane",
-                        "  ?                  - Show this help",
-                        "",
-                        "Tips:",
-                        "- Chat history is preserved across panel activations",
-                        "- Initial message with diff is sent automatically on first visit",
-                        "- Use Ctrl+R to refresh with latest diff and start fresh conversation",
-                    ]
-                    .join("\n");
-                    advice_panel.content = super::advice_panel::AdviceContent::Help(help_text);
-                    true
-                }
-                KeyCode::Esc => {
-                    if advice_panel.chat_input_active {
-                        // Deactivate chat input
-                        advice_panel.chat_input_active = false;
-                        advice_panel.chat_input.clear();
-                        true
-                    } else {
-                        false // Let parent handle Esc for panel closing
-                    }
-                }
-                // Handle scrolling
-                key_code => {
-                    let content_lines = match &advice_panel.content {
-                        super::advice_panel::AdviceContent::Chat(messages) => {
-                            let mut line_count = 0;
-                            for msg in messages {
-                                // Skip user messages that contain the diff pattern
-                                if msg.role == super::advice_panel::MessageRole::User
-                                    && msg.content.contains("Please provide 3 actionable improvements for the following code changes:") {
-                                    continue;
-                                }
-                                // Count header line
-                                line_count += 1;
-                                // Count content lines
-                                line_count += msg.content.lines().count();
-                                // Add empty line between messages
-                                line_count += 1;
-                            }
-                            // Add thinking indicator if present
-                            if advice_panel.loading_state
-                                == super::advice_panel::LoadingState::SendingChat
-                                && advice_panel.pending_chat_message_id.is_some()
-                            {
-                                line_count += 3; // "AI:" + "Thinking..." + empty line
-                            }
-                            line_count
-                        }
-                        super::advice_panel::AdviceContent::Help(help_text) => {
-                            help_text.lines().count()
-                        }
-                        _ => 0,
-                    };
-                    let fake_key_event = KeyEvent::new(key_code, KeyModifiers::NONE);
-                    PaneKeyUtils::handle_scroll_keys(
-                        &mut advice_panel.scroll_offset,
-                        &fake_key_event,
-                        content_lines,
-                    )
-                }
-            }
-        }
-    }
-
-    /// Handle keys when in help mode
-    fn handle_help_mode_keys(
-        advice_panel: &mut super::advice_panel::AdvicePanel,
-        key: &KeyEvent,
-    ) -> bool {
-        match key.code {
-            KeyCode::Esc => {
-                // Exit help mode and restore chat content
-                advice_panel.mode = super::advice_panel::AdviceMode::Chatting;
-                // Restore backed up chat content if available
-                if let Some(backup_content) = advice_panel.chat_content_backup.take() {
-                    advice_panel.content = backup_content;
-                } else {
-                    // Fallback to empty chat if no backup
-                    advice_panel.content = super::advice_panel::AdviceContent::Chat(Vec::new());
-                }
-                false // Let parent handle Esc for panel closing
-            }
-            key_code => {
-                let content_lines = match &advice_panel.content {
-                    super::advice_panel::AdviceContent::Help(help_text) => {
-                        help_text.lines().count()
-                    }
-                    _ => 0,
-                };
-                let fake_key_event = KeyEvent::new(key_code, KeyModifiers::NONE);
-                PaneKeyUtils::handle_scroll_keys(
-                    &mut advice_panel.scroll_offset,
-                    &fake_key_event,
-                    content_lines,
-                )
-            }
         }
     }
 }

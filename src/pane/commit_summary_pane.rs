@@ -1,17 +1,14 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
 };
-use std::sync::Arc;
 
 use super::{AppEvent, Pane};
 use crate::git::GitRepo;
-use crate::llm::LlmClient;
-use crate::shared_state::LlmSharedState;
 use crate::ui::App;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,13 +21,7 @@ pub struct CommitSummaryPane {
     visible: bool,
     current_commit: Option<crate::git::CommitInfo>,
     scroll_offset: usize,
-    llm_summary: Option<String>,
-    llm_client: Option<LlmClient>,
-    is_loading_summary: bool,
-    pending_summary_sha: Option<String>, // Track which commit we're waiting for a summary for
-    llm_shared_state: Option<Arc<LlmSharedState>>,
     loading_state: CommitSummaryLoadingState,
-    cache_callback: Option<(String, String)>, // (commit_sha, summary) to cache
 }
 
 impl Default for CommitSummaryPane {
@@ -45,28 +36,7 @@ impl CommitSummaryPane {
             visible: false,
             current_commit: None,
             scroll_offset: 0,
-            llm_summary: None,
-            llm_client: None,
-            is_loading_summary: false,
-            pending_summary_sha: None,
-            llm_shared_state: None,
             loading_state: CommitSummaryLoadingState::NoCommit,
-            cache_callback: None,
-        }
-    }
-
-    pub fn new_with_llm_client(llm_client: Option<LlmClient>) -> Self {
-        Self {
-            visible: false,
-            current_commit: None,
-            scroll_offset: 0,
-            llm_summary: None,
-            llm_client,
-            is_loading_summary: false,
-            pending_summary_sha: None,
-            llm_shared_state: None,
-            loading_state: CommitSummaryLoadingState::NoCommit,
-            cache_callback: None,
         }
     }
 
@@ -82,76 +52,15 @@ impl CommitSummaryPane {
 
         if commit_changed {
             // Reset state when commit changes
-            self.llm_summary = None;
             self.scroll_offset = 0;
-            self.is_loading_summary = false;
-            self.pending_summary_sha = None;
-            self.clear_error();
-            self.cache_callback = None;
 
             // Update loading state based on new commit
             if self.current_commit.is_some() {
-                // Since commits from get_commit_history already have files_changed populated,
-                // we can immediately show the files and only wait for LLM summary
                 self.loading_state = CommitSummaryLoadingState::Loaded;
-                // Don't request LLM summary immediately - let the App check cache first
             } else {
                 self.loading_state = CommitSummaryLoadingState::NoCommit;
             }
         }
-    }
-
-    pub fn set_shared_state(&mut self, llm_shared_state: Arc<LlmSharedState>) {
-        self.llm_shared_state = Some(llm_shared_state);
-    }
-
-    pub fn clear_error(&mut self) {
-        if let Some(shared_state) = &self.llm_shared_state {
-            shared_state.clear_error("commit_summary");
-        }
-    }
-
-    fn request_llm_summary(&mut self) {
-        if let Some(_commit) = &self.current_commit {
-            self.loading_state = CommitSummaryLoadingState::Loaded;
-            self.llm_summary =
-                Some("LLM summary generation not yet implemented with shared state".to_string());
-        }
-    }
-
-    /// Set a cached summary directly without generating a new one
-    pub fn set_cached_summary(&mut self, commit_sha: &str, summary: String) {
-        if let Some(current_commit) = &self.current_commit
-            && current_commit.sha == commit_sha
-        {
-            self.llm_summary = Some(summary);
-            self.clear_error();
-            self.is_loading_summary = false;
-            self.pending_summary_sha = None;
-            self.loading_state = CommitSummaryLoadingState::Loaded;
-        }
-    }
-
-    /// Check if we need to request a summary for the current commit
-    pub fn needs_summary(&self) -> bool {
-        if let Some(_current_commit) = &self.current_commit {
-            // Need summary if we don't have one and we're not currently loading
-            self.llm_summary.is_none() && !self.is_loading_summary
-        } else {
-            false
-        }
-    }
-
-    /// Force generation of a new summary (bypassing cache)
-    pub fn force_generate_summary(&mut self) {
-        self.llm_summary = None;
-        self.clear_error();
-        self.request_llm_summary();
-    }
-
-    /// Get and clear any pending cache callback
-    pub fn take_cache_callback(&mut self) -> Option<(String, String)> {
-        self.cache_callback.take()
     }
 }
 
@@ -196,13 +105,7 @@ impl Pane for CommitSummaryPane {
                 return Ok(());
             }
 
-            // Split the area into two sections: file changes and LLM summary
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-                .split(area);
-
-            // Render file changes section
+            // Render file changes section (full area since no LLM summary section)
             let mut file_items = Vec::new();
 
             if commit.files_changed.is_empty() {
@@ -221,7 +124,7 @@ impl Pane for CommitSummaryPane {
                         continue;
                     }
 
-                    let visible_height = chunks[0].height.saturating_sub(2) as usize; // Account for borders
+                    let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
                     if file_items.len() >= visible_height {
                         break;
                     }
@@ -290,34 +193,7 @@ impl Pane for CommitSummaryPane {
                     .border_style(Style::default().fg(theme.border_color())),
             );
 
-            f.render_widget(file_list, chunks[0]);
-
-            // Render LLM summary section with enhanced error handling and loading states
-            let summary_content = if let Some(summary) = &self.llm_summary {
-                summary.clone()
-            } else if self.is_loading_summary {
-                "⏳ Generating summary...".to_string()
-            } else if self.llm_client.is_none() {
-                "LLM client not available".to_string()
-            } else {
-                "📋 Checking cache...".to_string()
-            };
-
-            let summary_lines: Vec<Line> = summary_content
-                .lines()
-                .map(|line| Line::from(line.to_string()))
-                .collect();
-
-            let summary_paragraph = Paragraph::new(summary_lines)
-                .block(
-                    Block::default()
-                        .title("LLM Summary")
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.border_color())),
-                )
-                .wrap(Wrap { trim: false });
-
-            f.render_widget(summary_paragraph, chunks[1]);
+            f.render_widget(file_list, area);
         } else {
             // No commit selected
             let paragraph = Paragraph::new("No commit selected").block(
@@ -395,6 +271,7 @@ impl Pane for CommitSummaryPane {
         Some(self)
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,7 +284,6 @@ mod tests {
         assert!(!pane.visible());
         assert!(pane.current_commit.is_none());
         assert_eq!(pane.scroll_offset, 0);
-        assert!(pane.llm_summary.is_none());
     }
 
     #[test]
@@ -430,7 +306,6 @@ mod tests {
         assert!(pane.current_commit.is_some());
         assert_eq!(pane.current_commit.as_ref().unwrap().sha, "abc123");
         assert_eq!(pane.scroll_offset, 0);
-        assert!(pane.llm_summary.is_none());
     }
 
     #[test]
@@ -482,126 +357,5 @@ mod tests {
         let top_event = AppEvent::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
         assert!(pane.handle_event(&top_event));
         assert_eq!(pane.scroll_offset, 0);
-    }
-
-    #[test]
-    fn test_commit_summary_pane_llm_summary() {
-        let mut pane = CommitSummaryPane::new();
-
-        // Test that initially there's no summary
-        assert!(pane.llm_summary.is_none());
-        assert!(!pane.is_loading_summary);
-
-        // Test that we can manually set a summary (for testing purposes)
-        pane.llm_summary = Some("This is a test summary".to_string());
-        assert!(pane.llm_summary.is_some());
-        assert_eq!(pane.llm_summary.as_ref().unwrap(), "This is a test summary");
-    }
-
-    #[test]
-    fn test_commit_summary_pane_with_llm_client() {
-        use crate::config::LlmConfig;
-
-        // Create a test LLM client
-        let llm_config = LlmConfig {
-            api_key: Some("test_key".to_string()),
-            ..Default::default()
-        };
-        let llm_client = crate::llm::LlmClient::new(llm_config).ok();
-
-        let pane = CommitSummaryPane::new_with_llm_client(llm_client);
-
-        // Test that the pane has an LLM client
-        assert!(pane.llm_client.is_some());
-        assert!(pane.llm_summary.is_none());
-        assert!(!pane.is_loading_summary);
-
-        // Test that a pane without LLM client works too
-        let pane_no_llm = CommitSummaryPane::new_with_llm_client(None);
-        assert!(pane_no_llm.llm_client.is_none());
-        assert!(pane_no_llm.llm_summary.is_none());
-        assert!(!pane_no_llm.is_loading_summary);
-    }
-
-    #[test]
-    fn test_commit_files_display_immediately() {
-        let mut pane = CommitSummaryPane::new();
-
-        // Create a commit with file changes (simulating data from get_commit_history)
-        let commit = crate::git::CommitInfo {
-            sha: "abc123".to_string(),
-            short_sha: "abc123".to_string(),
-            message: "Test commit".to_string(),
-            files_changed: vec![
-                crate::git::CommitFileChange {
-                    path: std::path::PathBuf::from("src/main.rs"),
-                    status: crate::git::FileChangeStatus::Modified,
-                    additions: 10,
-                    deletions: 5,
-                },
-                crate::git::CommitFileChange {
-                    path: std::path::PathBuf::from("src/lib.rs"),
-                    status: crate::git::FileChangeStatus::Added,
-                    additions: 20,
-                    deletions: 0,
-                },
-            ],
-        };
-
-        // Update the pane with the commit
-        pane.update_commit(Some(commit.clone()));
-
-        // Verify that the pane is immediately in Loaded state (not LoadingFiles)
-        assert_eq!(pane.loading_state, CommitSummaryLoadingState::Loaded);
-
-        // Verify that the commit data is available
-        assert!(pane.current_commit.is_some());
-        let current_commit = pane.current_commit.as_ref().unwrap();
-        assert_eq!(current_commit.files_changed.len(), 2);
-        assert_eq!(
-            current_commit.files_changed[0].path,
-            std::path::PathBuf::from("src/main.rs")
-        );
-        assert_eq!(
-            current_commit.files_changed[1].path,
-            std::path::PathBuf::from("src/lib.rs")
-        );
-
-        // LLM summary should still be None (not loaded yet)
-        assert!(pane.llm_summary.is_none());
-
-        // But the files should be immediately available for display
-        // (This would be verified in the render method, which would show files immediately)
-    }
-
-    #[test]
-    fn test_commit_summary_pane_cached_summary() {
-        let mut pane = CommitSummaryPane::new_with_llm_client(None);
-
-        // Create a test commit
-        let test_commit = crate::git::CommitInfo {
-            sha: "abc123".to_string(),
-            short_sha: "abc123".to_string(),
-            message: "Test commit".to_string(),
-            files_changed: vec![],
-        };
-
-        // Update with commit
-        pane.update_commit(Some(test_commit));
-
-        // Initially should need summary
-        assert!(pane.needs_summary());
-        assert!(pane.llm_summary.is_none());
-
-        // Set a cached summary
-        pane.set_cached_summary("abc123", "This is a cached summary".to_string());
-
-        // Should no longer need summary and should have the cached one
-        assert!(!pane.needs_summary());
-        assert_eq!(
-            pane.llm_summary,
-            Some("This is a cached summary".to_string())
-        );
-        assert_eq!(pane.loading_state, CommitSummaryLoadingState::Loaded);
     }
 }

@@ -113,16 +113,6 @@ pub struct LlmSharedState {
 
     /// Error states
     error_state: HashMap<String, String>,
-
-    /// Advice panel state management
-    active_advice_tasks: HashMap<String, u64>, // diff_hash -> timestamp
-    advice_error_state: HashMap<String, String>, // operation_key -> error message
-
-    /// Current advice content storage for async task results
-    current_advice_results: HashMap<String, Vec<crate::pane::AdviceImprovement>>, // diff_hash -> advice results
-
-    /// Pending chat responses for async task results
-    pending_chat_responses: HashMap<String, crate::pane::ChatMessageData>, // message_id -> pending AI response
 }
 
 impl Default for LlmSharedState {
@@ -137,10 +127,6 @@ impl LlmSharedState {
             summary_cache: HashMap::new(),
             active_summary_tasks: HashMap::new(),
             error_state: HashMap::new(),
-            active_advice_tasks: HashMap::new(),
-            advice_error_state: HashMap::new(),
-            current_advice_results: HashMap::new(),
-            pending_chat_responses: HashMap::new(),
         }
     }
 
@@ -200,68 +186,6 @@ impl LlmSharedState {
     /// Check if there are any active errors
     pub fn has_errors(&self) -> bool {
         !self.error_state.is_empty()
-    }
-
-    /// Clean up stale tasks older than the specified threshold (in seconds)
-    /// Set advice panel error state
-    pub fn set_advice_error(&self, key: String, error: String) {
-        self.advice_error_state.upsert(key, error);
-    }
-
-    /// Get advice panel error state
-    pub fn get_advice_error(&self, key: &str) -> Option<String> {
-        self.advice_error_state.read(key, |_, v| v.clone())
-    }
-
-    /// Clear advice panel error state
-    pub fn clear_advice_error(&self, key: &str) -> bool {
-        self.advice_error_state.remove(key).is_some()
-    }
-
-    /// Start tracking an advice generation task
-    pub fn start_advice_task(&self, diff_hash: String) {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        self.active_advice_tasks.upsert(diff_hash, timestamp);
-    }
-
-    /// Complete an advice generation task
-    pub fn complete_advice_task(&self, diff_hash: &str) {
-        let _ = self.active_advice_tasks.remove(diff_hash);
-    }
-
-    /// Retrieve advice results for a specific diff hash
-    pub fn get_advice_results(
-        &self,
-        diff_hash: &str,
-    ) -> Option<Vec<crate::pane::AdviceImprovement>> {
-        self.current_advice_results
-            .read(diff_hash, |_, v| v.clone())
-    }
-
-    /// Store a pending chat response for a specific message ID
-    pub fn store_pending_chat_response(
-        &self,
-        message_id: String,
-        response: crate::pane::ChatMessageData,
-    ) {
-        self.pending_chat_responses.upsert(message_id, response);
-    }
-
-    /// Retrieve a pending chat response for a specific message ID
-    pub fn get_pending_chat_response(
-        &self,
-        message_id: &str,
-    ) -> Option<crate::pane::ChatMessageData> {
-        self.pending_chat_responses
-            .read(message_id, |_, v| v.clone())
-    }
-
-    /// Remove a pending chat response for a specific message ID
-    pub fn remove_pending_chat_response(&self, message_id: &str) -> bool {
-        self.pending_chat_responses.remove(message_id).is_some()
     }
 }
 

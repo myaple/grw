@@ -14,25 +14,21 @@ use std::time::Duration;
 
 mod config;
 mod git;
-mod llm;
 mod logging;
 mod monitor;
 mod pane;
 mod shared_state;
 mod ui;
 
-use std::env;
 use std::sync::Arc;
 
 use config::{Args, Config};
-use llm::LlmClient;
 use log::{debug, error, info};
 use monitor::AsyncMonitorCommand;
 use shared_state::SharedStateManager;
 use ui::App;
 
 pub const GIT_SHA: &str = "unknown";
-const ERROR_CLEANUP_INTERVAL_SECS: u64 = 30;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -76,22 +72,6 @@ async fn main() -> Result<()> {
             error!("GitWorker continuous run failed: {}", e);
         }
     });
-
-    let llm_client = if let Some(llm_config) = &final_config.llm {
-        if llm_config.api_key.is_some() || env::var("OPENAI_API_KEY").is_ok() {
-            match LlmClient::new(llm_config.clone()) {
-                Ok(client) => Some(client),
-                Err(e) => {
-                    info!("Failed to create LLM client: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
 
     // Theme setup
     let mut themes = vec![ui::Theme::Dark, ui::Theme::Light];
@@ -160,15 +140,7 @@ async fn main() -> Result<()> {
         !final_config.hide_changed_files_pane.unwrap_or(false),
         initial_theme_index,
         themes,
-        llm_client.clone(),
-        Arc::clone(shared_state_manager.llm_state()),
     );
-
-    // SummaryPreloader uses shared state for caching
-
-    // Configure summary preloader from config
-    let preload_config = final_config.get_summary_preload_config();
-    app.set_preload_config(preload_config);
 
     let (monitor_command, mut monitor_rx) = if let Some(cmd) = &final_config.monitor_command {
         let (cmd, rx) =
@@ -271,54 +243,6 @@ async fn main() -> Result<()> {
             app.update_monitor_timing(elapsed, has_run);
         }
 
-        // Check shared state for cached summaries
-        if let Some(current_commit) = app.get_current_selected_commit_from_picker()
-            && let Some(cached_summary) = shared_state_manager
-                .llm_state()
-                .get_cached_summary(&current_commit.sha)
-        {
-            // Handle cached summary from shared state
-            app.handle_cached_summary_result(Some(cached_summary), &current_commit.sha);
-        }
-
-        // Periodic error recovery check - clear stale errors periodically
-        static LAST_ERROR_CLEANUP: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(0);
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let last_cleanup = LAST_ERROR_CLEANUP.load(std::sync::atomic::Ordering::Relaxed);
-
-        if current_time.saturating_sub(last_cleanup) > ERROR_CLEANUP_INTERVAL_SECS {
-            // Clear any stale errors that might have accumulated
-            if shared_state_manager.git_state().has_errors()
-                || shared_state_manager.llm_state().has_errors()
-            {
-                debug!("Performing periodic error cleanup");
-
-                // Only clear errors that are not currently being displayed
-                // Git errors are cleared immediately after display, so any remaining are stale
-                let git_errors = shared_state_manager.git_state().get_all_errors();
-                for (key, _) in git_errors {
-                    if key != "git_status" {
-                        // Keep current git_status errors
-                        shared_state_manager.git_state().clear_error(&key);
-                    }
-                }
-
-                // Clear old LLM summary errors (keep advice_generation for current display)
-                let llm_errors = shared_state_manager.llm_state().get_all_errors();
-                for (key, _) in llm_errors {
-                    if key.starts_with("summary_") && key != "advice_generation" {
-                        shared_state_manager.llm_state().clear_error(&key);
-                    }
-                }
-            }
-
-            LAST_ERROR_CLEANUP.store(current_time, std::sync::atomic::Ordering::Relaxed);
-        }
-
         // Calculate monitor visible height before rendering
         let terminal_size = terminal.size()?;
         let terminal_rect =
@@ -412,24 +336,8 @@ async fn main() -> Result<()> {
 
         // Update commit summary pane with current selection from commit picker
         if app.is_in_commit_picker_mode() {
-            app.update_commit_summary_with_current_selection(shared_state_manager.llm_state());
-
-            // Trigger continuous pre-loading as user navigates
-            if let Some((commits, current_index)) = app.get_commit_picker_state()
-                && !commits.is_empty()
-            {
-                app.preload_summaries_around_index(&commits, current_index);
-            }
+            app.update_commit_summary_with_current_selection();
         }
-
-        // Handle cache callbacks from CommitSummaryPane
-        app.handle_commit_summary_cache_callbacks(shared_state_manager.llm_state());
-
-        // Check for async advice panel task completion
-        app.check_advice_panel_tasks();
-
-        // Poll for LLM summary updates from shared state
-        // Summary updates are now handled through shared state cache
 
         if crossterm::event::poll(Duration::from_millis(10))?
             && let Event::Key(key) = crossterm::event::read()?
@@ -511,16 +419,7 @@ fn handle_key_event(
                         match git_worker.get_commit_history(commit_limit) {
                             Ok(commits) => {
                                 debug!("Successfully loaded {} commits", commits.len());
-                                app.update_commit_picker_commits(commits.clone());
-                                // Configure and trigger summary pre-loading
-                                let preload_config = config.get_summary_preload_config();
-                                app.set_preload_config(preload_config);
-                                // Start pre-loading summaries for the first few commits
-                                debug!(
-                                    "Starting summary pre-loading for {} commits",
-                                    commits.len()
-                                );
-                                app.preload_summaries(&commits);
+                                app.update_commit_picker_commits(commits);
                             }
                             Err(e) => {
                                 error!("Failed to load commit history: {}", e);
@@ -563,11 +462,7 @@ fn handle_key_event(
     }
 
     // Handle Ctrl+W returning to working directory view separately
-    // Only handle if advice panel chat input is NOT active
-    if key.code == KeyCode::Char('w')
-        && key.modifiers.contains(KeyModifiers::CONTROL)
-        && !app.is_advice_panel_chat_input_active()
-    {
+    if key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL) {
         debug!("User pressed Ctrl+W - returning to working directory view");
         app.clear_selected_commit();
         return false;

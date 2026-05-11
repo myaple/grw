@@ -1,16 +1,12 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};
 
 use crate::git::GitRepo;
-use crate::llm::LlmClient;
-use crate::shared_state::LlmSharedState;
 use crate::ui::{App, Theme};
 
 // Module declarations
-mod advice_panel;
 mod commit_picker_pane;
 mod commit_summary_pane;
 mod diff_pane;
@@ -22,7 +18,6 @@ mod side_by_side_diff_pane;
 mod status_bar_pane;
 
 // Re-exports to maintain public API
-pub use advice_panel::*;
 pub use commit_picker_pane::*;
 pub use commit_summary_pane::*;
 pub use diff_pane::*;
@@ -55,12 +50,6 @@ pub trait Pane {
     fn as_commit_summary_pane_mut(&mut self) -> Option<&mut CommitSummaryPane> {
         None
     }
-    fn as_advice_pane(&self) -> Option<&AdvicePanel> {
-        None
-    }
-    fn as_advice_pane_mut(&mut self) -> Option<&mut AdvicePanel> {
-        None
-    }
 }
 
 // Shared enums and types
@@ -74,7 +63,6 @@ pub enum PaneId {
     StatusBar,
     CommitPicker,
     CommitSummary,
-    Advice,
 }
 
 #[derive(Debug, Clone)]
@@ -100,21 +88,17 @@ impl std::fmt::Debug for PaneRegistry {
 }
 
 impl PaneRegistry {
-    pub fn new(theme: Theme, llm_client: LlmClient, llm_shared_state: Arc<LlmSharedState>) -> Self {
+    pub fn new(theme: Theme) -> Self {
         let mut registry = Self {
             panes: HashMap::new(),
             theme,
         };
 
-        registry.register_default_panes(llm_client, llm_shared_state);
+        registry.register_default_panes();
         registry
     }
 
-    fn register_default_panes(
-        &mut self,
-        llm_client: LlmClient,
-        llm_shared_state: Arc<LlmSharedState>,
-    ) {
+    fn register_default_panes(&mut self) {
         self.register_pane(PaneId::FileTree, Box::new(FileTreePane::new()));
         self.register_pane(PaneId::Monitor, Box::new(MonitorPane::new()));
         self.register_pane(PaneId::Diff, Box::new(DiffPane::new()));
@@ -122,23 +106,8 @@ impl PaneRegistry {
         self.register_pane(PaneId::Help, Box::new(HelpPane::new()));
         self.register_pane(PaneId::StatusBar, Box::new(StatusBarPane::new()));
         self.register_pane(PaneId::CommitPicker, Box::new(CommitPickerPane::new()));
-        let mut commit_summary_pane =
-            CommitSummaryPane::new_with_llm_client(Some(llm_client.clone()));
-        commit_summary_pane.set_shared_state(llm_shared_state.clone());
+        let commit_summary_pane = CommitSummaryPane::new();
         self.register_pane(PaneId::CommitSummary, Box::new(commit_summary_pane));
-
-        // Create advice panel with LLM client and shared state
-        let mut advice_panel = AdvicePanel::new().expect("Failed to create AdvicePanel");
-        advice_panel.set_shared_state(llm_shared_state.clone());
-
-        // Extract max_tokens from LlmClient config and set it
-        let max_tokens = llm_client.get_max_tokens();
-        advice_panel.set_max_tokens(max_tokens);
-
-        advice_panel.set_llm_client(std::sync::Arc::new(tokio::sync::Mutex::new(
-            llm_client.clone(),
-        )));
-        self.register_pane(PaneId::Advice, Box::new(advice_panel));
     }
 
     pub fn register_pane(&mut self, id: PaneId, pane: Box<dyn Pane>) {
@@ -181,33 +150,24 @@ impl PaneRegistry {
         }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LlmConfig;
-    use std::env;
-    use std::sync::Arc;
 
     fn create_test_pane_registry() -> PaneRegistry {
-        let mut llm_config = LlmConfig::default();
-        if env::var("OPENAI_API_KEY").is_err() {
-            llm_config.api_key = Some("dummy_key".to_string());
-        }
-        let llm_client = crate::llm::LlmClient::new(llm_config).unwrap();
-        let llm_shared_state = Arc::new(crate::shared_state::LlmSharedState::new());
-        PaneRegistry::new(crate::ui::Theme::Dark, llm_client, llm_shared_state)
+        PaneRegistry::new(crate::ui::Theme::Dark)
     }
 
     #[test]
     fn test_pane_registry_creation() {
         let registry = create_test_pane_registry();
-        assert_eq!(registry.panes.len(), 9); // Default panes + commit picker + commit summary + advice pane
+        assert_eq!(registry.panes.len(), 8); // Default panes
         assert!(registry.get_pane(&PaneId::FileTree).is_some());
         assert!(registry.get_pane(&PaneId::Monitor).is_some());
         assert!(registry.get_pane(&PaneId::Diff).is_some());
         assert!(registry.get_pane(&PaneId::CommitPicker).is_some());
         assert!(registry.get_pane(&PaneId::CommitSummary).is_some());
-        assert!(registry.get_pane(&PaneId::Advice).is_some());
     }
 
     #[test]
@@ -228,69 +188,5 @@ mod tests {
     fn test_pane_ids() {
         assert_eq!(PaneId::FileTree, PaneId::FileTree);
         assert_ne!(PaneId::FileTree, PaneId::Monitor);
-    }
-
-    #[test]
-    fn test_panel_opening_integration_contract() {
-        // Test integration contract for panel opening flow
-        use crate::ui::App;
-        use std::sync::Arc;
-
-        // Create app using the same pattern as existing tests
-        let mut llm_config = crate::config::LlmConfig::default();
-        if std::env::var("OPENAI_API_KEY").is_err() {
-            llm_config.api_key = Some("dummy_key".to_string());
-        }
-        let llm_client = crate::llm::LlmClient::new(llm_config).ok();
-        let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
-        let themes = vec![crate::ui::Theme::Dark, crate::ui::Theme::Light];
-        let mut app = App::new_with_config(true, true, 0, themes, llm_client, llm_state);
-
-        // Test that toggle_pane_visibility works for advice panel
-        // This is the core integration contract - Ctrl+L should work
-        let result1 = app.toggle_pane_visibility(&PaneId::Advice);
-        assert!(
-            result1.is_ok(),
-            "Should be able to toggle advice panel visibility"
-        );
-
-        // Test toggling back
-        let result2 = app.toggle_pane_visibility(&PaneId::Advice);
-        assert!(
-            result2.is_ok(),
-            "Should be able to toggle advice panel back to hidden"
-        );
-
-        // Test error handling for invalid pane ID
-        let invalid_result = app.toggle_pane_visibility(&PaneId::FileTree); // FileTree is not togglable
-        // This should either succeed or give a meaningful error
-        assert!(
-            invalid_result.is_ok(),
-            "Should handle invalid pane gracefully"
-        );
-    }
-
-    #[test]
-    fn test_panel_opening_keyboard_integration_contract() {
-        // Test contract for keyboard integration - this represents what happens in main.rs
-        // We can't directly test key events here, but we can test the method that gets called
-        use crate::ui::App;
-        use std::sync::Arc;
-
-        // Create app with same pattern as tests
-        let mut llm_config = crate::config::LlmConfig::default();
-        if std::env::var("OPENAI_API_KEY").is_err() {
-            llm_config.api_key = Some("dummy_key".to_string());
-        }
-        let llm_client = crate::llm::LlmClient::new(llm_config).ok();
-        let llm_state = Arc::new(crate::shared_state::LlmSharedState::new());
-        let themes = vec![crate::ui::Theme::Dark, crate::ui::Theme::Light];
-        let mut app = App::new_with_config(true, true, 0, themes, llm_client, llm_state);
-
-        // Test multiple toggles to simulate repeated Ctrl+L presses
-        for i in 0..5 {
-            let result = app.toggle_pane_visibility(&PaneId::Advice);
-            assert!(result.is_ok(), "Ctrl+L toggle {} should succeed", i + 1);
-        }
     }
 }

@@ -93,7 +93,6 @@ impl Pane for HelpPane {
                         "  PageUp            - Page up",
                         "  g g               - Go to top",
                         "  Shift+G           - Go to bottom",
-                        "  Ctrl+L            - Open LLM advice panel",
                     ],
                 ),
             }
@@ -188,18 +187,15 @@ impl Pane for HelpPane {
         self.visible = visible;
     }
 }
+
 #[cfg(test)]
 mod tests {
     use crate::ui::{App, Theme};
     use std::sync::Arc;
 
-    fn create_test_llm_state() -> Arc<crate::shared_state::LlmSharedState> {
-        Arc::new(crate::shared_state::LlmSharedState::new())
-    }
-
     fn create_test_app() -> App {
         let themes = vec![Theme::Dark, Theme::Light];
-        App::new_with_config(true, true, 0, themes, None, create_test_llm_state())
+        App::new_with_config(true, true, 0, themes)
     }
 
     #[test]
