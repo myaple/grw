@@ -147,14 +147,6 @@ impl CommitPickerPane {
     pub fn reset_enter_pressed(&mut self) {
         self.enter_pressed = false;
     }
-
-    pub fn get_commits(&self) -> Vec<crate::git::CommitInfo> {
-        self.commits.clone()
-    }
-
-    pub fn get_current_index(&self) -> usize {
-        self.current_index
-    }
 }
 
 impl Pane for CommitPickerPane {

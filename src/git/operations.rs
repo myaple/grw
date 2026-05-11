@@ -103,10 +103,8 @@ pub fn get_working_tree_diff(
         deletions
     );
 
-
     Ok((lines, additions, deletions))
 }
-
 
 /// Generate diff for staged changes
 /// Replaces: git diff --cached --no-color <path>
@@ -230,29 +228,6 @@ pub fn get_commit_file_stats(
     );
 
     Ok((additions, deletions))
-}
-
-/// Get full commit diff (for LLM summaries)
-/// Replaces: git show --format= --no-color <commit>
-pub fn get_full_commit_diff(repo: &Repository, commit_sha: &str) -> Result<String> {
-    debug!("Getting full commit diff for: {}", commit_sha);
-
-    let oid = git2::Oid::from_str(commit_sha)?;
-    let commit = repo.find_commit(oid)?;
-    let commit_tree = commit.tree()?;
-
-    // Get parent tree for comparison
-    let parent_tree = if commit.parent_count() > 0 {
-        let parent_commit = commit.parent(0)?;
-        Some(parent_commit.tree()?)
-    } else {
-        None
-    };
-
-    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), None)?;
-    let (lines, _, _) = extract_diff_lines(&diff)?;
-
-    Ok(lines.join("\n"))
 }
 
 /// Helper function to extract diff lines and statistics from a git2 Diff
@@ -521,39 +496,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_full_commit_diff() -> Result<()> {
-        let (_temp_dir, repo, repo_path) = create_test_repo()?;
-
-        // Create initial commit
-        create_commit(
-            &repo,
-            &repo_path,
-            "test.txt",
-            "Hello World",
-            "Initial commit",
-        )?;
-
-        // Create second commit with modification
-        let file_path = repo_path.join("test.txt");
-        fs::write(&file_path, "Hello World Modified")?;
-        let commit_id = create_commit(
-            &repo,
-            &repo_path,
-            "test.txt",
-            "Hello World Modified",
-            "Modified file",
-        )?;
-
-        // Test full commit diff
-        let diff_text = get_full_commit_diff(&repo, &commit_id.to_string())?;
-
-        assert!(!diff_text.is_empty());
-        assert!(diff_text.contains("Hello World"));
-
-        Ok(())
-    }
-
-    #[test]
     fn test_get_working_tree_diff_untracked_file() -> Result<()> {
         let (_temp_dir, repo, repo_path) = create_test_repo()?;
 
@@ -632,7 +574,6 @@ mod tests {
 
         Ok(())
     }
-
 
     #[test]
     fn test_to_repo_relative_path() -> Result<()> {

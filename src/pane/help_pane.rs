@@ -191,7 +191,6 @@ impl Pane for HelpPane {
 #[cfg(test)]
 mod tests {
     use crate::ui::{App, Theme};
-    use std::sync::Arc;
 
     fn create_test_app() -> App {
         let themes = vec![Theme::Dark, Theme::Light];

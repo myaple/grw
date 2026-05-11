@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use super::types::{FileDiff, ViewMode};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct TreeNode {

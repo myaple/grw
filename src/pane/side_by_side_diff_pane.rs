@@ -134,10 +134,7 @@ impl Pane for SideBySideDiffPane {
         match event {
             AppEvent::Key(key) => matches!(
                 key.code,
-                KeyCode::Char('j')
-                    | KeyCode::Char('k')
-                    | KeyCode::Left
-                    | KeyCode::Right
+                KeyCode::Char('j') | KeyCode::Char('k') | KeyCode::Left | KeyCode::Right
             ),
             _ => false,
         }

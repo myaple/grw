@@ -1,7 +1,7 @@
 use crate::git::{CommitInfo, FileDiff, GitRepo, TreeNode};
-use git2::Status;
 use crate::pane::{PaneId, PaneRegistry};
 use crossterm::event::KeyEvent;
+use git2::Status;
 use ratatui::{
     Frame,
     backend::Backend,
@@ -712,22 +712,6 @@ impl App {
         self.show_monitor_pane
     }
 
-    pub fn toggle_pane_visibility(&mut self, pane_id: &PaneId) -> Result<(), String> {
-        // Get current visibility state
-        let is_visible = if let Some(pane) = self.pane_registry.get_pane(pane_id) {
-            pane.visible()
-        } else {
-            return Err(format!("Pane {:?} not found in registry", pane_id));
-        };
-
-        // Toggle visibility
-        self.pane_registry.with_pane_mut(pane_id, |pane| {
-            pane.set_visible(!is_visible);
-        });
-
-        Ok(())
-    }
-
     pub fn forward_key_to_panes(&mut self, key: KeyEvent) -> bool {
         let mut handled = false;
 
@@ -1062,14 +1046,6 @@ impl App {
         }
     }
 
-    /// Check if diff panel is currently visible
-    pub fn is_diff_panel_visible(&self) -> bool {
-        self.pane_registry
-            .get_pane(&PaneId::Diff)
-            .map(|pane| pane.visible())
-            .unwrap_or(false)
-    }
-
     pub fn load_commit_files(&mut self, commit: &CommitInfo) {
         // Validate commit data before loading
         if commit.sha.is_empty() {
@@ -1229,19 +1205,6 @@ impl App {
                 }
             }
         }
-    }
-
-    pub fn get_commit_picker_state(&self) -> Option<(Vec<CommitInfo>, usize)> {
-        if let Some(pane) = self
-            .pane_registry
-            .get_pane(&crate::pane::PaneId::CommitPicker)
-            && let Some(commit_picker) = pane.as_commit_picker_pane()
-        {
-            let commits = commit_picker.get_commits();
-            let current_index = commit_picker.get_current_index();
-            return Some((commits, current_index));
-        }
-        None
     }
 }
 

@@ -4,21 +4,11 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::git::{CommitInfo, FileDiff, GitRepo};
 
-/// Shared state for git operations using lock-free data structures
 pub struct GitSharedState {
-    /// Current repository state
     repo_data: HashMap<String, GitRepo>,
-
-    /// Commit information cache
     commit_cache: HashMap<String, CommitInfo>,
-
-    /// File diff cache for performance
     file_diff_cache: HashMap<String, Vec<FileDiff>>,
-
-    /// Current view mode
-    view_mode: AtomicU8, // Encoded ViewMode
-
-    /// Error state
+    view_mode: AtomicU8,
     error_state: HashMap<String, String>,
 }
 
@@ -39,7 +29,6 @@ impl GitSharedState {
         }
     }
 
-    /// Update repository data
     pub fn update_repo(&self, repo: GitRepo) {
         use log::trace;
         let key = "current".to_string();
@@ -47,71 +36,42 @@ impl GitSharedState {
         trace!("Updated repo data in shared state");
     }
 
-    /// Get current repository data
     pub fn get_repo(&self) -> Option<GitRepo> {
         self.repo_data.read("current", |_, v| v.clone())
     }
 
-    /// Cache commit information
     pub fn cache_commit(&self, sha: String, commit: CommitInfo) {
         self.commit_cache.upsert(sha, commit);
     }
 
-    /// Get cached commit information
     pub fn get_cached_commit(&self, sha: &str) -> Option<CommitInfo> {
         self.commit_cache.read(sha, |_, v| v.clone())
     }
 
-    /// Set error state
     pub fn set_error(&self, key: String, error: String) {
         self.error_state.upsert(key, error);
     }
 
-    /// Clear error state
     pub fn clear_error(&self, key: &str) -> bool {
         self.error_state.remove(key).is_some()
     }
 
-    /// Get error state
     pub fn get_error(&self, key: &str) -> Option<String> {
         self.error_state.read(key, |_, v| v.clone())
     }
 
-    /// Get all current errors
-    pub fn get_all_errors(&self) -> Vec<(String, String)> {
-        let mut errors = Vec::new();
-        self.error_state.scan(|k, v| {
-            errors.push((k.clone(), v.clone()));
-        });
-        errors
-    }
-
-    /// Clear all errors
     pub fn clear_all_errors(&self) {
         self.error_state.clear();
     }
 
-    /// Check if there are any active errors
-    pub fn has_errors(&self) -> bool {
-        !self.error_state.is_empty()
-    }
-
-    /// Set view mode
     pub fn set_view_mode(&self, mode: u8) {
         self.view_mode.store(mode, Ordering::Relaxed);
     }
 }
 
-/// Shared state for LLM operations using lock-free data structures
 #[derive(Debug)]
 pub struct LlmSharedState {
-    /// Summary cache with commit SHA as key
     summary_cache: HashMap<String, String>,
-
-    /// Active summary generation tasks (using HashMap for efficient lookup)
-    active_summary_tasks: HashMap<String, u64>, // commit_sha -> timestamp
-
-    /// Error states
     error_state: HashMap<String, String>,
 }
 
@@ -125,78 +85,25 @@ impl LlmSharedState {
     pub fn new() -> Self {
         Self {
             summary_cache: HashMap::new(),
-            active_summary_tasks: HashMap::new(),
             error_state: HashMap::new(),
         }
     }
 
-    /// Cache a summary for a specific commit SHA
-    pub fn cache_summary(&self, commit_sha: String, summary: String) {
-        self.summary_cache.upsert(commit_sha, summary);
-    }
-
-    /// Get a cached summary for a specific commit SHA
-    pub fn get_cached_summary(&self, commit_sha: &str) -> Option<String> {
-        self.summary_cache.read(commit_sha, |_, v| v.clone())
-    }
-
-    /// Check if a summary is currently being loaded for a commit SHA
-    pub fn is_summary_loading(&self, commit_sha: &str) -> bool {
-        self.active_summary_tasks.contains(commit_sha)
-    }
-
-    /// Start tracking a summary generation task
-    pub fn start_summary_task(&self, commit_sha: String) {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        self.active_summary_tasks.upsert(commit_sha, timestamp);
-    }
-
-    /// Complete a summary generation task and remove it from tracking
-    pub fn complete_summary_task(&self, commit_sha: &str) {
-        let _ = self.active_summary_tasks.remove(commit_sha);
-    }
-
-    /// Set error state for a specific operation
-    pub fn set_error(&self, key: String, error: String) {
-        self.error_state.upsert(key, error);
-    }
-
-    /// Clear error state for a specific operation
-    pub fn clear_error(&self, key: &str) -> bool {
-        self.error_state.remove(key).is_some()
-    }
-
-    /// Get all current errors
-    pub fn get_all_errors(&self) -> Vec<(String, String)> {
-        let mut errors = Vec::new();
-        self.error_state.scan(|k, v| {
-            errors.push((k.clone(), v.clone()));
-        });
-        errors
-    }
-
-    /// Clear all errors
     pub fn clear_all_errors(&self) {
         self.error_state.clear();
     }
 
-    /// Check if there are any active errors
-    pub fn has_errors(&self) -> bool {
-        !self.error_state.is_empty()
+    pub fn clear_all_caches(&self) {
+        self.summary_cache.clear();
     }
 }
 
-/// Central manager for all shared state components
 pub struct SharedStateManager {
     git_state: Arc<GitSharedState>,
     llm_state: Arc<LlmSharedState>,
 }
 
 impl SharedStateManager {
-    /// Create a new SharedStateManager with all state components initialized
     pub fn new() -> Self {
         Self {
             git_state: Arc::new(GitSharedState::new()),
@@ -204,37 +111,22 @@ impl SharedStateManager {
         }
     }
 
-    /// Get a reference to the git shared state
     pub fn git_state(&self) -> &Arc<GitSharedState> {
         &self.git_state
     }
 
-    /// Get a reference to the LLM shared state
-    pub fn llm_state(&self) -> &Arc<LlmSharedState> {
-        &self.llm_state
-    }
-
-    /// Initialize all shared state components
     pub fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Initialize git state with default view mode
-        self.git_state.set_view_mode(0); // Default to WorkingTree view
-
-        // Clear any existing errors from previous sessions
+        self.git_state.set_view_mode(0);
         self.git_state.clear_all_errors();
         self.llm_state.clear_all_errors();
-
         Ok(())
     }
 
-    /// Shutdown all shared state components and perform final cleanup
     pub fn shutdown(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Clear all cached data to free memory
         self.git_state.commit_cache.clear();
         self.git_state.file_diff_cache.clear();
         self.git_state.repo_data.clear();
-
-        self.llm_state.summary_cache.clear();
-
+        self.llm_state.clear_all_caches();
         Ok(())
     }
 }
@@ -253,17 +145,15 @@ mod tests {
     fn test_git_shared_state_error_management() {
         let git_state = GitSharedState::new();
 
-        // Test multiple errors
         git_state.set_error("error1".to_string(), "First error".to_string());
         git_state.set_error("error2".to_string(), "Second error".to_string());
 
-        let all_errors = git_state.get_all_errors();
-        assert_eq!(all_errors.len(), 2);
+        assert!(git_state.get_error("error1").is_some());
+        assert!(git_state.get_error("error2").is_some());
 
-        // Test clear all errors
         git_state.clear_all_errors();
-        let all_errors_after_clear = git_state.get_all_errors();
-        assert!(all_errors_after_clear.is_empty());
+        assert!(git_state.get_error("error1").is_none());
+        assert!(git_state.get_error("error2").is_none());
     }
 
     #[test]
@@ -274,7 +164,6 @@ mod tests {
         let git_state = Arc::new(GitSharedState::new());
         let mut handles = vec![];
 
-        // Test concurrent commit caching
         for i in 0..10 {
             let state = Arc::clone(&git_state);
             let handle = thread::spawn(move || {
@@ -289,68 +178,14 @@ mod tests {
             handles.push(handle);
         }
 
-        // Wait for all threads to complete
         for handle in handles {
             handle.join().unwrap();
         }
 
-        // Verify all commits were cached
         for i in 0..10 {
             let commit = git_state.get_cached_commit(&format!("commit_{}", i));
             assert!(commit.is_some());
             assert_eq!(commit.unwrap().message, format!("Test commit {}", i));
         }
-    }
-
-    #[test]
-    fn test_llm_shared_state_concurrent_access() {
-        use std::sync::Arc;
-        use std::thread;
-
-        let llm_state = Arc::new(LlmSharedState::new());
-        let mut handles = vec![];
-
-        // Test concurrent summary caching
-        for i in 0..10 {
-            let state = Arc::clone(&llm_state);
-            let handle = thread::spawn(move || {
-                let commit_sha = format!("commit_{}", i);
-                let summary = format!("Summary for commit {}", i);
-                state.cache_summary(commit_sha.clone(), summary);
-                state.start_summary_task(commit_sha);
-            });
-            handles.push(handle);
-        }
-
-        // Wait for all threads to complete
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        // Verify all summaries were cached
-        for i in 0..10 {
-            let commit_sha = format!("commit_{}", i);
-            let summary = llm_state.get_cached_summary(&commit_sha);
-            assert!(summary.is_some());
-            assert_eq!(summary.unwrap(), format!("Summary for commit {}", i));
-            assert!(llm_state.is_summary_loading(&commit_sha));
-        }
-    }
-
-    #[test]
-    fn test_llm_shared_state_error_management() {
-        let llm_state = LlmSharedState::new();
-
-        // Test multiple errors
-        llm_state.set_error("error1".to_string(), "First error".to_string());
-        llm_state.set_error("error2".to_string(), "Second error".to_string());
-
-        let all_errors = llm_state.get_all_errors();
-        assert_eq!(all_errors.len(), 2);
-
-        // Test clear all errors
-        llm_state.clear_all_errors();
-        let all_errors_after_clear = llm_state.get_all_errors();
-        assert!(all_errors_after_clear.is_empty());
     }
 }
